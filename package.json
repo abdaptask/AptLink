@@ -12,11 +12,15 @@
     "build:api": "npm run db:generate && npm run db:push && npm run build -w packages/db && npm run build -w apps/api",
     "build:socket": "npm run build -w apps/socket",
     "build:webhooks": "npm run build -w apps/webhooks",
+    "build:web": "npm run build -w apps/web",
+    "build:desktop": "npm run build -w apps/desktop",
+    "dev:web": "npm run dev -w apps/web",
+    "dev:desktop": "npm run dev -w apps/desktop",
+    "dist:desktop:win": "npm run build:web && npm run build:desktop && cd apps/desktop && electron-builder --win",
+    "dist:desktop:mac": "npm run build:web && npm run build:desktop && cd apps/desktop && electron-builder --mac",
     "db:generate": "npm run generate -w packages/db",
     "db:push": "npm run db:push -w packages/db",
-    "db:seed": "npm run seed -w packages/db",
-    "lint": "echo \"(lint to be added in phase 2)\"",
-    "test": "echo \"(tests to be added in phase 2)\""
+    "db:seed": "npm run seed -w packages/db"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",
