@@ -13,17 +13,22 @@ function createWindow() {
     minWidth: 900,
     minHeight: 600,
     title: 'ACE Dialer',
-    backgroundColor: '#f5f7fa',
-    show: false, // show after ready-to-show to avoid white flash
+    backgroundColor: '#000',
+    show: false,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: true,
+      sandbox: false, // some Electron+Windows combos block device enumeration with sandbox on
     },
   });
 
-  // In dev, env var points at Vite. In prod, load the bundled web assets.
+  // ----- Grant media permissions without prompting -----
+  // Phase 4.5: grant everything for development. Tighten before production.
+  const session = mainWindow.webContents.session;
+  session.setPermissionRequestHandler((_wc, _permission, callback) => callback(true));
+  session.setPermissionCheckHandler(() => true);
+
   const devUrl = process.env.VITE_DEV_SERVER_URL;
   if (devUrl) {
     mainWindow.loadURL(devUrl);
@@ -37,7 +42,6 @@ function createWindow() {
     mainWindow?.show();
   });
 
-  // External links open in the OS default browser, never inside Electron.
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     shell.openExternal(url);
     return { action: 'deny' };
@@ -74,25 +78,17 @@ function buildMenu() {
     {
       label: 'Edit',
       submenu: [
-        { role: 'undo' },
-        { role: 'redo' },
+        { role: 'undo' }, { role: 'redo' },
         { type: 'separator' },
-        { role: 'cut' },
-        { role: 'copy' },
-        { role: 'paste' },
-        { role: 'selectAll' },
+        { role: 'cut' }, { role: 'copy' }, { role: 'paste' }, { role: 'selectAll' },
       ],
     },
     {
       label: 'View',
       submenu: [
-        { role: 'reload' },
-        { role: 'forceReload' },
-        { role: 'toggleDevTools' },
+        { role: 'reload' }, { role: 'forceReload' }, { role: 'toggleDevTools' },
         { type: 'separator' },
-        { role: 'resetZoom' },
-        { role: 'zoomIn' },
-        { role: 'zoomOut' },
+        { role: 'resetZoom' }, { role: 'zoomIn' }, { role: 'zoomOut' },
         { type: 'separator' },
         { role: 'togglefullscreen' },
       ],

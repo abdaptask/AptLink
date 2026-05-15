@@ -1,5 +1,4 @@
 // Thin wrapper around JsSIP. Phase 4.5: outbound calls only.
-// Inbound + transfers + hold + recording come in later phases.
 import JsSIP from 'jssip';
 
 export type SipState = 'disconnected' | 'connecting' | 'registered' | 'failed';
@@ -21,6 +20,32 @@ export interface CallEvent {
 
 type Listener<T = unknown> = (payload: T) => void;
 
+function toE164(raw: string): string {
+  const cleaned = raw.replace(/[^\d+]/g, '');
+  if (cleaned.startsWith('+')) return cleaned;
+  if (cleaned.length === 11 && cleaned.startsWith('1')) return `+${cleaned}`;
+  if (cleaned.length === 10) return `+1${cleaned}`;
+  return `+${cleaned}`;
+}
+
+function buildAudioConstraints(): MediaStreamConstraints['audio'] {
+  const micId = localStorage.getItem('ace_mic');
+  if (micId && micId !== 'default') {
+    return { deviceId: { exact: micId } };
+  }
+  return true;
+}
+
+function applySpeakerSelection(audioEl: HTMLAudioElement): void {
+  const speakerId = localStorage.getItem('ace_speaker');
+  if (speakerId && speakerId !== 'default' && 'setSinkId' in audioEl) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (audioEl as any).setSinkId(speakerId).catch((e: Error) =>
+      console.warn('[sip] setSinkId failed', e.message)
+    );
+  }
+}
+
 export class SipService {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private ua: any = null;
@@ -30,11 +55,11 @@ export class SipService {
   private listeners: Map<string, Set<Listener>> = new Map();
 
   constructor() {
-    // Hidden audio element for the remote stream.
     this.audioEl = document.createElement('audio');
     this.audioEl.autoplay = true;
     this.audioEl.id = 'ace-remote-audio';
     document.body.appendChild(this.audioEl);
+    applySpeakerSelection(this.audioEl);
   }
 
   on<T = unknown>(event: string, handler: Listener<T>): () => void {
@@ -79,14 +104,24 @@ export class SipService {
 
   call(rawNumber: string): void {
     if (!this.ua) throw new Error('SIP not connected');
-    const number = rawNumber.replace(/[^\d*#+]/g, '');
-    const targetUri = `sip:${number}@sip.telnyx.com`;
+    const e164 = toE164(rawNumber);
+    const targetUri = `sip:${e164}@sip.telnyx.com`;
+    console.log('[sip] dialing', { rawNumber, e164, targetUri });
+
+    applySpeakerSelection(this.audioEl);
+
     this.currentSession = this.ua.call(targetUri, {
-      mediaConstraints: { audio: true, video: false },
+      mediaConstraints: { audio: buildAudioConstraints(), video: false },
       rtcOfferConstraints: { offerToReceiveAudio: true, offerToReceiveVideo: false },
+      pcConfig: {
+        iceServers: [
+          { urls: 'stun:stun.telnyx.com:3478' },
+          { urls: 'stun:stun.l.google.com:19302' },
+        ],
+      },
     });
     this.bindSession(this.currentSession);
-    this.emit<CallEvent>('call', { state: 'calling', number: rawNumber });
+    this.emit<CallEvent>('call', { state: 'calling', number: e164 });
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -102,7 +137,9 @@ export class SipService {
     });
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     session.on('failed', (e: any) => {
-      this.emit<CallEvent>('call', { state: 'ended', reason: e?.cause ?? 'failed' });
+      const reason = e?.cause ?? e?.message?.reason_phrase ?? 'failed';
+      console.warn('[sip] call failed', { reason, raw: e });
+      this.emit<CallEvent>('call', { state: 'ended', reason });
       this.currentSession = null;
     });
 
@@ -112,6 +149,7 @@ export class SipService {
       pc.addEventListener('track', (ev: RTCTrackEvent) => {
         if (ev.streams && ev.streams[0]) {
           this.audioEl.srcObject = ev.streams[0];
+          applySpeakerSelection(this.audioEl);
         }
       });
     });

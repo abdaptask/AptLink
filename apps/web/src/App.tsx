@@ -8,6 +8,7 @@ import Recents from './pages/Recents';
 import Voicemail from './pages/Voicemail';
 import Contacts from './pages/Contacts';
 import Favorites from './pages/Favorites';
+import Settings from './pages/Settings';
 import type { User } from './api';
 import { getMe } from './api';
 
@@ -61,6 +62,7 @@ export default function App() {
         <Route path="recents" element={<Recents />} />
         <Route path="contacts" element={<Contacts />} />
         <Route path="voicemail" element={<Voicemail />} />
+        <Route path="settings" element={<Settings />} />
       </Route>
       <Route path="*" element={<Navigate to={user ? '/keypad' : '/login'} />} />
     </Routes>

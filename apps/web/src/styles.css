@@ -358,3 +358,122 @@ body {
 }
 .hangup-btn:hover { background: #d92e25; }
 .hangup-btn:active { transform: scale(0.94); }
+
+/* ============ KEYBOARD HINT ============ */
+.keyboard-hint {
+  text-align: center;
+  font-size: 0.7rem;
+  color: rgba(255, 255, 255, 0.35);
+  margin-top: 1.5rem;
+  padding-bottom: 0.5rem;
+  letter-spacing: 0.02em;
+}
+
+/* ============ HEADER ACTIONS ============ */
+.header-actions {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+}
+.icon-btn {
+  background: none;
+  border: none;
+  color: rgba(255, 255, 255, 0.6);
+  cursor: pointer;
+  padding: 0.4rem;
+  display: flex;
+  align-items: center;
+  border-radius: 6px;
+  transition: color 0.1s ease, background 0.1s ease;
+}
+.icon-btn:hover {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+/* ============ SETTINGS ============ */
+.settings {
+  width: 100%;
+  max-width: 480px;
+  margin: 0 auto;
+  padding: 1rem 1.25rem 2rem;
+}
+.settings-header {
+  display: grid;
+  grid-template-columns: 40px 1fr 40px;
+  align-items: center;
+  margin-bottom: 1.5rem;
+}
+.settings-header h1 {
+  margin: 0;
+  font-size: 1.4rem;
+  font-weight: 600;
+  text-align: center;
+  color: #fff;
+}
+.settings-back {
+  background: none;
+  border: none;
+  color: #fff;
+  cursor: pointer;
+  padding: 0.4rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.settings-back:hover { color: #007aff; }
+.settings-group {
+  margin-bottom: 2rem;
+}
+.settings-group h2 {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.5);
+  margin: 0 0 0.8rem;
+}
+.device-list {
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  overflow: hidden;
+}
+.device-row {
+  width: 100%;
+  background: transparent;
+  border: none;
+  border-bottom: 0.5px solid rgba(255, 255, 255, 0.08);
+  color: #fff;
+  text-align: left;
+  padding: 0.9rem 1rem;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 0.95rem;
+  transition: background 0.08s ease;
+}
+.device-row:last-child { border-bottom: none; }
+.device-row:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.06);
+}
+.device-row:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.device-row.selected {
+  color: #007aff;
+}
+.device-row.selected .device-label {
+  font-weight: 500;
+}
+.device-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-right: 0.5rem;
+}
+.muted.small { font-size: 0.8rem; color: rgba(255,255,255,0.4); }

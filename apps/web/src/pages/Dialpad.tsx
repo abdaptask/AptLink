@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Phone, Delete } from 'lucide-react';
 import { useSip } from '../contexts/SipContext';
@@ -18,6 +18,8 @@ const KEYS: Array<{ digit: string; letters?: string }> = [
   { digit: '#' },
 ];
 
+const ALLOWED_KEYS = new Set(['0','1','2','3','4','5','6','7','8','9','*','#','+']);
+
 function formatNumber(raw: string): string {
   const d = raw.replace(/[^\d*#+]/g, '');
   if (d.length === 0) return '';
@@ -34,6 +36,7 @@ export default function Dialpad() {
 
   const append = useCallback((d: string) => setNumber((n) => n + d), []);
   const backspace = useCallback(() => setNumber((n) => n.slice(0, -1)), []);
+  const clear = useCallback(() => setNumber(''), []);
 
   const handleCall = useCallback(() => {
     if (!number) return;
@@ -44,6 +47,36 @@ export default function Dialpad() {
     call(number);
     navigate('/in-call');
   }, [number, sipState, call, navigate]);
+
+  // Keyboard input — listen at the document level so the dialpad is "always focused".
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      // Don't hijack typing into form fields (e.g., login screen).
+      const target = e.target as HTMLElement | null;
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) {
+        return;
+      }
+
+      if (ALLOWED_KEYS.has(e.key)) {
+        e.preventDefault();
+        append(e.key);
+      } else if (e.key === 'Backspace') {
+        e.preventDefault();
+        backspace();
+      } else if (e.key === 'Delete') {
+        e.preventDefault();
+        clear();
+      } else if (e.key === 'Enter') {
+        e.preventDefault();
+        handleCall();
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        clear();
+      }
+    }
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [append, backspace, clear, handleCall]);
 
   const statusLabel =
     sipState === 'registered' ? 'Registered' :
@@ -99,6 +132,10 @@ export default function Dialpad() {
             <Delete size={26} />
           </button>
         )}
+      </div>
+
+      <div className="keyboard-hint">
+        Type digits with your keyboard · Enter to call · Backspace to delete · Esc to clear
       </div>
     </div>
   );
