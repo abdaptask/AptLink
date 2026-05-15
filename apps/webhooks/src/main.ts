@@ -13,9 +13,24 @@ const PILOT_NUMBER = process.env.PILOT_TELNYX_NUMBER ?? '+15758001313';
 
 const app = Fastify({
   logger: { level: process.env.LOG_LEVEL ?? 'info' },
+  ignoreTrailingSlash: true,
 });
 
 await app.register(cors, { origin: false });
+
+// Log every non-health request so we can confirm whether Telnyx ever hits us.
+app.addHook('onRequest', async (request) => {
+  if (request.url.startsWith('/health')) return;
+  app.log.info(
+    {
+      method: request.method,
+      url: request.url,
+      ua: request.headers['user-agent'],
+      ip: request.ip,
+    },
+    '[req] incoming'
+  );
+});
 
 app.get('/', async () => ({ service: SERVICE_NAME, status: 'ok' }));
 app.get('/health', async () => ({
@@ -167,6 +182,21 @@ app.post('/webhooks/telnyx/sms', async (request) => {
 app.post('/webhooks/telnyx/failover', async (request) => {
   app.log.info({ payload: request.body }, '[telnyx] failover event');
   return { received: true };
+});
+
+// Catch-all for any path we didn't register — helps diagnose if Telnyx is posting
+// to a slightly different URL than we expect.
+app.all('/*', async (request, reply) => {
+  app.log.warn(
+    {
+      method: request.method,
+      url: request.url,
+      headers: request.headers,
+      body: request.body,
+    },
+    '[catch-all] unmatched request'
+  );
+  reply.code(404).send({ error: 'not found', path: request.url });
 });
 
 const port = Number(process.env.PORT ?? 3002);
