@@ -3,7 +3,7 @@
 // appears with Accept/Decline buttons, so the user never misses a call
 // even when the main window is minimized.
 import { useEffect } from 'react';
-import { useLocation } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { Phone, PhoneOff } from 'lucide-react';
 import { useSip } from '../contexts/SipContext';
 import { ringtone } from '../services/ringtone';
@@ -23,6 +23,12 @@ function formatNumber(n: string | undefined): string {
 export default function IncomingCall() {
   const { incoming, acceptCall, declineCall } = useSip();
   const location = useLocation();
+  const navigate = useNavigate();
+
+  const handleAccept = () => {
+    acceptCall();
+    navigate('/in-call');
+  };
 
   useEffect(() => {
     if (incoming) {
@@ -55,7 +61,7 @@ export default function IncomingCall() {
           <button className="incoming-btn decline" onClick={declineCall} aria-label="Decline">
             <PhoneOff size={28} />
           </button>
-          <button className="incoming-btn accept" onClick={acceptCall} aria-label="Accept">
+          <button className="incoming-btn accept" onClick={handleAccept} aria-label="Accept">
             <Phone size={28} />
           </button>
         </div>
@@ -71,7 +77,7 @@ export default function IncomingCall() {
         <button className="incoming-btn decline small" onClick={declineCall} aria-label="Decline">
           <PhoneOff size={20} />
         </button>
-        <button className="incoming-btn accept small" onClick={acceptCall} aria-label="Accept">
+        <button className="incoming-btn accept small" onClick={handleAccept} aria-label="Accept">
           <Phone size={20} />
         </button>
       </div>

@@ -1,7 +1,9 @@
-import { NavLink, Outlet, useNavigate } from 'react-router-dom';
+import { useEffect } from 'react';
+import { NavLink, Outlet, useNavigate, useLocation } from 'react-router-dom';
 import { Star, Clock, User as UserIcon, Grid3x3, Voicemail, LogOut, Settings as SettingsIcon } from 'lucide-react';
 import type { User } from '../api';
 import IncomingCall from '../components/IncomingCall';
+import { useSip } from '../contexts/SipContext';
 
 interface Props {
   user: User;
@@ -10,9 +12,19 @@ interface Props {
 
 export default function Layout({ user, onLogout }: Props) {
   const navigate = useNavigate();
+  const location = useLocation();
+  const { callState } = useSip();
   const isElectron =
     typeof navigator !== 'undefined' &&
     /electron/i.test(navigator.userAgent);
+
+  // Auto-navigate to the InCall screen when a call connects (covers both
+  // outbound dials and inbound calls the user accepts via the floating ringer).
+  useEffect(() => {
+    if (callState.state === 'connected' && location.pathname !== '/in-call') {
+      navigate('/in-call');
+    }
+  }, [callState.state, location.pathname, navigate]);
 
   return (
     <div className="app-shell">

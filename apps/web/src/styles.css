@@ -715,3 +715,174 @@ body {
   margin-left: 8px;
   letter-spacing: 0.02em;
 }
+
+/* ---------- In-call screen (Phase 5.2 polish) ---------- */
+.in-call {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 32px 20px 28px;
+  gap: 28px;
+  max-width: 460px;
+  margin: 0 auto;
+  width: 100%;
+}
+
+.in-call-header {
+  text-align: center;
+}
+.in-call-name {
+  font-size: 26px;
+  font-weight: 700;
+  word-break: break-word;
+}
+.in-call-time {
+  font-size: 14px;
+  opacity: 0.6;
+  margin-top: 6px;
+}
+
+.in-call-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 18px 28px;
+  width: 100%;
+  max-width: 360px;
+}
+
+.ic-ctrl {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 6px 2px;
+  color: inherit;
+  transition: opacity 0.1s, transform 0.1s;
+}
+.ic-ctrl:active { transform: scale(0.96); }
+.ic-ctrl.disabled,
+.ic-ctrl:disabled { opacity: 0.35; cursor: not-allowed; }
+
+.ic-ctrl-icon {
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  background: var(--ic-ctrl-bg, #1f2937);
+  color: #e5e7eb;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.ic-ctrl.active .ic-ctrl-icon {
+  background: #f3f4f6;
+  color: #111827;
+}
+.ic-ctrl-label {
+  font-size: 12px;
+  opacity: 0.8;
+}
+
+.hangup-btn {
+  width: 72px;
+  height: 72px;
+  border-radius: 50%;
+  border: none;
+  background: #ef4444;
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  box-shadow: 0 8px 24px rgba(239, 68, 68, 0.4);
+  margin-top: 8px;
+}
+.hangup-btn:active { transform: scale(0.95); }
+
+/* DTMF keypad overlay (shown when user taps Keypad mid-call) */
+.in-call-keypad {
+  width: 100%;
+  max-width: 320px;
+}
+.ick-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 14px;
+}
+.ick-btn {
+  height: 56px;
+  border-radius: 50%;
+  background: #1f2937;
+  color: #fff;
+  border: none;
+  font-size: 22px;
+  cursor: pointer;
+}
+.ick-btn:active { background: #374151; }
+.ick-close {
+  margin-top: 14px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: transparent;
+  border: none;
+  color: inherit;
+  opacity: 0.7;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+/* Transfer form */
+.in-call-transfer {
+  width: 100%;
+  max-width: 320px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.ict-label { font-size: 13px; opacity: 0.7; }
+.ict-input {
+  height: 44px;
+  padding: 0 14px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: #1f2937;
+  color: #fff;
+  font-size: 16px;
+  outline: none;
+}
+.ict-input:focus { border-color: #3b82f6; }
+.ict-actions { display: flex; gap: 10px; justify-content: flex-end; }
+.ict-cancel, .ict-confirm {
+  height: 40px;
+  padding: 0 16px;
+  border-radius: 10px;
+  border: none;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 600;
+}
+.ict-cancel { background: transparent; color: inherit; opacity: 0.7; }
+.ict-confirm { background: #22c55e; color: #fff; }
+.ict-confirm:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* Small ephemeral toast */
+.in-call-toast {
+  position: fixed;
+  bottom: 96px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(0, 0, 0, 0.85);
+  color: #fff;
+  padding: 10px 16px;
+  border-radius: 999px;
+  font-size: 13px;
+  z-index: 900;
+  animation: in-call-toast-in 150ms ease-out;
+}
+@keyframes in-call-toast-in {
+  from { opacity: 0; transform: translate(-50%, 8px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
+}

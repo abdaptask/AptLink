@@ -11,6 +11,9 @@ interface SipContextValue {
   acceptCall: () => void;
   declineCall: () => void;
   toggleMute: () => boolean;
+  toggleHold: () => boolean;
+  isOnHold: () => boolean;
+  transferCall: (destination: string) => boolean;
   sendDTMF: (digit: string) => void;
 }
 
@@ -126,6 +129,9 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
       setIncoming(null);
     },
     toggleMute: () => sipService.toggleMute(),
+    toggleHold: () => sipService.toggleHold(),
+    isOnHold: () => sipService.isOnHold(),
+    transferCall: (destination) => sipService.transfer(destination),
     sendDTMF: (digit) => sipService.sendDTMF(digit),
   };
 

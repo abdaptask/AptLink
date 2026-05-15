@@ -268,6 +268,63 @@ export class SipService {
     }
   }
 
+  // Hold / unhold the active call. Returns true if call is now on hold.
+  toggleHold(): boolean {
+    if (!this.currentCall) return false;
+    try {
+      if (this.currentCall.held) {
+        if (typeof this.currentCall.unhold === 'function') this.currentCall.unhold();
+        return false;
+      }
+      if (typeof this.currentCall.hold === 'function') this.currentCall.hold();
+      return true;
+    } catch (e) {
+      console.warn('[sip] hold/unhold failed', e);
+      return Boolean(this.currentCall.held);
+    }
+  }
+
+  isOnHold(): boolean {
+    return Boolean(this.currentCall?.held);
+  }
+
+  // Blind-transfer to a destination number. Telnyx SDK exposes transfer(target).
+  transfer(rawDestination: string): boolean {
+    if (!this.currentCall) return false;
+    if (typeof this.currentCall.transfer !== 'function') return false;
+    try {
+      const e164 = toE164(rawDestination);
+      this.currentCall.transfer(e164);
+      return true;
+    } catch (e) {
+      console.warn('[sip] transfer failed', e);
+      return false;
+    }
+  }
+
+  // Pick a different audio output device (speaker selection).
+  async setAudioOutput(deviceId: string): Promise<void> {
+    localStorage.setItem('ace_speaker', deviceId);
+    if (!this.audioEl) return;
+    if (!('setSinkId' in this.audioEl)) return;
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await (this.audioEl as any).setSinkId(deviceId);
+    } catch (e) {
+      console.warn('[sip] setSinkId failed', e);
+    }
+  }
+
+  async listAudioOutputs(): Promise<MediaDeviceInfo[]> {
+    if (!navigator.mediaDevices?.enumerateDevices) return [];
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      return devices.filter((d) => d.kind === 'audiooutput');
+    } catch {
+      return [];
+    }
+  }
+
   toggleMute(): boolean {
     if (!this.currentCall) return false;
     if (typeof this.currentCall.toggleAudioMute === 'function') {
