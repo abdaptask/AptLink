@@ -12,6 +12,7 @@ import {
   PhoneForwarded,
   CircleDot,
   Video,
+  MessageSquare,
   X,
 } from 'lucide-react';
 import { useSip } from '../contexts/SipContext';
@@ -166,8 +167,11 @@ export default function InCall() {
             onClick={() => showToast('Meet — coming soon')}
             disabled={!isConnected}
           />
-          {/* 9th cell intentionally left blank for visual symmetry */}
-          <div />
+          <ControlBtn
+            icon={<MessageSquare size={26} />}
+            label="Message"
+            onClick={() => showToast('Messages — Phase 5.3')}
+          />
         </div>
       )}
 
