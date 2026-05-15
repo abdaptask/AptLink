@@ -4,9 +4,12 @@ import { createCall, updateCall } from '../api';
 
 interface SipContextValue {
   sipState: SipState;
-  callState: CallEvent;
+  callState: CallEvent;          // last non-incoming state
+  incoming: CallEvent | null;    // current ringing inbound, if any
   call: (number: string) => void;
   hangup: () => void;
+  acceptCall: () => void;
+  declineCall: () => void;
   toggleMute: () => boolean;
   sendDTMF: (digit: string) => void;
 }
@@ -24,6 +27,7 @@ interface CallLogState {
 export function SipProvider({ children }: { children: React.ReactNode }) {
   const [sipState, setSipState] = useState<SipState>('disconnected');
   const [callState, setCallState] = useState<CallEvent>({ state: 'idle' });
+  const [incoming, setIncoming] = useState<CallEvent | null>(null);
   const logRef = useRef<Map<string, CallLogState>>(new Map());
 
   useEffect(() => {
@@ -41,7 +45,17 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
 
     const offState = sipService.on<SipState>('state', (s) => setSipState(s));
     const offCall = sipService.on<CallEvent>('call', (e) => {
-      setCallState(e);
+      // Inbound ringing -> show ring UI; don't overwrite callState yet.
+      if (e.state === 'incoming') {
+        setIncoming(e);
+      } else {
+        setCallState(e);
+        // If the ringing inbound transitioned (accepted/declined/ended),
+        // clear the incoming banner.
+        if (incoming && (e.callId === incoming.callId || e.state === 'ended')) {
+          setIncoming(null);
+        }
+      }
       void logCallEvent(e, logRef.current);
     });
 
@@ -50,13 +64,20 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
       offCall();
       sipService.disconnect();
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const value: SipContextValue = {
     sipState,
     callState,
+    incoming,
     call: (number) => sipService.call(number),
     hangup: () => sipService.hangup(),
+    acceptCall: () => sipService.acceptCall(),
+    declineCall: () => {
+      sipService.declineCall();
+      setIncoming(null);
+    },
     toggleMute: () => sipService.toggleMute(),
     sendDTMF: (digit) => sipService.sendDTMF(digit),
   };
@@ -71,8 +92,6 @@ export function useSip(): SipContextValue {
 }
 
 // ---------- Call history logging ----------
-// Phase 5.1: we report call lifecycle to our own API because Telnyx Call
-// Control webhooks don't fire for SDK-originated WebRTC calls.
 async function logCallEvent(event: CallEvent, log: Map<string, CallLogState>): Promise<void> {
   const token = sessionStorage.getItem('ace_token');
   if (!token) return;
@@ -130,7 +149,9 @@ async function logCallEvent(event: CallEvent, log: Map<string, CallLogState>): P
         ? 'no_answer'
         : cause === 'normal_clearing'
           ? 'completed'
-          : 'failed';
+          : event.direction === 'inbound'
+            ? 'missed'
+            : 'failed';
 
     if (entry.posted) {
       try {
@@ -152,6 +173,8 @@ function stateToStatus(state: CallEvent['state'], hangupCause?: string): string 
     case 'calling':
       return 'initiated';
     case 'ringing':
+      return 'ringing';
+    case 'incoming':
       return 'ringing';
     case 'connected':
       return 'answered';

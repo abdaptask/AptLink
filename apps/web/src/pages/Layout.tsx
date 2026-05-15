@@ -1,6 +1,7 @@
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import { Star, Clock, User as UserIcon, Grid3x3, Voicemail, LogOut, Settings as SettingsIcon } from 'lucide-react';
 import type { User } from '../api';
+import IncomingCall from '../components/IncomingCall';
 
 interface Props {
   user: User;
@@ -12,6 +13,8 @@ export default function Layout({ user, onLogout }: Props) {
 
   return (
     <div className="app-shell">
+      <IncomingCall />
+
       <header className="app-header">
         <span className="brand">ACE Dialer</span>
         <span className="who">{user.firstName ?? user.email}</span>

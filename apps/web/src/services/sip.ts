@@ -4,7 +4,7 @@
 import { TelnyxRTC } from '@telnyx/webrtc';
 
 export type SipState = 'disconnected' | 'connecting' | 'registered' | 'failed';
-export type CallState = 'idle' | 'calling' | 'ringing' | 'connected' | 'ended';
+export type CallState = 'idle' | 'calling' | 'ringing' | 'connected' | 'ended' | 'incoming';
 
 export interface SipConfig {
   username: string;
@@ -47,6 +47,8 @@ export class SipService {
   private client: TelnyxRTC | null = null;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private currentCall: any = null;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private incomingCall: any = null;
   private callerNumber: string = '';
   private audioEl: HTMLAudioElement;
   private listeners: Map<string, Set<Listener>> = new Map();
@@ -104,16 +106,21 @@ export class SipService {
     this.client.on('telnyx.notification', (notif: any) => {
       const call = notif.call;
       if (!call) return;
-      this.currentCall = call;
+
       console.log('[sip] call state', call.state, {
         id: call.id,
+        direction: call.direction,
         cause: call.cause,
         causeCode: call.causeCode,
         sipCode: call.sipCode,
         sipReason: call.sipReason,
       });
 
-      const direction: 'inbound' | 'outbound' = call.direction === 'inbound' ? 'inbound' : 'outbound';
+      // For inbound calls Telnyx fields:
+      //   call.options.remoteCallerNumber = the PSTN caller
+      //   call.options.destinationNumber  = OUR DID (the one they dialed)
+      const direction: 'inbound' | 'outbound' =
+        call.direction === 'inbound' ? 'inbound' : 'outbound';
       const destNumber: string | undefined = call.options?.destinationNumber;
       const remoteCaller: string | undefined =
         call.options?.remoteCallerNumber ?? call.options?.callerNumber;
@@ -126,21 +133,38 @@ export class SipService {
         fromNumber,
         toNumber,
         direction,
-        number: destNumber,
+        number: direction === 'inbound' ? remoteCaller : destNumber,
       };
 
       switch (call.state) {
         case 'new':
         case 'trying':
         case 'requesting':
+          this.currentCall = call;
           this.emit<CallEvent>('call', { ...baseEvent, state: 'calling' });
           break;
         case 'ringing':
         case 'early':
-          this.emit<CallEvent>('call', { ...baseEvent, state: 'ringing' });
+          if (direction === 'inbound') {
+            // SDK tells us about a NEW incoming call. Hold it on the side,
+            // don't promote to currentCall until the user accepts.
+            this.incomingCall = call;
+            this.emit<CallEvent>('call', { ...baseEvent, state: 'incoming' });
+          } else {
+            this.currentCall = call;
+            this.emit<CallEvent>('call', { ...baseEvent, state: 'ringing' });
+          }
           break;
         case 'answering':
         case 'active':
+          // For inbound, this is the moment the user (or auto-answer) picked up.
+          // Promote the incomingCall to currentCall if applicable.
+          if (this.incomingCall && this.incomingCall.id === call.id) {
+            this.currentCall = this.incomingCall;
+            this.incomingCall = null;
+          } else {
+            this.currentCall = call;
+          }
           this.emit<CallEvent>('call', { ...baseEvent, state: 'connected' });
           if (call.remoteStream && this.audioEl) {
             this.audioEl.srcObject = call.remoteStream;
@@ -156,7 +180,12 @@ export class SipService {
             state: 'ended',
             hangupCause: call.cause ?? call.sipReason ?? undefined,
           });
-          this.currentCall = null;
+          if (this.incomingCall && this.incomingCall.id === call.id) {
+            this.incomingCall = null;
+          }
+          if (this.currentCall && this.currentCall.id === call.id) {
+            this.currentCall = null;
+          }
           break;
       }
     });
@@ -190,6 +219,29 @@ export class SipService {
     });
   }
 
+  // Accept the currently ringing inbound call.
+  acceptCall(): void {
+    if (!this.incomingCall) {
+      console.warn('[sip] acceptCall called but no incoming call');
+      return;
+    }
+    applySpeakerSelection(this.audioEl);
+    if (typeof this.incomingCall.answer === 'function') {
+      this.incomingCall.answer();
+    } else {
+      console.warn('[sip] incoming call has no answer() method');
+    }
+  }
+
+  // Reject the currently ringing inbound call.
+  declineCall(): void {
+    if (!this.incomingCall) return;
+    if (typeof this.incomingCall.hangup === 'function') {
+      this.incomingCall.hangup();
+    }
+    this.incomingCall = null;
+  }
+
   hangup(): void {
     if (this.currentCall && typeof this.currentCall.hangup === 'function') {
       this.currentCall.hangup();
@@ -213,9 +265,11 @@ export class SipService {
 
   disconnect(): void {
     this.hangup();
+    this.declineCall();
     this.client?.disconnect();
     this.client = null;
     this.currentCall = null;
+    this.incomingCall = null;
   }
 }
 
