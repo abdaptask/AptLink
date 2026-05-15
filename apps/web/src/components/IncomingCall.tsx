@@ -34,8 +34,14 @@ export default function IncomingCall() {
 
   if (!incoming) return null;
 
-  // Full-screen if user is on the keypad (idle); banner otherwise.
+  // Electron: always go full-screen (this IS the dialer, not a side widget).
+  // Web: full-screen only on /keypad/login; slim banner on other tabs so the
+  // user can keep glancing at Recents/Contacts while accepting.
+  const isElectron =
+    typeof navigator !== 'undefined' &&
+    /electron/i.test(navigator.userAgent);
   const fullScreen =
+    isElectron ||
     location.pathname === '/keypad' ||
     location.pathname === '/' ||
     location.pathname === '/login';
