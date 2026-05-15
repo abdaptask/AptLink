@@ -185,8 +185,9 @@ app.post('/webhooks/telnyx/failover', async (request) => {
 });
 
 // Catch-all for any path we didn't register — helps diagnose if Telnyx is posting
-// to a slightly different URL than we expect.
-app.all('/*', async (request, reply) => {
+// to a slightly different URL than we expect. Using setNotFoundHandler avoids
+// colliding with the CORS plugin's OPTIONS route on '/*'.
+app.setNotFoundHandler((request, reply) => {
   app.log.warn(
     {
       method: request.method,
