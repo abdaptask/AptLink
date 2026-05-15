@@ -1,19 +1,21 @@
 // ACE Dialer Webhooks — Telnyx inbound webhook receiver.
-// Phase 0: stub routes that log and return 200. Phase 2 adds signature
-// verification, idempotency, and queue dispatch to background workers.
+// Phase 5.1: persist call lifecycle events to the database.
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
+import { prisma } from '@ace/db';
 
 const SERVICE_NAME = 'ace-dialer-webhooks';
 const START_TIME = new Date().toISOString();
 
+// Phase 5: pilot has one user. Hardcoded until multi-user support lands.
+const PILOT_USER_ID = 1;
+const PILOT_NUMBER = process.env.PILOT_TELNYX_NUMBER ?? '+15758001313';
+
 const app = Fastify({
-  logger: {
-    level: process.env.LOG_LEVEL ?? 'info',
-  },
+  logger: { level: process.env.LOG_LEVEL ?? 'info' },
 });
 
-await app.register(cors, { origin: false }); // webhooks aren't browser-callable
+await app.register(cors, { origin: false });
 
 app.get('/', async () => ({ service: SERVICE_NAME, status: 'ok' }));
 app.get('/health', async () => ({
@@ -24,14 +26,141 @@ app.get('/health', async () => ({
   timestamp: new Date().toISOString(),
 }));
 
-// ----- Telnyx webhooks (stubs) -----
+// ---------- Telnyx call webhook handler ----------
+// Telnyx posts JSON like:
+// { data: { event_type: 'call.initiated' | 'call.answered' | 'call.hangup' | ...,
+//           payload: { call_session_id, call_control_id, direction, from, to,
+//                      start_time, end_time, hangup_cause, hangup_source, ... } } }
 app.post('/webhooks/telnyx/calls', async (request) => {
-  app.log.info({ payload: request.body }, '[telnyx] call event');
-  return { received: true };
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const body = request.body as any;
+    const event = body?.data;
+    if (!event) {
+      app.log.warn('[telnyx] webhook with no data');
+      return { received: true };
+    }
+
+    const payload = event.payload ?? {};
+    const callId: string | undefined = payload.call_session_id ?? payload.call_control_id;
+    if (!callId) {
+      app.log.warn('[telnyx] no call id in payload');
+      return { received: true };
+    }
+
+    const direction = payload.direction === 'outgoing' ? 'outbound' : 'inbound';
+    const fromNumber: string = payload.from ?? '';
+    const toNumber: string = payload.to ?? '';
+
+    app.log.info(
+      { eventType: event.event_type, callId, direction, fromNumber, toNumber },
+      '[telnyx] call event'
+    );
+
+    switch (event.event_type) {
+      case 'call.initiated': {
+        await prisma.call.upsert({
+          where: { telnyxCallId: callId },
+          update: { status: 'initiated' },
+          create: {
+            userId: PILOT_USER_ID,
+            telnyxCallId: callId,
+            sessionId: payload.call_session_id ?? null,
+            direction,
+            fromNumber,
+            toNumber,
+            status: 'initiated',
+            startedAt: payload.start_time ? new Date(payload.start_time) : new Date(),
+          },
+        });
+        break;
+      }
+
+      case 'call.answered':
+      case 'call.bridged': {
+        await prisma.call.updateMany({
+          where: { telnyxCallId: callId },
+          data: {
+            status: 'answered',
+            answeredAt: new Date(),
+          },
+        });
+        break;
+      }
+
+      case 'call.hangup': {
+        const startedAt = payload.start_time ? new Date(payload.start_time) : null;
+        const endedAt = payload.end_time ? new Date(payload.end_time) : new Date();
+        let duration = 0;
+        if (startedAt) {
+          duration = Math.max(0, Math.floor((endedAt.getTime() - startedAt.getTime()) / 1000));
+        }
+        const hangupCause: string = payload.hangup_cause ?? 'unknown';
+        const status =
+          hangupCause === 'normal_clearing' || hangupCause === 'normal_termination'
+            ? 'completed'
+            : hangupCause === 'no_answer'
+              ? 'no_answer'
+              : 'failed';
+
+        // Try update first; if no record (we missed call.initiated), insert.
+        const updated = await prisma.call.updateMany({
+          where: { telnyxCallId: callId },
+          data: {
+            status,
+            endedAt,
+            durationSeconds: duration,
+            hangupCause,
+            hangupSource: payload.hangup_source ?? null,
+          },
+        });
+        if (updated.count === 0 && startedAt) {
+          await prisma.call.create({
+            data: {
+              userId: PILOT_USER_ID,
+              telnyxCallId: callId,
+              sessionId: payload.call_session_id ?? null,
+              direction,
+              fromNumber,
+              toNumber,
+              status,
+              startedAt,
+              endedAt,
+              durationSeconds: duration,
+              hangupCause,
+              hangupSource: payload.hangup_source ?? null,
+            },
+          });
+        }
+        break;
+      }
+
+      case 'call.recording.saved': {
+        const recordingUrls: string[] = payload.recording_urls?.mp3 ?? payload.recording_urls ?? [];
+        if (recordingUrls.length > 0) {
+          await prisma.call.updateMany({
+            where: { telnyxCallId: callId },
+            data: { recordingUrl: recordingUrls[0] },
+          });
+        }
+        break;
+      }
+
+      default:
+        // Unhandled event types are fine — we just log.
+        app.log.debug({ eventType: event.event_type }, '[telnyx] unhandled event type');
+    }
+
+    return { received: true };
+  } catch (e) {
+    app.log.error({ err: e }, '[telnyx] handler error');
+    return { received: true, error: String(e) };
+  }
 });
 
+// SMS webhook stub — Phase 5.3 fills this in.
 app.post('/webhooks/telnyx/sms', async (request) => {
-  app.log.info({ payload: request.body }, '[telnyx] sms event');
+  app.log.info({ payload: request.body }, '[telnyx] sms event (stub)');
   return { received: true };
 });
 

@@ -1,5 +1,6 @@
 // ACE Dialer 2.0 — Prisma schema.
-// Phase 1: just the users table. More tables come online phase by phase.
+// Phase 1: users.
+// Phase 5.1: calls.
 
 generator client {
   provider = "prisma-client-js"
@@ -26,5 +27,31 @@ model User {
   createdAt       DateTime  @default(now()) @map("created_at")
   updatedAt       DateTime  @updatedAt      @map("updated_at")
 
+  calls           Call[]
+
   @@map("users")
+}
+
+model Call {
+  id              Int       @id @default(autoincrement())
+  userId          Int       @map("user_id")
+  user            User      @relation(fields: [userId], references: [id])
+  telnyxCallId    String    @unique @map("telnyx_call_id")
+  sessionId       String?   @map("session_id")
+  direction       String    // 'inbound' | 'outbound'
+  fromNumber      String    @map("from_number")
+  toNumber        String    @map("to_number")
+  status          String    // 'initiated' | 'ringing' | 'answered' | 'completed' | 'failed' | 'missed' | 'no_answer'
+  startedAt       DateTime  @map("started_at")
+  answeredAt      DateTime? @map("answered_at")
+  endedAt         DateTime? @map("ended_at")
+  durationSeconds Int       @default(0) @map("duration_seconds")
+  hangupCause     String?   @map("hangup_cause")
+  hangupSource    String?   @map("hangup_source")
+  recordingUrl    String?   @map("recording_url")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt      @map("updated_at")
+
+  @@index([userId, startedAt])
+  @@map("calls")
 }

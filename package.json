@@ -11,7 +11,7 @@
     "build": "npm run build -w packages/db && npm run build --workspaces --if-present",
     "build:api": "npm run db:generate && npm run db:push && npm run build -w packages/db && npm run build -w apps/api",
     "build:socket": "npm run build -w apps/socket",
-    "build:webhooks": "npm run build -w apps/webhooks",
+    "build:webhooks": "npm run db:generate && npm run build -w packages/db && npm run build -w apps/webhooks",
     "build:web": "npm run build -w apps/web",
     "build:desktop": "npm run build -w apps/desktop",
     "dev:web": "npm run dev -w apps/web",
@@ -29,8 +29,5 @@
   },
   "engines": {
     "node": ">=20"
-  },
-  "dependencies": {
-    "picocolors": "^1.1.1"
   }
 }

@@ -1,10 +1,12 @@
 // ACE Dialer API — HTTP service.
 // Phase 1: /health, /, /auth/login, /auth/me.
+// Phase 5.1: /calls, /calls/:id.
 import Fastify, { type FastifyReply, type FastifyRequest } from 'fastify';
 import cors from '@fastify/cors';
 import jwt from '@fastify/jwt';
 import { config } from './config.js';
 import { authRoutes } from './auth/auth.routes.js';
+import { callsRoutes } from './calls/calls.routes.js';
 
 const SERVICE_NAME = 'ace-dialer-api';
 const START_TIME = new Date().toISOString();
@@ -37,7 +39,7 @@ app.decorate('authenticate', async function (request: FastifyRequest, reply: Fas
 app.get('/', async () => ({
   service: SERVICE_NAME,
   status: 'ok',
-  version: '0.2.0',
+  version: '0.3.0',
 }));
 
 app.get('/health', async () => ({
@@ -49,6 +51,7 @@ app.get('/health', async () => ({
 }));
 
 await app.register(authRoutes);
+await app.register(callsRoutes);
 
 const host = '0.0.0.0';
 try {

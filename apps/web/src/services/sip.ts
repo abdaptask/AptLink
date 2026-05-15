@@ -100,7 +100,13 @@ export class SipService {
       const call = notif.call;
       if (!call) return;
       this.currentCall = call;
-      console.log('[sip] call state', call.state, { id: call.id });
+      console.log('[sip] call state', call.state, {
+        id: call.id,
+        cause: call.cause,
+        causeCode: call.causeCode,
+        sipCode: call.sipCode,
+        sipReason: call.sipReason,
+      });
 
       switch (call.state) {
         case 'new':

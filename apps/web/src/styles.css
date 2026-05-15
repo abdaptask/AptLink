@@ -477,3 +477,81 @@ body {
   margin-right: 0.5rem;
 }
 .muted.small { font-size: 0.8rem; color: rgba(255,255,255,0.4); }
+
+/* ============ RECENTS ============ */
+.recents {
+  width: 100%;
+  max-width: 480px;
+  margin: 0 auto;
+  padding: 0.5rem 0 2rem;
+}
+.recents-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.75rem 1.25rem;
+}
+.recents-header h2 {
+  margin: 0;
+  color: #fff;
+  font-size: 1.6rem;
+  font-weight: 600;
+}
+.icon-btn .spin { animation: spin 0.8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.call-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.call-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.85rem 1.25rem;
+  border-bottom: 0.5px solid rgba(255, 255, 255, 0.1);
+  cursor: pointer;
+  transition: background 0.08s ease;
+}
+.call-row:hover { background: rgba(255, 255, 255, 0.05); }
+.call-row:active { background: rgba(255, 255, 255, 0.08); }
+.call-left {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  flex: 1;
+  min-width: 0;
+}
+.ico { flex: 0 0 auto; }
+.ico.out { color: #007aff; }
+.ico.in { color: #34c759; }
+.ico.missed { color: #ff3b30; }
+.call-text { min-width: 0; }
+.call-number {
+  font-size: 1rem;
+  color: #fff;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.call-meta {
+  font-size: 0.78rem;
+  color: rgba(255, 255, 255, 0.5);
+  margin-top: 2px;
+}
+.call-right {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  flex: 0 0 auto;
+}
+.call-time {
+  font-size: 0.8rem;
+  color: rgba(255, 255, 255, 0.5);
+}
+.callback-ico {
+  color: #007aff;
+  opacity: 0.85;
+}

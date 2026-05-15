@@ -10,7 +10,9 @@
     "dev": "tsx watch src/main.ts"
   },
   "dependencies": {
+    "@ace/db": "*",
     "@fastify/cors": "^9.0.1",
+    "@prisma/client": "^5.18.0",
     "fastify": "^4.27.0"
   }
 }
