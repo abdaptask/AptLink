@@ -23,4 +23,14 @@ export const config = {
     .split(',')
     .map((s) => s.trim())
     .filter(Boolean),
+
+  // Telnyx server-side API
+  telnyxApiKey: optional('TELNYX_API_KEY'),
+  telnyxMessagingProfileId: optional('TELNYX_MESSAGING_PROFILE_ID'),
+  pilotFromNumber: optional('PILOT_TELNYX_NUMBER', '+15758001313'),
+
+  // Supabase Storage (for MMS uploads)
+  supabaseUrl: optional('SUPABASE_URL'),
+  supabaseServiceKey: optional('SUPABASE_SERVICE_ROLE_KEY'),
+  supabaseMediaBucket: optional('SUPABASE_MEDIA_BUCKET', 'ace-media'),
 };

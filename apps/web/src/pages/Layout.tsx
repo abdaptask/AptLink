@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 import { NavLink, Outlet, useNavigate, useLocation } from 'react-router-dom';
-import { Star, Clock, User as UserIcon, Grid3x3, Voicemail, LogOut, Settings as SettingsIcon } from 'lucide-react';
+import { MessageSquare, Clock, User as UserIcon, Grid3x3, Voicemail, LogOut, Settings as SettingsIcon } from 'lucide-react';
 import type { User } from '../api';
 import IncomingCall from '../components/IncomingCall';
 import { useSip } from '../contexts/SipContext';
@@ -49,8 +49,8 @@ export default function Layout({ user, onLogout }: Props) {
       </main>
 
       <nav className="tab-bar">
-        <NavLink to="/favorites" className={({ isActive }) => (isActive ? 'tab active' : 'tab')}>
-          <Star size={22} /><span>Favorites</span>
+        <NavLink to="/messages" className={({ isActive }) => (isActive ? 'tab active' : 'tab')}>
+          <MessageSquare size={22} /><span>Messages</span>
         </NavLink>
         <NavLink to="/recents" className={({ isActive }) => (isActive ? 'tab active' : 'tab')}>
           <Clock size={22} /><span>Recents</span>

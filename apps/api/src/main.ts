@@ -7,12 +7,15 @@ import jwt from '@fastify/jwt';
 import { config } from './config.js';
 import { authRoutes } from './auth/auth.routes.js';
 import { callsRoutes } from './calls/calls.routes.js';
+import { messagesRoutes } from './messages/messages.routes.js';
 
 const SERVICE_NAME = 'ace-dialer-api';
 const START_TIME = new Date().toISOString();
 
 const app = Fastify({
   logger: { level: config.logLevel },
+  // 16 MB body limit so base64-encoded MMS uploads fit (max 10 MB payload).
+  bodyLimit: 16 * 1024 * 1024,
 });
 
 await app.register(cors, {
@@ -39,7 +42,7 @@ app.decorate('authenticate', async function (request: FastifyRequest, reply: Fas
 app.get('/', async () => ({
   service: SERVICE_NAME,
   status: 'ok',
-  version: '0.3.0',
+  version: '0.4.0',
 }));
 
 app.get('/health', async () => ({
@@ -52,6 +55,7 @@ app.get('/health', async () => ({
 
 await app.register(authRoutes);
 await app.register(callsRoutes);
+await app.register(messagesRoutes);
 
 const host = '0.0.0.0';
 try {

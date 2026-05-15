@@ -1,6 +1,7 @@
 // ACE Dialer 2.0 — Prisma schema.
 // Phase 1: users.
 // Phase 5.1: calls.
+// Phase 5.3: messages (SMS/MMS).
 
 generator client {
   provider = "prisma-client-js"
@@ -28,6 +29,7 @@ model User {
   updatedAt       DateTime  @updatedAt      @map("updated_at")
 
   calls           Call[]
+  messages        Message[]
 
   @@map("users")
 }
@@ -41,7 +43,7 @@ model Call {
   direction       String    // 'inbound' | 'outbound'
   fromNumber      String    @map("from_number")
   toNumber        String    @map("to_number")
-  status          String    // 'initiated' | 'ringing' | 'answered' | 'completed' | 'failed' | 'missed' | 'no_answer'
+  status          String    // 'initiated' | 'ringing' | 'answered' | 'completed' | 'failed' | 'missed' | 'no_answer' | 'rejected'
   startedAt       DateTime  @map("started_at")
   answeredAt      DateTime? @map("answered_at")
   endedAt         DateTime? @map("ended_at")
@@ -54,4 +56,30 @@ model Call {
 
   @@index([userId, startedAt])
   @@map("calls")
+}
+
+// Phase 5.3 — SMS/MMS.
+// threadKey is the OTHER party's E.164 number (regardless of direction) so
+// inbound and outbound texts to the same contact share one thread.
+model Message {
+  id               Int       @id @default(autoincrement())
+  userId           Int       @map("user_id")
+  user             User      @relation(fields: [userId], references: [id])
+  telnyxMessageId  String    @unique @map("telnyx_message_id")
+  threadKey        String    @map("thread_key")
+  direction        String    // 'inbound' | 'outbound'
+  fromNumber       String    @map("from_number")
+  toNumber         String    @map("to_number")
+  body             String    @default("")
+  mediaUrls        String[]  @default([]) @map("media_urls")
+  status           String    @default("queued") // queued | sent | delivered | failed | received
+  errors           Json?
+  sentAt           DateTime? @map("sent_at")
+  deliveredAt      DateTime? @map("delivered_at")
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt      @map("updated_at")
+
+  @@index([userId, threadKey, createdAt])
+  @@index([userId, createdAt])
+  @@map("messages")
 }

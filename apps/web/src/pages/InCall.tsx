@@ -170,7 +170,14 @@ export default function InCall() {
           <ControlBtn
             icon={<MessageSquare size={26} />}
             label="Message"
-            onClick={() => showToast('Messages — Phase 5.3')}
+            onClick={() => {
+              const other =
+                callState.direction === 'inbound'
+                  ? callState.fromNumber ?? callState.number
+                  : callState.toNumber ?? callState.number;
+              if (other) navigate(`/messages?to=${encodeURIComponent(other)}`);
+              else navigate('/messages');
+            }}
           />
         </div>
       )}

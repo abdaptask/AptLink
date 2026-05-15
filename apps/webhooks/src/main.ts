@@ -173,10 +173,113 @@ app.post('/webhooks/telnyx/calls', async (request) => {
   }
 });
 
-// SMS webhook stub — Phase 5.3 fills this in.
+// Phase 5.3 — Telnyx SMS / MMS webhook.
+// Telnyx event types we care about:
+//   - message.received       inbound SMS/MMS landed on our number
+//   - message.sent           outbound accepted by Telnyx (we already wrote the row)
+//   - message.delivered      outbound delivered to handset
+//   - message.failed         outbound failed
+//   - message.finalized      Telnyx's "we're done with this message"
 app.post('/webhooks/telnyx/sms', async (request) => {
-  app.log.info({ payload: request.body }, '[telnyx] sms event (stub)');
-  return { received: true };
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const body = request.body as any;
+    const event = body?.data;
+    if (!event) {
+      app.log.warn('[telnyx] sms webhook with no data');
+      return { received: true };
+    }
+
+    const payload = event.payload ?? {};
+    const telnyxMessageId: string | undefined = payload.id;
+    const eventType: string = event.event_type ?? '';
+    if (!telnyxMessageId) {
+      app.log.warn({ eventType }, '[telnyx] sms event missing id');
+      return { received: true };
+    }
+
+    const text: string = payload.text ?? '';
+    const mediaUrls: string[] = Array.isArray(payload.media)
+      ? payload.media.map((m: { url?: string }) => m?.url).filter((u: unknown): u is string => typeof u === 'string')
+      : [];
+    const fromNumber: string = payload.from?.phone_number ?? '';
+    const toNumber: string = Array.isArray(payload.to) && payload.to[0]?.phone_number
+      ? payload.to[0].phone_number
+      : payload.to?.phone_number ?? '';
+
+    app.log.info(
+      { eventType, telnyxMessageId, fromNumber, toNumber, mediaCount: mediaUrls.length },
+      '[telnyx] sms event'
+    );
+
+    switch (eventType) {
+      case 'message.received': {
+        // Inbound: from = the PSTN caller, to = our DID.
+        const threadKey = fromNumber; // the other party
+        await prisma.message.upsert({
+          where: { telnyxMessageId },
+          update: { status: 'received' },
+          create: {
+            userId: PILOT_USER_ID,
+            telnyxMessageId,
+            threadKey,
+            direction: 'inbound',
+            fromNumber,
+            toNumber,
+            body: text,
+            mediaUrls,
+            status: 'received',
+            sentAt: payload.received_at ? new Date(payload.received_at) : new Date(),
+          },
+        });
+        break;
+      }
+
+      case 'message.sent':
+      case 'message.queued': {
+        await prisma.message.updateMany({
+          where: { telnyxMessageId },
+          data: { status: 'sent', sentAt: new Date() },
+        });
+        break;
+      }
+
+      case 'message.delivered': {
+        await prisma.message.updateMany({
+          where: { telnyxMessageId },
+          data: { status: 'delivered', deliveredAt: new Date() },
+        });
+        break;
+      }
+
+      case 'message.sending_failed':
+      case 'message.failed':
+      case 'message.finalized': {
+        // For finalized, status comes from the payload itself.
+        const finalStatus: string =
+          eventType === 'message.finalized'
+            ? payload.to?.[0]?.status ?? payload.status ?? 'sent'
+            : 'failed';
+        await prisma.message.updateMany({
+          where: { telnyxMessageId },
+          data: {
+            status: finalStatus === 'delivered' ? 'delivered' : finalStatus,
+            errors: payload.errors ?? undefined,
+            deliveredAt: finalStatus === 'delivered' ? new Date() : undefined,
+          },
+        });
+        break;
+      }
+
+      default:
+        app.log.debug({ eventType }, '[telnyx] unhandled sms event');
+    }
+
+    return { received: true };
+  } catch (e) {
+    app.log.error({ err: e }, '[telnyx] sms handler error');
+    return { received: true, error: String(e) };
+  }
 });
 
 app.post('/webhooks/telnyx/failover', async (request) => {
