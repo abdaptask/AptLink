@@ -44,6 +44,12 @@ app.get('/', async () => ({
   service: SERVICE_NAME,
   status: 'ok',
   version: '0.4.0',
+  // Feature flags — boolean only, no values leaked. Lets a developer verify
+  // env vars are loaded without exposing secrets.
+  features: {
+    telnyxApiKey: Boolean(config.telnyxApiKey),
+    telnyxMessagingProfileId: Boolean(config.telnyxMessagingProfileId),
+  },
 }));
 
 app.get('/health', async () => ({
@@ -63,6 +69,13 @@ const host = '0.0.0.0';
 try {
   await app.listen({ port: config.port, host });
   app.log.info({ port: config.port, host }, `[${SERVICE_NAME}] listening`);
+  app.log.info(
+    {
+      telnyxApiKey: Boolean(config.telnyxApiKey),
+      telnyxMessagingProfileId: Boolean(config.telnyxMessagingProfileId),
+    },
+    '[startup] env flags',
+  );
 } catch (err) {
   app.log.error(err);
   process.exit(1);
