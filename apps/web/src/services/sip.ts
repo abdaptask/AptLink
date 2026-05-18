@@ -1,6 +1,4 @@
-// Telnyx WebRTC service. Replaces the JsSIP-based implementation.
-// Telnyx's SDK handles SDP munging, TURN credentials, codec negotiation, and DTLS-SRTP
-// internally — all the things we were fighting manually with JsSIP.
+// Telnyx WebRTC service.
 import { TelnyxRTC } from '@telnyx/webrtc';
 
 export type SipState = 'disconnected' | 'connecting' | 'registered' | 'failed';
@@ -21,8 +19,6 @@ export interface CallEvent {
   toNumber?: string;
   direction?: 'inbound' | 'outbound';
   hangupCause?: string;
-  /** Which slot this event belongs to. Omitted for the single-call flow. */
-  line?: 'primary' | 'secondary';
 }
 
 type Listener<T = unknown> = (payload: T) => void;
@@ -37,125 +33,29 @@ function toE164(raw: string): string {
 
 function applySpeakerSelection(audioEl: HTMLAudioElement): void {
   const speakerId = localStorage.getItem('ace_speaker');
-  if (!speakerId || speakerId === 'default') return;
-  if (!('setSinkId' in audioEl)) return;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  (audioEl as any).setSinkId(speakerId).catch((e: Error) => {
-    // Stale device id (e.g. headset unplugged) silently routes audio nowhere.
-    // Clear the bad selection so we fall back to the OS default sink on next
-    // call, and unmute/restore the element just in case.
-    console.warn('[sip] setSinkId failed; clearing stale ace_speaker', e.message);
-    localStorage.removeItem('ace_speaker');
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (audioEl as any).setSinkId('').catch(() => { /* default sink */ });
-    } catch { /* noop */ }
-  });
-}
-
-function ensureAudioPlayback(audioEl: HTMLAudioElement): void {
-  audioEl.muted = false;
-  audioEl.volume = 1;
-  // Some Electron / Chromium combos pause the element if it loses focus.
-  // Kicking play() here is a no-op when already playing.
-  audioEl.play().catch((e) => console.warn('[sip] audio play() rejected', e?.message ?? e));
-}
-
-function readMicId(): string | null {
-  const m = localStorage.getItem('ace_mic');
-  return m && m !== 'default' ? m : null;
-}
-
-function micAudioConstraint(): boolean | MediaTrackConstraints {
-  const id = readMicId();
-  return id ? { deviceId: { exact: id } } : true;
+  if (speakerId && speakerId !== 'default' && 'setSinkId' in audioEl) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (audioEl as any).setSinkId(speakerId).catch((e: Error) =>
+      console.warn('[sip] setSinkId failed', e.message)
+    );
+  }
 }
 
 export class SipService {
   private client: TelnyxRTC | null = null;
-  // The currently "active" call (the leg the user is talking to).
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private currentCall: any = null;
-  // A second outbound/in-progress call placed while currentCall is held.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  private secondaryCall: any = null;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private incomingCall: any = null;
-  /** When true, both lines have been bridged via Telnyx-side conference. */
-  private conference = false;
   private callerNumber: string = '';
   private audioEl: HTMLAudioElement;
   private listeners: Map<string, Set<Listener>> = new Map();
 
   constructor() {
-    // Reuse an existing element if one is already in the DOM (HMR re-imports
-    // this module without re-rendering the body). Appending a duplicate with
-    // the same id strands the SDK on the first (orphaned) element.
-    const existing = document.getElementById('ace-remote-audio') as HTMLAudioElement | null;
-    if (existing) {
-      this.audioEl = existing;
-    } else {
-      this.audioEl = document.createElement('audio');
-      this.audioEl.autoplay = true;
-      this.audioEl.id = 'ace-remote-audio';
-      document.body.appendChild(this.audioEl);
-    }
-    this.audioEl.muted = false;
-    this.audioEl.volume = 1;
-    applySpeakerSelection(this.audioEl);
-  }
-
-  /**
-   * Unhold the surviving call when its sibling ended, and re-emit a
-   * 'connected' event so the UI swaps focus back to it. Tolerant of SDK
-   * variations where `held` may be undefined or `unhold` missing.
-   */
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  private autoResume(call: any, line: 'primary' | 'secondary'): void {
-    try {
-      if (call?.held && typeof call.unhold === 'function') {
-        call.unhold();
-      }
-    } catch (e) {
-      console.warn('[sip] autoResume unhold failed', e);
-    }
-    this.attachRemoteAudio(call);
-    const destNumber: string | undefined = call?.options?.destinationNumber;
-    const remoteCaller: string | undefined =
-      call?.options?.remoteCallerNumber ?? call?.options?.callerNumber;
-    this.emit<CallEvent>('call', {
-      state: 'connected',
-      callId: call?.id,
-      fromNumber: this.callerNumber || remoteCaller,
-      toNumber: destNumber || this.callerNumber,
-      direction: 'outbound',
-      number: destNumber ?? remoteCaller,
-      line,
-    });
-  }
-
-  // Attach the call's remote audio stream to our <audio> element. Handles
-  // SDK-version differences (some expose `remoteStream`, others expose
-  // `peer.remoteStreams[]` or surface tracks via the peerconnection). Also
-  // ensures the element is unmuted and the sink id is current.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  private attachRemoteAudio(call: any): void {
-    if (!this.audioEl) return;
-    const stream: MediaStream | undefined =
-      call.remoteStream ||
-      call.peer?.remoteStreams?.[0] ||
-      call.options?.remoteStream;
-    if (stream) {
-      this.audioEl.srcObject = stream;
-      const audioTracks = stream.getAudioTracks?.() ?? [];
-      console.info('[sip] attached remote stream', {
-        tracks: audioTracks.length,
-        trackStates: audioTracks.map((t) => ({ enabled: t.enabled, muted: t.muted, readyState: t.readyState })),
-      });
-    } else {
-      console.warn('[sip] active call has no remoteStream; relying on remoteElement auto-attach');
-    }
-    ensureAudioPlayback(this.audioEl);
+    this.audioEl = document.createElement('audio');
+    this.audioEl.autoplay = true;
+    this.audioEl.id = 'ace-remote-audio';
+    document.body.appendChild(this.audioEl);
     applySpeakerSelection(this.audioEl);
   }
 
@@ -215,19 +115,11 @@ export class SipService {
         sipReason: call.sipReason,
       });
 
-      // Robust direction detection. The Telnyx SDK's call.direction field
-      // isn't always reliable (varies by version), so we also infer from:
-      //   - call.options.remoteCallerNumber: set on inbound only by some SDK versions
-      //   - whether we initiated the call (this.currentCall set in our call() method)
-      //   - whether the call's destination matches OUR number (= someone dialed us)
       const sdkDir = String(call.direction ?? '').toLowerCase();
       const destNumber: string | undefined = call.options?.destinationNumber;
       const remoteCaller: string | undefined =
         call.options?.remoteCallerNumber ?? call.options?.callerNumber;
-      const isPrimary = this.currentCall && this.currentCall.id === call.id;
-      const isSecondary = this.secondaryCall && this.secondaryCall.id === call.id;
-      const weInitiated = isPrimary || isSecondary;
-      const line: 'primary' | 'secondary' = isSecondary ? 'secondary' : 'primary';
+      const weInitiated = this.currentCall && this.currentCall.id === call.id;
 
       let direction: 'inbound' | 'outbound';
       if (sdkDir === 'inbound' || sdkDir === 'incoming') {
@@ -237,7 +129,6 @@ export class SipService {
       } else if (weInitiated) {
         direction = 'outbound';
       } else if (destNumber && this.callerNumber && destNumber === this.callerNumber) {
-        // Call destined to OUR number that we didn't initiate -> inbound.
         direction = 'inbound';
       } else if (remoteCaller && !weInitiated) {
         direction = 'inbound';
@@ -255,53 +146,39 @@ export class SipService {
         toNumber,
         direction,
         number: direction === 'inbound' ? remoteCaller : destNumber,
-        line,
-      };
-
-      // Route the call object into the appropriate slot. Secondary takes
-      // precedence — if addCall() pre-set the secondary slot with this id, we
-      // stay there. Otherwise the call goes into the primary slot.
-      const writeSlot = () => {
-        if (line === 'secondary') this.secondaryCall = call;
-        else this.currentCall = call;
       };
 
       switch (call.state) {
         case 'new':
         case 'trying':
         case 'requesting':
-          writeSlot();
+          this.currentCall = call;
           this.emit<CallEvent>('call', { ...baseEvent, state: 'calling' });
           break;
         case 'ringing':
         case 'early':
           if (direction === 'inbound') {
-            // SDK tells us about a NEW incoming call. Hold it on the side,
-            // don't promote to currentCall until the user accepts.
             this.incomingCall = call;
             this.emit<CallEvent>('call', { ...baseEvent, state: 'incoming' });
           } else {
-            writeSlot();
+            this.currentCall = call;
             this.emit<CallEvent>('call', { ...baseEvent, state: 'ringing' });
           }
           break;
         case 'answering':
         case 'active':
-          // For inbound, this is the moment the user (or auto-answer) picked up.
-          // Promote the incomingCall to currentCall if applicable.
           if (this.incomingCall && this.incomingCall.id === call.id) {
             this.currentCall = this.incomingCall;
             this.incomingCall = null;
           } else {
-            writeSlot();
+            this.currentCall = call;
           }
           this.emit<CallEvent>('call', { ...baseEvent, state: 'connected' });
-          this.attachRemoteAudio(call);
-          break;
-        case 'held':
-          // Telnyx SDK emits this when a call has been server-acknowledged as held.
-          // Surface it as a state so the UI shows "Hold · mm:ss" honestly.
-          this.emit<CallEvent>('call', { ...baseEvent, state: 'connected' });
+          if (call.remoteStream && this.audioEl) {
+            this.audioEl.srcObject = call.remoteStream;
+            this.audioEl.play().catch(() => {});
+            applySpeakerSelection(this.audioEl);
+          }
           break;
         case 'hangup':
         case 'destroy':
@@ -315,25 +192,8 @@ export class SipService {
             this.incomingCall = null;
           }
           if (this.currentCall && this.currentCall.id === call.id) {
-            // Primary leg ended.
             this.currentCall = null;
-            if (this.secondaryCall) {
-              // Promote secondary → primary so it becomes the focused line.
-              // Also unhold it: with no other active leg, the user should
-              // immediately hear the surviving party.
-              this.currentCall = this.secondaryCall;
-              this.secondaryCall = null;
-              this.autoResume(this.currentCall, 'primary');
-            }
-          } else if (this.secondaryCall && this.secondaryCall.id === call.id) {
-            // Secondary leg ended. Primary may have been on hold during the
-            // add-call flow; unhold it so the user hears the first party
-            // again (iPhone behavior — without this, the held leg looks
-            // dropped from the user's perspective).
-            this.secondaryCall = null;
-            if (this.currentCall) this.autoResume(this.currentCall, 'primary');
           }
-          if (!this.currentCall && !this.secondaryCall) this.conference = false;
           break;
       }
     });
@@ -348,13 +208,12 @@ export class SipService {
     console.log('[sip] dialing', { rawNumber, e164, callerNumber: this.callerNumber });
 
     applySpeakerSelection(this.audioEl);
-    ensureAudioPlayback(this.audioEl);
 
     this.currentCall = this.client.newCall({
       destinationNumber: e164,
       callerNumber: this.callerNumber,
       callerName: 'ACE Dialer',
-      audio: micAudioConstraint(),
+      audio: true,
       video: false,
       remoteElement: 'ace-remote-audio',
     });
@@ -365,153 +224,20 @@ export class SipService {
       fromNumber: this.callerNumber,
       toNumber: e164,
       direction: 'outbound',
-      line: 'primary',
     });
   }
 
-  /**
-   * Place a SECOND call while the first is still up. The first call is put
-   * on hold automatically and the new call becomes the active line.
-   */
-  addCall(rawNumber: string): void {
-    if (!this.client) throw new Error('SIP not connected');
-    if (!this.currentCall) {
-      // Nothing to "add to" — just dial normally.
-      return this.call(rawNumber);
-    }
-    if (this.secondaryCall) {
-      console.warn('[sip] addCall: a secondary call is already active; ignoring');
-      return;
-    }
-    const e164 = toE164(rawNumber);
-    console.log('[sip] add-call dialing', { rawNumber, e164 });
-
-    // Hold the current line before placing the new one.
-    try {
-      if (typeof this.currentCall.hold === 'function' && !this.currentCall.held) {
-        this.currentCall.hold();
-      }
-    } catch (e) {
-      console.warn('[sip] addCall: hold() on primary failed', e);
-    }
-
-    applySpeakerSelection(this.audioEl);
-    ensureAudioPlayback(this.audioEl);
-
-    this.secondaryCall = this.client.newCall({
-      destinationNumber: e164,
-      callerNumber: this.callerNumber,
-      callerName: 'ACE Dialer',
-      audio: micAudioConstraint(),
-      video: false,
-      remoteElement: 'ace-remote-audio',
-    });
-    this.emit<CallEvent>('call', {
-      state: 'calling',
-      number: e164,
-      callId: this.secondaryCall?.id,
-      fromNumber: this.callerNumber,
-      toNumber: e164,
-      direction: 'outbound',
-      line: 'secondary',
-    });
-  }
-
-  /** Returns true if a second line is active (held or connected). */
-  hasSecondLine(): boolean {
-    return !!this.secondaryCall;
-  }
-
-  /** Swap which line is on hold. */
-  swapLines(): void {
-    if (!this.currentCall || !this.secondaryCall) return;
-    try {
-      // The active one is the line that's NOT held.
-      const primaryHeld = Boolean(this.currentCall.held);
-      const secondaryHeld = Boolean(this.secondaryCall.held);
-      if (!primaryHeld && typeof this.currentCall.hold === 'function') this.currentCall.hold();
-      if (secondaryHeld && typeof this.secondaryCall.unhold === 'function') this.secondaryCall.unhold();
-      // Swap the slot pointers so `currentCall` is always "the line user is talking to".
-      const tmp = this.currentCall;
-      this.currentCall = this.secondaryCall;
-      this.secondaryCall = tmp;
-      // Re-emit a synthetic state event so the UI repaints.
-      this.emit<CallEvent>('call', {
-        state: 'connected',
-        callId: this.currentCall.id,
-        fromNumber: this.callerNumber,
-        toNumber: this.currentCall.options?.destinationNumber,
-        direction: 'outbound',
-        line: 'primary',
-      });
-    } catch (e) {
-      console.warn('[sip] swapLines failed', e);
-    }
-  }
-
-  /**
-   * Merge two active legs into a 3-way conference. This requires backend
-   * support: Telnyx's WebRTC SDK doesn't bridge calls client-side. The web
-   * client just relays the request; the API server uses the Telnyx Voice
-   * Call Control API to join both legs into a conference room.
-   * Returns true if the request was accepted; false if not possible yet.
-   */
-  async mergeLines(token: string, apiBaseUrl: string): Promise<{ ok: boolean; reason?: string }> {
-    if (!this.currentCall || !this.secondaryCall) {
-      return { ok: false, reason: 'Need two active lines to merge' };
-    }
-    try {
-      const res = await fetch(`${apiBaseUrl}/calls/conference`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({
-          legA: this.currentCall.id,
-          legB: this.secondaryCall.id,
-        }),
-      });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        return { ok: false, reason: body.error ?? `HTTP ${res.status}` };
-      }
-      this.conference = true;
-      this.emit<CallEvent>('call', {
-        state: 'connected',
-        callId: this.currentCall.id,
-        direction: 'outbound',
-        line: 'primary',
-      });
-      return { ok: true };
-    } catch (e) {
-      return { ok: false, reason: e instanceof Error ? e.message : 'merge request failed' };
-    }
-  }
-
-  isConference(): boolean {
-    return this.conference;
-  }
-
-  // Accept the currently ringing inbound call.
   acceptCall(): void {
     if (!this.incomingCall) {
       console.warn('[sip] acceptCall called but no incoming call');
       return;
     }
     applySpeakerSelection(this.audioEl);
-    ensureAudioPlayback(this.audioEl);
     if (typeof this.incomingCall.answer === 'function') {
-      // Pass mic constraint so inbound calls honor the user's selected mic too.
-      try {
-        this.incomingCall.answer({ audio: micAudioConstraint(), video: false });
-      } catch {
-        // Older SDKs may not accept options.
-        this.incomingCall.answer();
-      }
-    } else {
-      console.warn('[sip] incoming call has no answer() method');
+      this.incomingCall.answer();
     }
   }
 
-  // Reject the currently ringing inbound call.
   declineCall(): void {
     if (!this.incomingCall) return;
     if (typeof this.incomingCall.hangup === 'function') {
@@ -526,14 +252,6 @@ export class SipService {
     }
   }
 
-  /** Hang up just the held / secondary line (leaves the active line up). */
-  hangupSecondary(): void {
-    if (this.secondaryCall && typeof this.secondaryCall.hangup === 'function') {
-      this.secondaryCall.hangup();
-    }
-  }
-
-  // Hold / unhold the active call. Returns true if call is now on hold.
   toggleHold(): boolean {
     if (!this.currentCall) return false;
     try {
@@ -553,7 +271,6 @@ export class SipService {
     return Boolean(this.currentCall?.held);
   }
 
-  // Blind-transfer to a destination number. Telnyx SDK exposes transfer(target).
   transfer(rawDestination: string): boolean {
     if (!this.currentCall) return false;
     if (typeof this.currentCall.transfer !== 'function') return false;
@@ -564,29 +281,6 @@ export class SipService {
     } catch (e) {
       console.warn('[sip] transfer failed', e);
       return false;
-    }
-  }
-
-  // Pick a different audio output device (speaker selection).
-  async setAudioOutput(deviceId: string): Promise<void> {
-    localStorage.setItem('ace_speaker', deviceId);
-    if (!this.audioEl) return;
-    if (!('setSinkId' in this.audioEl)) return;
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      await (this.audioEl as any).setSinkId(deviceId);
-    } catch (e) {
-      console.warn('[sip] setSinkId failed', e);
-    }
-  }
-
-  async listAudioOutputs(): Promise<MediaDeviceInfo[]> {
-    if (!navigator.mediaDevices?.enumerateDevices) return [];
-    try {
-      const devices = await navigator.mediaDevices.enumerateDevices();
-      return devices.filter((d) => d.kind === 'audiooutput');
-    } catch {
-      return [];
     }
   }
 

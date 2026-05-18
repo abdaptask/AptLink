@@ -14,10 +14,9 @@ import {
   Video,
   MessageSquare,
   X,
-  ArrowLeftRight,
 } from 'lucide-react';
 import { useSip } from '../contexts/SipContext';
-import { startRecording, stopRecording } from '../api';
+import { ringtone } from '../services/ringtone';
 
 function formatDuration(seconds: number): string {
   const m = Math.floor(seconds / 60);
@@ -40,18 +39,7 @@ function formatNumber(n: string | undefined): string {
 const DTMF_KEYS = ['1','2','3','4','5','6','7','8','9','*','0','#'];
 
 export default function InCall() {
-  const {
-    callState,
-    secondaryState,
-    conference,
-    hangup,
-    hangupSecondary,
-    toggleMute,
-    toggleHold,
-    transferCall,
-    sendDTMF,
-    swap,
-  } = useSip();
+  const { callState, hangup, toggleMute, toggleHold, transferCall, sendDTMF } = useSip();
   const [duration, setDuration] = useState(0);
   const [muted, setMuted] = useState(false);
   const [onHold, setOnHold] = useState(false);
@@ -59,8 +47,6 @@ export default function InCall() {
   const [showTransfer, setShowTransfer] = useState(false);
   const [transferTarget, setTransferTarget] = useState('');
   const [toast, setToast] = useState<string | null>(null);
-  const [recording, setRecording] = useState(false);
-  const [recordingPending, setRecordingPending] = useState(false);
   const navigate = useNavigate();
 
   // Tick the duration once we're connected.
@@ -68,6 +54,16 @@ export default function InCall() {
     if (callState.state !== 'connected') return;
     const id = setInterval(() => setDuration((d) => d + 1), 1000);
     return () => clearInterval(id);
+  }, [callState.state]);
+
+  // Local ringback while we're waiting for the other side to pick up.
+  // Some VoIP destinations don't send early media so we'd otherwise hear silence.
+  useEffect(() => {
+    if (callState.state === 'calling' || callState.state === 'ringing') {
+      ringtone.start();
+      return () => ringtone.stop();
+    }
+    return undefined;
   }, [callState.state]);
 
   // Auto-return to keypad after the call ends.
@@ -106,7 +102,6 @@ export default function InCall() {
     }
   };
 
-  // Caller display: outbound shows toNumber; inbound shows fromNumber.
   const callerLabel =
     formatNumber(
       callState.direction === 'inbound'
@@ -123,52 +118,13 @@ export default function InCall() {
 
   const isConnected = callState.state === 'connected';
 
-  const secondaryLabel = secondaryState
-    ? formatNumber(
-        secondaryState.direction === 'inbound'
-          ? secondaryState.fromNumber ?? secondaryState.number
-          : secondaryState.toNumber ?? secondaryState.number,
-      )
-    : '';
-
   return (
     <div className="in-call">
-      {secondaryState && !conference && (
-        <div className="held-line-strip" role="group" aria-label="Held call">
-          <button
-            type="button"
-            className="held-strip-main"
-            onClick={swap}
-            title="Tap to swap lines"
-          >
-            <span className="held-strip-tag">On hold · tap to swap</span>
-            <span className="held-strip-num">{secondaryLabel || 'Second line'}</span>
-          </button>
-          <button
-            type="button"
-            className="held-strip-hangup"
-            onClick={hangupSecondary}
-            aria-label="Hang up held call"
-            title="Hang up held call"
-          >
-            <PhoneOff size={16} />
-          </button>
-        </div>
-      )}
-      {conference && (
-        <div className="held-line-strip conference">
-          <span className="held-strip-tag">Conference</span>
-          <span className="held-strip-num">
-            {callerLabel} · {secondaryLabel || 'Line 2'}
-          </span>
-        </div>
-      )}
       <div className="in-call-header">
-        <div className="in-call-name">{conference ? 'Conference Call' : callerLabel}</div>
+        <div className="in-call-name">{callerLabel}</div>
         <div className="in-call-time">{subtitle}</div>
       </div>
 
-      {/* 3x3 control grid */}
       {!showKeypad && !showTransfer && (
         <div className="in-call-grid">
           <ControlBtn
@@ -187,23 +143,14 @@ export default function InCall() {
           <ControlBtn
             icon={<Volume2 size={26} />}
             label="Audio"
-            onClick={() => navigate('/settings/speaker')}
+            onClick={() => navigate('/settings')}
           />
-          {secondaryState ? (
-            <ControlBtn
-              icon={<ArrowLeftRight size={26} />}
-              label="Swap"
-              onClick={swap}
-              disabled={!isConnected}
-            />
-          ) : (
-            <ControlBtn
-              icon={<UserPlus size={26} />}
-              label="Add Call"
-              onClick={() => navigate('/keypad', { state: { addCall: true } })}
-              disabled={!isConnected}
-            />
-          )}
+          <ControlBtn
+            icon={<UserPlus size={26} />}
+            label="Add Call"
+            onClick={() => showToast('Add Call — coming soon')}
+            disabled={!isConnected}
+          />
           <ControlBtn
             icon={onHold ? <Play size={26} /> : <Pause size={26} />}
             label={onHold ? 'Resume' : 'Hold'}
@@ -219,24 +166,9 @@ export default function InCall() {
           />
           <ControlBtn
             icon={<CircleDot size={26} />}
-            label={recording ? 'Stop Rec' : 'Record'}
-            active={recording}
-            onClick={async () => {
-              if (recordingPending || !callState.callId) return;
-              const token = sessionStorage.getItem('ace_token');
-              if (!token) return;
-              setRecordingPending(true);
-              const fn = recording ? stopRecording : startRecording;
-              const r = await fn(token, callState.callId);
-              setRecordingPending(false);
-              if (r.ok) {
-                setRecording((v) => !v);
-                showToast(recording ? 'Recording stopped' : 'Recording started');
-              } else {
-                showToast(r.hint ?? r.error ?? 'Recording failed');
-              }
-            }}
-            disabled={!isConnected || recordingPending}
+            label="Record"
+            onClick={() => showToast('Recording — coming soon')}
+            disabled={!isConnected}
           />
           <ControlBtn
             icon={<Video size={26} />}
@@ -259,7 +191,6 @@ export default function InCall() {
         </div>
       )}
 
-      {/* In-call DTMF keypad */}
       {showKeypad && (
         <div className="in-call-keypad">
           <div className="ick-grid">
@@ -277,7 +208,6 @@ export default function InCall() {
         </div>
       )}
 
-      {/* Transfer dialog */}
       {showTransfer && (
         <div className="in-call-transfer">
           <div className="ict-label">Transfer to</div>

@@ -107,27 +107,36 @@ export async function updateCall(
   return res.json();
 }
 
-// ---------- Phase 5.5: Call recording ----------
-export interface RecordingResult {
+// ---------- Phase 5.5: Call recording (server-side via Telnyx Call Control) ----------
+// UI isn't wired yet — these helpers stay so Voicemail.tsx and any future
+// Record button can call them directly.
+export interface RecordingActionResult {
   ok: boolean;
   error?: string;
   hint?: string;
 }
 
-export async function startRecording(token: string, telnyxCallId: string): Promise<RecordingResult> {
+export async function startRecording(token: string, telnyxCallId: string): Promise<RecordingActionResult> {
   const res = await fetch(`${API_URL}/calls/${encodeURIComponent(telnyxCallId)}/recording/start`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${token}` },
   });
   const body = await res.json().catch(() => ({}));
-  if (!res.ok) return { ok: false, error: body.error ?? `HTTP ${res.status}`, hint: body.hint };
-  return { ok: true };
+  return { ok: res.ok, ...(body as object) };
+}
+
+export async function stopRecording(token: string, telnyxCallId: string): Promise<RecordingActionResult> {
+  const res = await fetch(`${API_URL}/calls/${encodeURIComponent(telnyxCallId)}/recording/stop`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const body = await res.json().catch(() => ({}));
+  return { ok: res.ok, ...(body as object) };
 }
 
 // ---------- Phase 5.6: Voicemail ----------
 export interface VoicemailRecord {
   id: number;
-  telnyxCallId: string | null;
   fromNumber: string;
   toNumber: string;
   recordingUrl: string;
@@ -135,7 +144,6 @@ export interface VoicemailRecord {
   transcription: string | null;
   receivedAt: string;
   listenedAt: string | null;
-  createdAt: string;
 }
 
 export async function getVoicemails(token: string): Promise<VoicemailRecord[]> {
@@ -151,15 +159,15 @@ export async function getUnreadVoicemailCount(token: string): Promise<number> {
     headers: { Authorization: `Bearer ${token}` },
   });
   if (!res.ok) return 0;
-  const body = await res.json().catch(() => ({ count: 0 }));
-  return body.count ?? 0;
+  const j = await res.json().catch(() => ({ count: 0 }));
+  return j.count ?? 0;
 }
 
-export async function markVoicemailListened(token: string, id: number, listened = true): Promise<void> {
+export async function markVoicemailListened(token: string, id: number, listened: boolean): Promise<void> {
   await fetch(`${API_URL}/voicemails/${id}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-    body: JSON.stringify({ listened }),
+    body: JSON.stringify({ listenedAt: listened ? new Date().toISOString() : null }),
   });
 }
 
@@ -169,17 +177,6 @@ export async function deleteVoicemail(token: string, id: number): Promise<void> 
     headers: { Authorization: `Bearer ${token}` },
   });
 }
-
-export async function stopRecording(token: string, telnyxCallId: string): Promise<RecordingResult> {
-  const res = await fetch(`${API_URL}/calls/${encodeURIComponent(telnyxCallId)}/recording/stop`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${token}` },
-  });
-  const body = await res.json().catch(() => ({}));
-  if (!res.ok) return { ok: false, error: body.error ?? `HTTP ${res.status}`, hint: body.hint };
-  return { ok: true };
-}
-
 
 // ---------- Phase 5.3: Messages ----------
 export interface MessageRecord {
@@ -253,7 +250,6 @@ export async function uploadMedia(token: string, file: File): Promise<{ url: str
     const r = new FileReader();
     r.onload = () => {
       const result = r.result as string;
-      // strip "data:image/jpeg;base64," prefix
       const idx = result.indexOf(',');
       resolve(idx >= 0 ? result.slice(idx + 1) : result);
     };

@@ -4,20 +4,10 @@ import { createCall, updateCall } from '../api';
 
 interface SipContextValue {
   sipState: SipState;
-  callState: CallEvent;          // primary line state
-  secondaryState: CallEvent | null;   // held / secondary line, when active
-  incoming: CallEvent | null;    // current ringing inbound, if any
-  conference: boolean;
+  callState: CallEvent;
+  incoming: CallEvent | null;
   call: (number: string) => void;
-  /** Place a SECOND call while the first is active; holds the first. */
-  addCall: (number: string) => void;
-  /** Swap which line is active. Held becomes active and vice-versa. */
-  swap: () => void;
-  /** Merge two lines via backend Telnyx conference. */
-  mergeLines: () => Promise<{ ok: boolean; reason?: string }>;
   hangup: () => void;
-  /** Hang up just the held line (leaves the active line up). */
-  hangupSecondary: () => void;
   acceptCall: () => void;
   declineCall: () => void;
   toggleMute: () => boolean;
@@ -40,37 +30,24 @@ interface CallLogState {
 export function SipProvider({ children }: { children: React.ReactNode }) {
   const [sipState, setSipState] = useState<SipState>('disconnected');
   const [callState, setCallState] = useState<CallEvent>({ state: 'idle' });
-  const [secondaryState, setSecondaryState] = useState<CallEvent | null>(null);
   const [incoming, setIncoming] = useState<CallEvent | null>(null);
-  const [conference, setConference] = useState(false);
   const logRef = useRef<Map<string, CallLogState>>(new Map());
   const rejectedRef = useRef<Set<string>>(new Set());
   const currentIncomingRef = useRef<string | null>(null);
 
   useEffect(() => {
-    // Credentials resolve in this order:
-    //   1. localStorage (set from the Settings page, survives across runs)
-    //   2. Vite env vars (build-time, for production deploys)
-    const lsUser = localStorage.getItem('ace_sip_username') || undefined;
-    const lsPass = localStorage.getItem('ace_sip_password') || undefined;
-    const lsFrom = localStorage.getItem('ace_sip_from_number') || undefined;
-
-    const username = lsUser ?? (import.meta.env.VITE_SIP_USERNAME as string | undefined);
-    const password = lsPass ?? (import.meta.env.VITE_SIP_PASSWORD as string | undefined);
-    const callerNumber = lsFrom ?? (import.meta.env.VITE_SIP_FROM_NUMBER as string | undefined);
+    const username = import.meta.env.VITE_SIP_USERNAME as string | undefined;
+    const password = import.meta.env.VITE_SIP_PASSWORD as string | undefined;
+    const callerNumber = import.meta.env.VITE_SIP_FROM_NUMBER as string | undefined;
 
     if (!username || !password) {
-      console.warn('[sip] no SIP credentials (env or localStorage) — calls disabled. Open Settings → Telnyx to add them.');
+      console.warn('[sip] missing VITE_SIP_USERNAME or VITE_SIP_PASSWORD — calls disabled');
       setSipState('failed');
       return;
     }
 
     sipService.connect({ username, password, callerNumber });
 
-    // ----- Electron floating-ringer bridge -----
-    // The ringer popup (managed by the Electron main process) emits accept /
-    // decline events here. We respond just as if the user clicked the in-app
-    // Accept/Decline buttons.
     const offAccept = window.ace?.onAcceptRequest?.(() => {
       sipService.acceptCall();
     });
@@ -84,11 +61,9 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
 
     const offState = sipService.on<SipState>('state', (s) => setSipState(s));
     const offCall = sipService.on<CallEvent>('call', (e) => {
-      // Inbound ringing -> show ring UI; don't overwrite callState yet.
       if (e.state === 'incoming') {
         setIncoming(e);
         currentIncomingRef.current = e.callId ?? null;
-        // Tell Electron main to pop the floating ringer.
         if (window.ace?.onIncomingCall) {
           try {
             window.ace.onIncomingCall(e.fromNumber ?? e.number, e.callId);
@@ -97,28 +72,7 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
           }
         }
       } else {
-        // Route by line. Default to primary if the event doesn't tag a line
-        // (handled by older code paths and the single-call flow).
-        if (e.line === 'secondary') {
-          if (e.state === 'ended') {
-            setSecondaryState(null);
-          } else {
-            setSecondaryState(e);
-          }
-        } else {
-          setCallState(e);
-          // When primary ends and the SDK has promoted secondary→primary, the
-          // next emit will carry the secondary call's id but with line='primary'.
-          // Clearing secondaryState here keeps the UI in sync.
-          if (e.state === 'ended') {
-            setSecondaryState((prev) => (prev ? null : prev));
-            setConference(false);
-          }
-        }
-        // ALWAYS clear the incoming banner the moment we receive a non-incoming
-        // event for the same call (or any 'ended' event). Use the functional
-        // setter form so we read the LATEST incoming value, not a stale one
-        // captured by this listener's closure.
+        setCallState(e);
         setIncoming((prev) => {
           if (!prev) return prev;
           if (prev.callId === e.callId) {
@@ -154,26 +108,11 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
   const value: SipContextValue = {
     sipState,
     callState,
-    secondaryState,
     incoming,
-    conference,
     call: (number) => sipService.call(number),
-    addCall: (number) => sipService.addCall(number),
-    swap: () => sipService.swapLines(),
-    mergeLines: async () => {
-      const token = sessionStorage.getItem('ace_token') ?? '';
-      const apiBase =
-        (import.meta.env.VITE_API_URL as string | undefined) ||
-        'https://ace-dialer-api.onrender.com';
-      const result = await sipService.mergeLines(token, apiBase);
-      if (result.ok) setConference(true);
-      return result;
-    },
     hangup: () => sipService.hangup(),
-    hangupSecondary: () => sipService.hangupSecondary(),
     acceptCall: () => sipService.acceptCall(),
     declineCall: () => {
-      // Tag the call so logCallEvent records it as 'rejected' instead of 'missed'.
       if (incoming?.callId) rejectedRef.current.add(incoming.callId);
       sipService.declineCall();
       setIncoming(null);
@@ -194,7 +133,6 @@ export function useSip(): SipContextValue {
   return ctx;
 }
 
-// ---------- Call history logging ----------
 async function logCallEvent(
   event: CallEvent,
   log: Map<string, CallLogState>,
@@ -224,8 +162,6 @@ async function logCallEvent(
       } catch (e) {
         console.warn('[call-log] createCall failed', e);
       }
-    } else {
-      console.warn('[call-log] missing fromNumber/toNumber, skipping create', event);
     }
   }
 
