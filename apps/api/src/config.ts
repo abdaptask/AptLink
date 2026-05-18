@@ -33,4 +33,10 @@ export const config = {
   supabaseUrl: optional('SUPABASE_URL'),
   supabaseServiceKey: optional('SUPABASE_SERVICE_ROLE_KEY'),
   supabaseMediaBucket: optional('SUPABASE_MEDIA_BUCKET', 'ace-media'),
+
+  // JobDiva (Phase 5.5 — contact lookup)
+  jobDivaBaseUrl: optional('JOBDIVA_BASE_URL'),
+  jobDivaUsername: optional('JOBDIVA_USERNAME'),
+  jobDivaPassword: optional('JOBDIVA_PASSWORD'),
+  jobDivaClientId: optional('JOBDIVA_CLIENT_ID'),
 };

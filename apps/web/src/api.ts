@@ -275,3 +275,29 @@ export async function uploadMedia(token: string, file: File): Promise<{ url: str
   }
   return res.json();
 }
+
+// ---------- Phase 5.5: JobDiva contact lookup ----------
+export interface JobDivaContact {
+  name: string;
+  firstName?: string;
+  lastName?: string;
+  company?: string;
+  jobTitle?: string;
+  email?: string;
+}
+
+export async function lookupJobDivaContact(
+  token: string,
+  phone: string,
+): Promise<JobDivaContact | null> {
+  const res = await fetch(
+    `${API_URL}/jobdiva/contact?phone=${encodeURIComponent(phone)}`,
+    { headers: { Authorization: `Bearer ${token}` } },
+  );
+  if (!res.ok) return null;
+  const json = (await res.json().catch(() => null)) as
+    | { found: boolean; contact?: JobDivaContact }
+    | null;
+  if (!json?.found || !json.contact) return null;
+  return json.contact;
+}

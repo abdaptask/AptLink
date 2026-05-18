@@ -9,6 +9,7 @@ import { authRoutes } from './auth/auth.routes.js';
 import { callsRoutes } from './calls/calls.routes.js';
 import { messagesRoutes } from './messages/messages.routes.js';
 import { voicemailsRoutes } from './voicemails/voicemails.routes.js';
+import { jobDivaRoutes } from './jobdiva/jobdiva.routes.js';
 
 const SERVICE_NAME = 'ace-dialer-api';
 const START_TIME = new Date().toISOString();
@@ -64,27 +65,6 @@ await app.register(authRoutes);
 await app.register(callsRoutes);
 await app.register(messagesRoutes);
 await app.register(voicemailsRoutes);
+await app.register(jobDivaRoutes);
 
-const host = '0.0.0.0';
-try {
-  await app.listen({ port: config.port, host });
-  app.log.info({ port: config.port, host }, `[${SERVICE_NAME}] listening`);
-  app.log.info(
-    {
-      telnyxApiKey: Boolean(config.telnyxApiKey),
-      telnyxMessagingProfileId: Boolean(config.telnyxMessagingProfileId),
-    },
-    '[startup] env flags',
-  );
-} catch (err) {
-  app.log.error(err);
-  process.exit(1);
-}
-
-const shutdown = async (signal: string) => {
-  app.log.info({ signal }, `[${SERVICE_NAME}] shutting down`);
-  await app.close();
-  process.exit(0);
-};
-process.on('SIGTERM', () => shutdown('SIGTERM'));
-process.on('SIGINT', () => shutdown('SIGINT'));
+const host = '0.0.0.

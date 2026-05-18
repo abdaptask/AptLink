@@ -7,6 +7,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { Phone, PhoneOff } from 'lucide-react';
 import { useSip } from '../contexts/SipContext';
 import { ringtone } from '../services/ringtone';
+import { useJobDivaContact } from '../hooks/useJobDivaContact';
 
 function formatNumber(n: string | undefined): string {
   if (!n) return 'Unknown';
@@ -38,6 +39,10 @@ export default function IncomingCall() {
     return undefined;
   }, [incoming]);
 
+  // Call the hook unconditionally (rules of hooks). It's safe with undefined.
+  const callerNumber = incoming?.fromNumber ?? incoming?.number;
+  const jd = useJobDivaContact(callerNumber);
+
   if (!incoming) return null;
 
   // Electron: always go full-screen. Web: full-screen on idle, banner elsewhere.
@@ -49,7 +54,7 @@ export default function IncomingCall() {
     location.pathname === '/' ||
     location.pathname === '/login';
 
-  const callerLabel = formatNumber(incoming.fromNumber ?? incoming.number);
+  const callerLabel = jd?.name ?? formatNumber(callerNumber);
 
   return fullScreen ? (
     <div className="incoming-fullscreen">

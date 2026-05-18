@@ -10,6 +10,7 @@ import {
   type VoicemailRecord,
 } from '../api';
 import { useSip } from '../contexts/SipContext';
+import { useJobDivaContact } from '../hooks/useJobDivaContact';
 
 function formatDuration(seconds: number): string {
   if (!seconds) return '';
@@ -122,67 +123,73 @@ export default function Voicemail() {
       )}
 
       <ul className="vm-list">
-        {items.map((vm) => {
-          const unread = !vm.listenedAt;
-          const isExpanded = expandedId === vm.id;
-          return (
-            <li
-              key={vm.id}
-              className={`vm-row${unread ? ' unread' : ''}${isExpanded ? ' expanded' : ''}`}
-            >
-              <div className="vm-row-main" onClick={() => handleExpand(vm)}>
-                <div className="vm-left">
-                  {unread && <span className="vm-dot" aria-label="Unread" />}
-                  <div className="vm-text">
-                    <div className="vm-number">{formatNumber(vm.fromNumber)}</div>
-                    <div className="vm-meta">
-                      {formatTime(vm.receivedAt)}
-                      {vm.durationSeconds > 0 && ` · ${formatDuration(vm.durationSeconds)}`}
-                    </div>
-                  </div>
-                </div>
-                <div className="vm-right">
-                  <button
-                    type="button"
-                    className="vm-action"
-                    aria-label="Play"
-                    onClick={(e) => { e.stopPropagation(); handleExpand(vm); }}
-                  >
-                    <Play size={16} />
-                  </button>
-                  <button
-                    type="button"
-                    className="vm-action callback"
-                    aria-label="Call back"
-                    onClick={(e) => { e.stopPropagation(); handleCallBack(vm); }}
-                  >
-                    <Phone size={16} />
-                  </button>
-                  <button
-                    type="button"
-                    className="vm-action delete"
-                    aria-label="Delete"
-                    onClick={(e) => { e.stopPropagation(); handleDelete(vm); }}
-                  >
-                    <Trash2 size={16} />
-                  </button>
-                </div>
-              </div>
-              {isExpanded && (
-                <div className="vm-body">
-                  <audio controls src={vm.recordingUrl} preload="none" style={{ width: '100%' }} />
-                  {vm.transcription && (
-                    <p className="vm-transcript">
-                      <span className="vm-transcript-tag">Transcript</span>
-                      {vm.transcription}
-                    </p>
-                  )}
-                </div>
-              )}
-            </li>
-          );
-        })}
+        {items.map((vm) => (
+          <VoicemailRow
+            key={vm.id}
+            vm={vm}
+            expanded={expandedId === vm.id}
+            onExpand={() => handleExpand(vm)}
+            onCallBack={() => handleCallBack(vm)}
+            onDelete={() => handleDelete(vm)}
+          />
+        ))}
       </ul>
     </div>
+  );
+}
+
+function VoicemailRow({
+  vm,
+  expanded,
+  onExpand,
+  onCallBack,
+  onDelete,
+}: {
+  vm: VoicemailRecord;
+  expanded: boolean;
+  onExpand: () => void;
+  onCallBack: () => void;
+  onDelete: () => void;
+}) {
+  const jd = useJobDivaContact(vm.fromNumber);
+  const label = jd?.name ?? formatNumber(vm.fromNumber);
+  const unread = !vm.listenedAt;
+  return (
+    <li className={`vm-row${unread ? ' unread' : ''}${expanded ? ' expanded' : ''}`}>
+      <div className="vm-row-main" onClick={onExpand}>
+        <div className="vm-left">
+          {unread && <span className="vm-dot" aria-label="Unread" />}
+          <div className="vm-text">
+            <div className="vm-number">{label}</div>
+            <div className="vm-meta">
+              {formatTime(vm.receivedAt)}
+              {vm.durationSeconds > 0 && ` · ${formatDuration(vm.durationSeconds)}`}
+            </div>
+          </div>
+        </div>
+        <div className="vm-right">
+          <button type="button" className="vm-action" aria-label="Play" onClick={(e) => { e.stopPropagation(); onExpand(); }}>
+            <Play size={16} />
+          </button>
+          <button type="button" className="vm-action callback" aria-label="Call back" onClick={(e) => { e.stopPropagation(); onCallBack(); }}>
+            <Phone size={16} />
+          </button>
+          <button type="button" className="vm-action delete" aria-label="Delete" onClick={(e) => { e.stopPropagation(); onDelete(); }}>
+            <Trash2 size={16} />
+          </button>
+        </div>
+      </div>
+      {expanded && (
+        <div className="vm-body">
+          <audio controls src={vm.recordingUrl} preload="none" style={{ width: '100%' }} />
+          {vm.transcription && (
+            <p className="vm-transcript">
+              <span className="vm-transcript-tag">Transcript</span>
+              {vm.transcription}
+            </p>
+          )}
+        </div>
+      )}
+    </li>
   );
 }

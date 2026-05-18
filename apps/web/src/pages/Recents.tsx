@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { PhoneIncoming, PhoneOutgoing, PhoneMissed, Phone, RefreshCcw, Play } from 'lucide-react';
 import { getCalls, type CallRecord } from '../api';
 import { useSip } from '../contexts/SipContext';
+import { useJobDivaContact } from '../hooks/useJobDivaContact';
 
 function formatDuration(seconds: number): string {
   if (!seconds) return '';
@@ -124,55 +125,74 @@ export default function Recents() {
       )}
 
       <ul className="call-list">
-        {calls.map((c) => {
-          const number = c.direction === 'inbound' ? c.fromNumber : c.toNumber;
-          const missed = isMissed(c);
-          const isExpanded = expandedId === c.id;
-          return (
-            <li
-              key={c.id}
-              className={`call-row${missed ? ' missed' : ''}${isExpanded ? ' expanded' : ''}`}
-            >
-              <div className="call-row-main" onClick={() => handleCallBack(c)}>
-                <div className="call-left">
-                  {callIcon(c)}
-                  <div className="call-text">
-                    <div className="call-number">{formatNumber(number)}</div>
-                    <div className="call-meta">
-                      {statusLabel(c)}
-                      {c.durationSeconds > 0 && ` · ${formatDuration(c.durationSeconds)}`}
-                      {c.recordingUrl && ' · Recorded'}
-                    </div>
-                  </div>
-                </div>
-                <div className="call-right">
-                  {c.recordingUrl && (
-                    <button
-                      type="button"
-                      className="callback-ico recording-toggle"
-                      aria-label={isExpanded ? 'Hide recording' : 'Play recording'}
-                      title={isExpanded ? 'Hide recording' : 'Play recording'}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setExpandedId(isExpanded ? null : c.id);
-                      }}
-                    >
-                      <Play size={16} />
-                    </button>
-                  )}
-                  <span className="call-time">{formatTime(c.startedAt)}</span>
-                  <Phone size={18} className="callback-ico" />
-                </div>
-              </div>
-              {isExpanded && c.recordingUrl && (
-                <div className="call-recording">
-                  <audio controls src={c.recordingUrl} preload="none" style={{ width: '100%' }} />
-                </div>
-              )}
-            </li>
-          );
-        })}
+        {calls.map((c) => (
+          <RecentRow
+            key={c.id}
+            c={c}
+            expanded={expandedId === c.id}
+            onCallBack={() => handleCallBack(c)}
+            onToggleRecording={() => setExpandedId(expandedId === c.id ? null : c.id)}
+          />
+        ))}
       </ul>
     </div>
+  );
+}
+
+function RecentRow({
+  c,
+  expanded,
+  onCallBack,
+  onToggleRecording,
+}: {
+  c: CallRecord;
+  expanded: boolean;
+  onCallBack: () => void;
+  onToggleRecording: () => void;
+}) {
+  const number = c.direction === 'inbound' ? c.fromNumber : c.toNumber;
+  const missed = isMissed(c);
+  const jd = useJobDivaContact(number);
+  const displayName = jd?.name ?? formatNumber(number);
+  return (
+    <li className={`call-row${missed ? ' missed' : ''}${expanded ? ' expanded' : ''}`}>
+      <div className="call-row-main" onClick={onCallBack}>
+        <div className="call-left">
+          {callIcon(c)}
+          <div className="call-text">
+            <div className="call-number">{displayName}</div>
+            <div className="call-meta">
+              {statusLabel(c)}
+              {jd?.company ? ` · ${jd.company}` : ''}
+              {c.durationSeconds > 0 && ` · ${formatDuration(c.durationSeconds)}`}
+              {c.recordingUrl && ' · Recorded'}
+            </div>
+          </div>
+        </div>
+        <div className="call-right">
+          {c.recordingUrl && (
+            <button
+              type="button"
+              className="callback-ico recording-toggle"
+              aria-label={expanded ? 'Hide recording' : 'Play recording'}
+              title={expanded ? 'Hide recording' : 'Play recording'}
+              onClick={(e) => {
+                e.stopPropagation();
+                onToggleRecording();
+              }}
+            >
+              <Play size={16} />
+            </button>
+          )}
+          <span className="call-time">{formatTime(c.startedAt)}</span>
+          <Phone size={18} className="callback-ico" />
+        </div>
+      </div>
+      {expanded && c.recordingUrl && (
+        <div className="call-recording">
+          <audio controls src={c.recordingUrl} preload="none" style={{ width: '100%' }} />
+        </div>
+      )}
+    </li>
   );
 }

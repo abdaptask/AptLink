@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 import { useSip } from '../contexts/SipContext';
 import { ringtone } from '../services/ringtone';
+import { useJobDivaContact } from '../hooks/useJobDivaContact';
 
 function formatDuration(seconds: number): string {
   const m = Math.floor(seconds / 60);
@@ -102,12 +103,12 @@ export default function InCall() {
     }
   };
 
-  const callerLabel =
-    formatNumber(
-      callState.direction === 'inbound'
-        ? callState.fromNumber ?? callState.number
-        : callState.toNumber ?? callState.number,
-    ) || 'Calling…';
+  const otherNumber =
+    callState.direction === 'inbound'
+      ? callState.fromNumber ?? callState.number
+      : callState.toNumber ?? callState.number;
+  const jd = useJobDivaContact(otherNumber);
+  const callerLabel = jd?.name ?? formatNumber(otherNumber) || 'Calling…';
 
   const subtitle =
     callState.state === 'calling' ? 'Calling…' :

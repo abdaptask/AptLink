@@ -11,6 +11,7 @@ import {
   type ThreadSummary,
   type MessageRecord,
 } from '../api';
+import { useJobDivaContact } from '../hooks/useJobDivaContact';
 
 function formatNumber(raw: string): string {
   const d = (raw || '').replace(/[^\d+]/g, '');
@@ -110,20 +111,11 @@ export default function Messages() {
 
           <ul className="thread-list">
             {threads.map((t) => (
-              <li
+              <ThreadRow
                 key={t.id}
-                className="thread-row"
-                onClick={() => setActive(otherParty(t))}
-              >
-                <div className="thread-text">
-                  <div className="thread-name">{formatNumber(otherParty(t))}</div>
-                  <div className="thread-preview">
-                    {t.direction === 'outbound' ? 'You: ' : ''}
-                    {t.body || (t.mediaUrls?.length ? '📎 attachment' : '')}
-                  </div>
-                </div>
-                <div className="thread-time">{formatRelative(t.createdAt)}</div>
-              </li>
+                thread={t}
+                onOpen={() => setActive(otherParty(t))}
+              />
             ))}
           </ul>
         </div>
@@ -179,6 +171,7 @@ interface ThreadDetailProps {
 }
 
 function ThreadDetail({ number, onBack }: ThreadDetailProps) {
+  const jd = useJobDivaContact(number);
   const [messages, setMessages] = useState<MessageRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -263,7 +256,7 @@ function ThreadDetail({ number, onBack }: ThreadDetailProps) {
         <button className="icon-btn" onClick={onBack} aria-label="Back">
           <ArrowLeft size={18} />
         </button>
-        <div className="thread-header-name">{formatNumber(number)}</div>
+        <div className="thread-header-name">{jd?.name ?? formatNumber(number)}</div>
         <div style={{ width: 28 }} />
       </div>
 
@@ -342,5 +335,28 @@ function ThreadDetail({ number, onBack }: ThreadDetailProps) {
         </button>
       </div>
     </div>
+  );
+}
+
+function ThreadRow({
+  thread,
+  onOpen,
+}: {
+  thread: ThreadSummary;
+  onOpen: () => void;
+}) {
+  const jd = useJobDivaContact(thread.threadKey);
+  const label = jd?.name ?? formatNumber(thread.threadKey);
+  return (
+    <li className="thread-row" onClick={onOpen}>
+      <div className="thread-text">
+        <div className="thread-name">{label}</div>
+        <div className="thread-preview">
+          {thread.direction === 'outbound' ? 'You: ' : ''}
+          {thread.body || (thread.mediaUrls?.length ? '\u{1F4CE} attachment' : '')}
+        </div>
+      </div>
+      <div className="thread-time">{formatRelative(thread.createdAt)}</div>
+    </li>
   );
 }
