@@ -168,18 +168,31 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
     const token = sessionStorage.getItem('ace_token');
     if (!token) return;
 
+    // Hints for the API's fuzzy fallback — the SDK's call.id often doesn't
+    // match Telnyx's call_session_id (which is what the webhook stores under),
+    // so we also pass destination + direction so the server can find the
+    // recent matching row.
+    const hints: { to?: string; direction?: 'inbound' | 'outbound' } = {};
+    if (callState.direction === 'outbound') {
+      hints.direction = 'outbound';
+      hints.to = callState.toNumber ?? callState.number;
+    } else if (callState.direction === 'inbound') {
+      hints.direction = 'inbound';
+      hints.to = callState.fromNumber ?? callState.number;
+    }
+
     let attempts = 0;
     const maxAttempts = 15;
     const tryFetch = async () => {
       attempts += 1;
-      const row = await lookupCall(token, telnyxCallId);
+      const row = await lookupCall(token, telnyxCallId, hints);
       if (row?.callControlId) {
         setActiveCallControlId(row.callControlId);
         if (ccPollRef.current) {
           window.clearInterval(ccPollRef.current);
           ccPollRef.current = null;
         }
-        console.log('[sip] resolved callControlId', row.callControlId);
+        console.log('[sip] resolved callControlId', row.callControlId, '(via', row.telnyxCallId === telnyxCallId ? 'exact' : 'fuzzy', 'match)');
       } else if (attempts >= maxAttempts) {
         if (ccPollRef.current) {
           window.clearInterval(ccPollRef.current);

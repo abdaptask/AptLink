@@ -161,10 +161,19 @@ export interface CallLookup {
   toNumber: string;
   status: string;
 }
-export async function lookupCall(token: string, telnyxCallId: string): Promise<CallLookup | null> {
-  const res = await fetch(`${API_URL}/calls/by-telnyx/${encodeURIComponent(telnyxCallId)}`, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
+export async function lookupCall(
+  token: string,
+  telnyxCallId: string,
+  hints?: { to?: string; direction?: 'inbound' | 'outbound' },
+): Promise<CallLookup | null> {
+  const params = new URLSearchParams();
+  if (hints?.to) params.set('to', hints.to);
+  if (hints?.direction) params.set('direction', hints.direction);
+  const qs = params.toString();
+  const url =
+    `${API_URL}/calls/by-telnyx/${encodeURIComponent(telnyxCallId)}` +
+    (qs ? `?${qs}` : '');
+  const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
   if (res.status === 404) return null;
   if (!res.ok) return null;
   return (await res.json()) as CallLookup;

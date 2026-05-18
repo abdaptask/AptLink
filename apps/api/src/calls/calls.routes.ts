@@ -290,26 +290,71 @@ export async function callsRoutes(app: FastifyInstance) {
 
   // ---------- Phase 5.4 (rebuild): Lookup callControlId for a leg ----------
   // The frontend polls this after a call connects so it can hand the ID to
-  // /transfer, /add-leg, /conference, and /recording endpoints. Returns 404
-  // if the webhook hasn't fired yet — the client should retry.
+  // /transfer, /add-leg, /conference, and /recording endpoints.
+  //
+  // Two-stage lookup because the Telnyx WebRTC SDK assigns its own call.id
+  // (an InviteID-style UUID) on the client, while Telnyx's webhook fires
+  // events keyed by `call_session_id` — a DIFFERENT UUID. Those don't match,
+  // so an exact lookup on the SDK's id usually returns nothing.
+  //
+  //   Stage 1: exact match on telnyxCallId (works if SDK id == session id).
+  //   Stage 2: fuzzy fallback — most recent row for this user where toNumber
+  //            matches, callControlId is present, and startedAt is within
+  //            the last 60s. This is what catches the SDK/webhook mismatch.
   app.get('/calls/by-telnyx/:telnyxCallId', { onRequest: [app.authenticate] }, async (request, reply) => {
     const user = request.user as JwtPayload;
     const { telnyxCallId } = request.params as { telnyxCallId: string };
-    const call = await prisma.call.findFirst({
+    const query = request.query as { to?: string; direction?: string };
+    const SELECT = {
+      id: true,
+      telnyxCallId: true,
+      callControlId: true,
+      sessionId: true,
+      direction: true,
+      fromNumber: true,
+      toNumber: true,
+      status: true,
+    } as const;
+
+    // Stage 1: exact ID match.
+    const exact = await prisma.call.findFirst({
       where: { telnyxCallId, userId: user.sub },
-      select: {
-        id: true,
-        telnyxCallId: true,
-        callControlId: true,
-        sessionId: true,
-        direction: true,
-        fromNumber: true,
-        toNumber: true,
-        status: true,
-      },
+      select: SELECT,
     });
-    if (!call) return reply.code(404).send({ error: 'Call not found' });
-    return call;
+    if (exact?.callControlId) return exact;
+
+    // Stage 2: fuzzy fallback by destination + recency. Only applies when
+    // the caller hands us a `to` query param so we know what to match on.
+    if (query.to) {
+      // Normalize phone numbers to digits-only for comparison so e.g.
+      // "+19737270611" matches "19737270611".
+      const wantDigits = query.to.replace(/[^\d]/g, '');
+      const since = new Date(Date.now() - 60_000);
+      const recents = await prisma.call.findMany({
+        where: {
+          userId: user.sub,
+          callControlId: { not: null },
+          startedAt: { gte: since },
+          ...(query.direction ? { direction: query.direction } : {}),
+        },
+        orderBy: { startedAt: 'desc' },
+        take: 10,
+        select: SELECT,
+      });
+      const match = recents.find((r) => {
+        const haveDigits = (r.toNumber ?? '').replace(/[^\d]/g, '');
+        return haveDigits.endsWith(wantDigits) || wantDigits.endsWith(haveDigits);
+      });
+      if (match) {
+        app.log.info(
+          { sdkCallId: telnyxCallId, matched: match.telnyxCallId, callControlId: match.callControlId },
+          '[lookup] fuzzy match on destination + recency',
+        );
+        return match;
+      }
+    }
+
+    return exact ?? reply.code(404).send({ error: 'Call not found' });
   });
 
   // ---------- Phase 5.4 (rebuild): Transfer via Call Control ----------

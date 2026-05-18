@@ -50,6 +50,7 @@ app.get('/', async () => ({
   features: {
     telnyxApiKey: Boolean(config.telnyxApiKey),
     telnyxMessagingProfileId: Boolean(config.telnyxMessagingProfileId),
+    telnyxCcConnectionId: Boolean(config.telnyxCcConnectionId),
   },
 }));
 
