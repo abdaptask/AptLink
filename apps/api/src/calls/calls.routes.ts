@@ -322,17 +322,23 @@ export async function callsRoutes(app: FastifyInstance) {
       select: { fromNumber: true },
     });
 
-    const result = await transfer(callControlId, {
-      to: body.to,
-      from: callRow?.fromNumber || config.pilotFromNumber,
-    });
+    const from = callRow?.fromNumber || config.pilotFromNumber;
+    app.log.info({ callControlId, to: body.to, from }, '[transfer] dispatching');
+    const result = await transfer(callControlId, { to: body.to, from });
     if (!result.ok) {
-      app.log.warn({ status: result.status, error: result.error }, '[transfer] telnyx rejected');
+      // Telnyx error envelope is usually { errors: [{ code, title, detail, ... }] }
+      // Surface the first error's detail to the UI so the user sees the real cause.
+      const errObj = result.error as { errors?: Array<{ code?: string; title?: string; detail?: string; meta?: unknown }> } | undefined;
+      const firstErr = errObj?.errors?.[0];
+      const userMessage = firstErr
+        ? `${firstErr.title ?? 'Transfer failed'}: ${firstErr.detail ?? ''} (code ${firstErr.code ?? '?'})`
+        : `Telnyx returned HTTP ${result.status}`;
+      app.log.warn({ status: result.status, error: result.error, callControlId, to: body.to }, '[transfer] telnyx rejected');
       return reply.code(502).send({
         error: 'telnyx_transfer_failed',
         status: result.status,
         details: result.error,
-        hint: typeof result.error === 'object' ? undefined : 'See server logs.',
+        hint: userMessage,
       });
     }
     app.log.info({ callControlId, to: body.to }, '[transfer] dispatched');
