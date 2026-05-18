@@ -108,7 +108,7 @@ export default function InCall() {
       ? callState.fromNumber ?? callState.number
       : callState.toNumber ?? callState.number;
   const jd = useJobDivaContact(otherNumber);
-  const callerLabel = jd?.name ?? formatNumber(otherNumber) || 'Calling…';
+  const callerLabel = jd?.name ?? (formatNumber(otherNumber) || 'Calling…');
 
   const subtitle =
     callState.state === 'calling' ? 'Calling…' :
