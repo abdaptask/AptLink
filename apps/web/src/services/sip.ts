@@ -49,6 +49,7 @@ export class SipService {
   private incomingCall: any = null;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private secondCall: any = null; // Phase 5.4 — second simultaneous call (held)
+  private heldLocal: boolean = false; // Locally tracked hold state (the SDK's .held is unreliable)
   private callerNumber: string = '';
   private audioEl: HTMLAudioElement;
   private listeners: Map<string, Set<Listener>> = new Map();
@@ -194,6 +195,8 @@ export class SipService {
             this.incomingCall = null;
           }
           if (this.currentCall && this.currentCall.id === call.id) {
+            // Active call ended — reset hold state.
+            this.heldLocal = false;
             // If a held second call exists, promote it to active.
             if (this.secondCall) {
               try {
@@ -331,33 +334,63 @@ export class SipService {
   toggleHold(): boolean {
     if (!this.currentCall) return false;
     try {
-      if (this.currentCall.held) {
-        if (typeof this.currentCall.unhold === 'function') this.currentCall.unhold();
+      if (this.heldLocal) {
+        if (typeof this.currentCall.unhold === 'function') {
+          this.currentCall.unhold();
+        } else if (typeof this.currentCall.toggleHold === 'function') {
+          this.currentCall.toggleHold();
+        }
+        this.heldLocal = false;
         return false;
+      } else {
+        if (typeof this.currentCall.hold === 'function') {
+          this.currentCall.hold();
+        } else if (typeof this.currentCall.toggleHold === 'function') {
+          this.currentCall.toggleHold();
+        }
+        this.heldLocal = true;
+        return true;
       }
-      if (typeof this.currentCall.hold === 'function') this.currentCall.hold();
-      return true;
     } catch (e) {
       console.warn('[sip] hold/unhold failed', e);
-      return Boolean(this.currentCall.held);
+      return this.heldLocal;
     }
   }
 
   isOnHold(): boolean {
-    return Boolean(this.currentCall?.held);
+    return this.heldLocal;
   }
 
   transfer(rawDestination: string): boolean {
-    if (!this.currentCall) return false;
-    if (typeof this.currentCall.transfer !== 'function') return false;
-    try {
-      const e164 = toE164(rawDestination);
-      this.currentCall.transfer(e164);
-      return true;
-    } catch (e) {
-      console.warn('[sip] transfer failed', e);
+    if (!this.currentCall) {
+      console.warn('[sip] transfer: no active call');
       return false;
     }
+    const e164 = toE164(rawDestination);
+    // Try the SDK's transfer methods in order of preference.
+    // Different @telnyx/webrtc versions expose this differently.
+    const c = this.currentCall;
+    const candidates: Array<[string, () => unknown]> = [
+      ['transfer', () => c.transfer?.(e164)],
+      ['blindTransfer', () => c.blindTransfer?.(e164)],
+      ['deflect', () => c.deflect?.(e164)],
+    ];
+    for (const [name, fn] of candidates) {
+      try {
+        if (typeof (c as Record<string, unknown>)[name] === 'function') {
+          console.log('[sip] transfer via', name, '→', e164);
+          fn();
+          return true;
+        }
+      } catch (e) {
+        console.warn(`[sip] ${name} threw`, e);
+      }
+    }
+    console.warn(
+      '[sip] no transfer method on call object. Available:',
+      Object.keys(c).filter((k) => typeof (c as Record<string, unknown>)[k] === 'function'),
+    );
+    return false;
   }
 
   toggleMute(): boolean {
@@ -386,6 +419,7 @@ export class SipService {
     this.currentCall = null;
     this.incomingCall = null;
     this.secondCall = null;
+    this.heldLocal = false;
   }
 }
 
