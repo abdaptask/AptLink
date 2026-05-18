@@ -46,14 +46,20 @@ export default function Dialpad() {
   const backspace = useCallback(() => setNumber((n) => n.slice(0, -1)), []);
   const clear = useCallback(() => setNumber(''), []);
 
-  const handleCall = useCallback(() => {
+  const handleCall = useCallback(async () => {
     if (!number) return;
     if (sipState !== 'registered') {
       alert(`Can't call yet — SIP state: ${sipState}. Wait for "Registered" badge above keypad.`);
       return;
     }
     if (isAddCall) {
-      addCall(number);
+      // Server-originated Leg B via Telnyx Call Control. Auto-bridges to
+      // Leg A on answer so the user hears the new party.
+      const res = await addCall(number);
+      if (!res.ok) {
+        alert(`Add Call failed: ${res.hint ?? res.error ?? 'unknown error'}`);
+        return;
+      }
     } else {
       call(number);
     }

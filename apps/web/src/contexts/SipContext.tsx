@@ -1,11 +1,28 @@
 import { createContext, useContext, useEffect, useRef, useState } from 'react';
 import { sipService, type SipState, type CallEvent } from '../services/sip';
-import { createCall, updateCall, mergeCalls as apiMergeCalls } from '../api';
+import {
+  createCall,
+  updateCall,
+  mergeCalls as apiMergeCalls,
+  lookupCall,
+  transferCallApi,
+  addLegApi,
+} from '../api';
+
+export interface ServerActionResult {
+  ok: boolean;
+  error?: string;
+  hint?: string;
+}
 
 interface SipContextValue {
   sipState: SipState;
   callState: CallEvent;
   incoming: CallEvent | null;
+  /** call_control_id for the active leg, populated by the webhook after connect. */
+  activeCallControlId: string | null;
+  /** call_control_id for the held second leg (server-originated via /add-leg). */
+  secondCallControlId: string | null;
   call: (number: string) => void;
   hangup: () => void;
   acceptCall: () => void;
@@ -13,12 +30,13 @@ interface SipContextValue {
   toggleMute: () => boolean;
   toggleHold: () => boolean;
   isOnHold: () => boolean;
-  transferCall: (destination: string) => boolean;
+  /** Server-side transfer via Telnyx Call Control. */
+  transferCall: (destination: string) => Promise<ServerActionResult>;
   sendDTMF: (digit: string) => void;
-  // Phase 5.4 — conference / merge
+  // Phase 5.4 — conference / merge (server-side via Call Control)
   hasSecondCall: boolean;
   secondCallNumber: string | null;
-  addCall: (number: string) => void;
+  addCall: (number: string) => Promise<ServerActionResult>;
   swapCalls: () => void;
   mergeCalls: () => Promise<boolean>;
   // Audio device selection
@@ -42,9 +60,12 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
   const [incoming, setIncoming] = useState<CallEvent | null>(null);
   const [hasSecondCall, setHasSecondCall] = useState(false);
   const [secondCallNumber, setSecondCallNumber] = useState<string | null>(null);
+  const [activeCallControlId, setActiveCallControlId] = useState<string | null>(null);
+  const [secondCallControlId, setSecondCallControlId] = useState<string | null>(null);
   const logRef = useRef<Map<string, CallLogState>>(new Map());
   const rejectedRef = useRef<Set<string>>(new Set());
   const currentIncomingRef = useRef<string | null>(null);
+  const ccPollRef = useRef<number | null>(null);
 
   useEffect(() => {
     const username = import.meta.env.VITE_SIP_USERNAME as string | undefined;
@@ -125,10 +146,58 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // After the call connects, poll the API for the Telnyx call_control_id
+  // (populated by the call.initiated/answered webhook). Up to ~15s of retries
+  // at 1s intervals. The id is required for Transfer / Add Call / Merge.
+  useEffect(() => {
+    if (ccPollRef.current) {
+      window.clearInterval(ccPollRef.current);
+      ccPollRef.current = null;
+    }
+    setActiveCallControlId(null);
+
+    if (callState.state !== 'connected') return;
+    const telnyxCallId = callState.callId;
+    if (!telnyxCallId) return;
+    const token = sessionStorage.getItem('ace_token');
+    if (!token) return;
+
+    let attempts = 0;
+    const maxAttempts = 15;
+    const tryFetch = async () => {
+      attempts += 1;
+      const row = await lookupCall(token, telnyxCallId);
+      if (row?.callControlId) {
+        setActiveCallControlId(row.callControlId);
+        if (ccPollRef.current) {
+          window.clearInterval(ccPollRef.current);
+          ccPollRef.current = null;
+        }
+        console.log('[sip] resolved callControlId', row.callControlId);
+      } else if (attempts >= maxAttempts) {
+        if (ccPollRef.current) {
+          window.clearInterval(ccPollRef.current);
+          ccPollRef.current = null;
+        }
+        console.warn('[sip] callControlId never arrived — webhook not firing? Verify SIP Connection is linked to a Call Control App.');
+      }
+    };
+    void tryFetch();
+    ccPollRef.current = window.setInterval(() => { void tryFetch(); }, 1000);
+    return () => {
+      if (ccPollRef.current) {
+        window.clearInterval(ccPollRef.current);
+        ccPollRef.current = null;
+      }
+    };
+  }, [callState.state, callState.callId]);
+
   const value: SipContextValue = {
     sipState,
     callState,
     incoming,
+    activeCallControlId,
+    secondCallControlId,
     call: (number) => sipService.call(number),
     hangup: () => sipService.hangup(),
     acceptCall: () => sipService.acceptCall(),
@@ -140,35 +209,66 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
     toggleMute: () => sipService.toggleMute(),
     toggleHold: () => sipService.toggleHold(),
     isOnHold: () => sipService.isOnHold(),
-    transferCall: (destination) => sipService.transfer(destination),
+    // Phase 5.4 (rebuild): Transfer goes through the API → Telnyx Call Control.
+    // Returns immediately with ok/error so the UI can toast it.
+    transferCall: async (destination) => {
+      const token = sessionStorage.getItem('ace_token');
+      const telnyxCallId = callState.callId;
+      if (!token || !telnyxCallId) {
+        return { ok: false, error: 'no_active_call' };
+      }
+      const res = await transferCallApi(token, telnyxCallId, destination);
+      return res;
+    },
     sendDTMF: (digit) => sipService.sendDTMF(digit),
     hasSecondCall,
     secondCallNumber,
-    addCall: (number) => {
-      // Remember the prior active call's destination so the held strip can display it.
-      const priorTo = callState.toNumber ?? callState.fromNumber ?? callState.number ?? null;
-      setSecondCallNumber(priorTo);
-      setHasSecondCall(true);
-      sipService.addCall(number);
+    // Phase 5.4 (rebuild): Add Call originates Leg B via Telnyx Call Control
+    // (not the SDK). Server auto-bridges to Leg A on answer so the user hears
+    // the new party immediately. The held-line strip + Merge button become
+    // informational since the bridge happens automatically.
+    addCall: async (number) => {
+      const token = sessionStorage.getItem('ace_token');
+      const legATelnyxCallId = callState.callId;
+      if (!token || !legATelnyxCallId) {
+        return { ok: false, error: 'no_active_call' };
+      }
+      if (!activeCallControlId) {
+        return {
+          ok: false,
+          error: 'no_call_control_id',
+          hint: 'Waiting for Telnyx to register this leg — try again in a couple seconds.',
+        };
+      }
+      const res = await addLegApi(token, legATelnyxCallId, number);
+      if (res.ok && res.legB) {
+        setSecondCallNumber(res.legB.toNumber);
+        setSecondCallControlId(res.legB.callControlId);
+        setHasSecondCall(true);
+      }
+      return { ok: res.ok, error: res.error, hint: res.hint };
     },
     swapCalls: () => {
-      sipService.swapCalls();
-      // After swap, the held number is now the current callState.toNumber.
-      const priorTo = callState.toNumber ?? callState.fromNumber ?? callState.number ?? null;
-      setSecondCallNumber(priorTo);
+      // No-op for now in the server-mediated flow — both legs are bridged into
+      // the user's single WebRTC stream once Add Call's auto-bridge fires.
+      // Kept on the interface so the InCall UI doesn't have to special-case.
     },
     listAudioOutputs: () => sipService.listAudioOutputs(),
     setAudioOutput: (deviceId) => sipService.setAudioOutput(deviceId),
     mergeCalls: async () => {
+      // In the new flow Add Call auto-bridges on answer, so by the time the
+      // user can tap Merge they're already bridged. We still attempt an
+      // explicit bridge_call as a belt-and-suspenders — if Telnyx returns
+      // 409 ("already bridged") we treat it as success.
       const token = sessionStorage.getItem('ace_token');
-      const legA = sipService.getActiveCallId();
-      const legB = sipService.getHeldCallId();
+      const legA = callState.callId;
+      const legB = secondCallControlId; // server-side leg uses its own id
       if (!token || !legA || !legB) return false;
       try {
         await apiMergeCalls(token, legA, legB);
-        // Once merged, both legs are bridged. Clear the second-call state.
         setHasSecondCall(false);
         setSecondCallNumber(null);
+        setSecondCallControlId(null);
         return true;
       } catch (e) {
         console.warn('[merge] failed', e);

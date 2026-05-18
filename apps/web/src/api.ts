@@ -147,6 +147,64 @@ export async function mergeCalls(token: string, legA: string, legB: string): Pro
   }
 }
 
+// Phase 5.4 (rebuild): look up the Call Control ID for a leg by its
+// telnyxCallId. Returns null if the webhook hasn't populated it yet — caller
+// should retry. Used to gate Transfer / Add Call / Merge in the UI until the
+// id is available.
+export interface CallLookup {
+  id: number;
+  telnyxCallId: string;
+  callControlId: string | null;
+  sessionId: string | null;
+  direction: string;
+  fromNumber: string;
+  toNumber: string;
+  status: string;
+}
+export async function lookupCall(token: string, telnyxCallId: string): Promise<CallLookup | null> {
+  const res = await fetch(`${API_URL}/calls/by-telnyx/${encodeURIComponent(telnyxCallId)}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (res.status === 404) return null;
+  if (!res.ok) return null;
+  return (await res.json()) as CallLookup;
+}
+
+// Phase 5.4 (rebuild): server-side transfer via Call Control.
+export interface TransferResult { ok: boolean; error?: string; hint?: string }
+export async function transferCallApi(token: string, telnyxCallId: string, to: string): Promise<TransferResult> {
+  const res = await fetch(`${API_URL}/calls/${encodeURIComponent(telnyxCallId)}/transfer`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ to }),
+  });
+  const body = await res.json().catch(() => ({}));
+  return { ok: res.ok, ...(body as object) };
+}
+
+// Phase 5.4 (rebuild): server-originated Add Call. Telnyx dials Leg B and
+// auto-bridges to Leg A when answered (via client_state). The user (still on
+// Leg A's WebRTC stream) hears Leg B once they pick up.
+export interface AddLegResult {
+  ok: boolean;
+  legB?: { telnyxCallId: string; callControlId: string; toNumber: string };
+  error?: string;
+  hint?: string;
+}
+export async function addLegApi(
+  token: string,
+  legATelnyxCallId: string,
+  destination: string,
+): Promise<AddLegResult> {
+  const res = await fetch(`${API_URL}/calls/add-leg`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ legATelnyxCallId, destination, autoBridge: true }),
+  });
+  const body = await res.json().catch(() => ({}));
+  return { ok: res.ok, ...(body as object) };
+}
+
 // ---------- Phase 5.6: Voicemail ----------
 export interface VoicemailRecord {
   id: number;

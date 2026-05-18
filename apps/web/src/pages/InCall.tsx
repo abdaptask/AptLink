@@ -121,16 +121,16 @@ export default function InCall() {
     showToast('Audio output updated');
   };
 
-  const handleTransfer = () => {
+  const handleTransfer = async () => {
     const t = transferTarget.trim();
     if (!t) return;
-    const ok = transferCall(t);
-    if (ok) {
-      showToast(`Transferring to ${t}…`);
+    showToast(`Transferring to ${t}…`);
+    const res = await transferCall(t);
+    if (res.ok) {
       setShowTransfer(false);
       setTransferTarget('');
     } else {
-      showToast('Transfer failed');
+      showToast(res.hint ?? res.error ?? 'Transfer failed');
     }
   };
 

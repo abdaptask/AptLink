@@ -27,6 +27,10 @@ export const config = {
   // Telnyx server-side API
   telnyxApiKey: optional('TELNYX_API_KEY'),
   telnyxMessagingProfileId: optional('TELNYX_MESSAGING_PROFILE_ID'),
+  // Call Control Application "connection_id" — needed to originate calls via
+  // POST /v2/calls. Look this up in the Telnyx portal under Voice → Programmable
+  // Voice → Call Control Apps → <your app> → API ID.
+  telnyxCcConnectionId: optional('TELNYX_CC_CONNECTION_ID'),
   pilotFromNumber: optional('PILOT_TELNYX_NUMBER', '+17322001305'),
 
   // Supabase Storage (for MMS uploads)

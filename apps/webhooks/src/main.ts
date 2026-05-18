@@ -6,6 +6,44 @@ import { prisma } from '@ace/db';
 
 const SERVICE_NAME = 'ace-dialer-webhooks';
 const START_TIME = new Date().toISOString();
+const TELNYX_API_KEY = process.env.TELNYX_API_KEY ?? '';
+
+// Decode the client_state Telnyx echoes back on every call event. We use it
+// to carry "what to do when this leg answers" instructions (e.g. auto-bridge
+// to leg A for an Add Call / Merge flow).
+interface ClientState {
+  bridgeTo?: string;        // call_control_id of the leg to auto-bridge with
+  autoBridge?: boolean;     // default true if bridgeTo present
+  originatorUserId?: number;
+}
+function decodeClientState(s: string | undefined | null): ClientState | null {
+  if (!s) return null;
+  try {
+    return JSON.parse(Buffer.from(s, 'base64').toString('utf8')) as ClientState;
+  } catch {
+    return null;
+  }
+}
+
+// Bridge two Telnyx legs together via the Voice API. Called from the webhook
+// when leg B (server-originated via Call Control) answers and carries a
+// client_state telling us to bridge with leg A.
+async function bridgeLegs(legA: string, legB: string): Promise<{ ok: boolean; status?: number; error?: unknown }> {
+  if (!TELNYX_API_KEY) return { ok: false, error: 'TELNYX_API_KEY not set on webhooks service' };
+  const res = await fetch(
+    `https://api.telnyx.com/v2/calls/${encodeURIComponent(legA)}/actions/bridge`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${TELNYX_API_KEY}`,
+      },
+      body: JSON.stringify({ call_control_id: legB }),
+    },
+  );
+  const body = await res.json().catch(() => ({}));
+  return { ok: res.ok, status: res.status, ...(res.ok ? {} : { error: body }) };
+}
 
 // Phase 5: pilot has one user. Hardcoded until multi-user support lands.
 const PILOT_USER_ID = 1;
@@ -106,6 +144,23 @@ app.post('/webhooks/telnyx/calls', async (request) => {
             ...(callControlId ? { callControlId } : {}),
           },
         });
+
+        // Phase 5.4 (rebuild): server-originated Leg B carries a client_state
+        // telling us to auto-bridge with Leg A as soon as it answers.
+        // This is what makes "Add Call" actually merge — the user (still on
+        // Leg A's WebRTC stream) starts hearing Leg B the moment they answer.
+        if (event.event_type === 'call.answered' && callControlId) {
+          const state = decodeClientState(payload.client_state);
+          if (state?.bridgeTo && state.autoBridge !== false) {
+            app.log.info({ legA: state.bridgeTo, legB: callControlId }, '[webhook] auto-bridging on answer');
+            const result = await bridgeLegs(state.bridgeTo, callControlId);
+            if (!result.ok) {
+              app.log.error({ result }, '[webhook] auto-bridge failed');
+            } else {
+              app.log.info({ legA: state.bridgeTo, legB: callControlId }, '[webhook] auto-bridge success');
+            }
+          }
+        }
         break;
       }
 
