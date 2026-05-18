@@ -115,28 +115,15 @@ export async function callsRoutes(app: FastifyInstance) {
   // call's Call Control ID and POST to Telnyx's recording action. Telnyx
   // fires `call.recording.saved` to our webhook with the recording URL,
   // which the webhook handler writes onto the call row.
-  app.post('/calls/:telnyxCallId/recording/start', { onRequest: [app.authenticate] }, async (request, reply) => {
-    const user = request.user as JwtPayload;
-    const { telnyxCallId } = request.params as { telnyxCallId: string };
+  // Record start/stop — URL param is the CC ID (not SDK's call.id).
+  app.post('/calls/:callControlId/recording/start', { onRequest: [app.authenticate] }, async (_request, reply) => {
+    const { callControlId } = _request.params as { callControlId: string };
     if (!config.telnyxApiKey) {
-      return reply.code(501).send({
-        error: 'TELNYX_API_KEY not set on the API server',
-      });
-    }
-    const call = await prisma.call.findFirst({
-      where: { telnyxCallId, userId: user.sub },
-      select: { id: true, callControlId: true },
-    });
-    if (!call) return reply.code(404).send({ error: 'Call not found' });
-    if (!call.callControlId) {
-      return reply.code(409).send({
-        error: 'No callControlId yet — webhook hasn’t fired',
-        hint: 'Ensure Call Control is enabled on the SIP connection.',
-      });
+      return reply.code(501).send({ error: 'TELNYX_API_KEY not set on the API server' });
     }
     try {
       const res = await fetch(
-        `https://api.telnyx.com/v2/calls/${encodeURIComponent(call.callControlId)}/actions/record_start`,
+        `https://api.telnyx.com/v2/calls/${encodeURIComponent(callControlId)}/actions/record_start`,
         {
           method: 'POST',
           headers: {
@@ -159,25 +146,14 @@ export async function callsRoutes(app: FastifyInstance) {
     }
   });
 
-  app.post('/calls/:telnyxCallId/recording/stop', { onRequest: [app.authenticate] }, async (request, reply) => {
-    const user = request.user as JwtPayload;
-    const { telnyxCallId } = request.params as { telnyxCallId: string };
+  app.post('/calls/:callControlId/recording/stop', { onRequest: [app.authenticate] }, async (_request, reply) => {
+    const { callControlId } = _request.params as { callControlId: string };
     if (!config.telnyxApiKey) {
-      return reply.code(501).send({
-        error: 'TELNYX_API_KEY not set on the API server',
-      });
-    }
-    const call = await prisma.call.findFirst({
-      where: { telnyxCallId, userId: user.sub },
-      select: { id: true, callControlId: true },
-    });
-    if (!call) return reply.code(404).send({ error: 'Call not found' });
-    if (!call.callControlId) {
-      return reply.code(409).send({ error: 'No callControlId for this call' });
+      return reply.code(501).send({ error: 'TELNYX_API_KEY not set on the API server' });
     }
     try {
       const res = await fetch(
-        `https://api.telnyx.com/v2/calls/${encodeURIComponent(call.callControlId)}/actions/record_stop`,
+        `https://api.telnyx.com/v2/calls/${encodeURIComponent(callControlId)}/actions/record_stop`,
         {
           method: 'POST',
           headers: {
@@ -211,61 +187,28 @@ export async function callsRoutes(app: FastifyInstance) {
   //     connection → API V2 / Call Control).
   //   - Webhook URL registered against that connection so call_control_id
   //     reaches our database.
+  // Conference / Merge — body carries Call Control IDs directly (not SDK ids).
   app.post('/calls/conference', { onRequest: [app.authenticate] }, async (request, reply) => {
-    const user = request.user as JwtPayload;
     const body = (request.body as { legA?: string; legB?: string }) ?? {};
     if (!body.legA || !body.legB) {
-      return reply.code(400).send({ error: 'legA and legB are required' });
+      return reply.code(400).send({ error: 'legA and legB are required (callControlIds)' });
     }
-
     if (!config.telnyxApiKey) {
       return reply.code(501).send({
         error: 'TELNYX_API_KEY not set on the API server',
         hint: 'Set TELNYX_API_KEY in the Render dashboard for ace-dialer-api, then redeploy.',
       });
     }
-
-    // Find both legs in our DB. We try matching on telnyxCallId (the WebRTC
-    // session id the client knows) first; webhook handler also writes
-    // callControlId onto these rows once Telnyx emits it.
-    const [legA, legB] = await Promise.all([
-      prisma.call.findFirst({
-        where: { telnyxCallId: body.legA, userId: user.sub },
-        select: { id: true, callControlId: true, telnyxCallId: true },
-      }),
-      prisma.call.findFirst({
-        where: { telnyxCallId: body.legB, userId: user.sub },
-        select: { id: true, callControlId: true, telnyxCallId: true },
-      }),
-    ]);
-
-    if (!legA?.callControlId || !legB?.callControlId) {
-      return reply.code(409).send({
-        error: 'Call Control IDs not yet available for both legs',
-        hint:
-          'Enable Call Control on your Telnyx SIP connection and register the webhook URL so call_control_id is captured. The IDs are populated by the webhook on call.initiated/.answered.',
-        debug: {
-          legA: { telnyxCallId: legA?.telnyxCallId, hasCallControlId: !!legA?.callControlId },
-          legB: { telnyxCallId: legB?.telnyxCallId, hasCallControlId: !!legB?.callControlId },
-        },
-      });
-    }
-
-    // Telnyx Voice API: bridge two existing call legs together.
-    //   POST /v2/calls/{call_control_id}/actions/bridge_call
-    //   body: { call_control_id: <other leg's CC id> }
-    // After this both parties (and us, since both legs originate from us)
-    // share audio — effectively a 3-way conference.
     try {
       const res = await fetch(
-        `https://api.telnyx.com/v2/calls/${encodeURIComponent(legA.callControlId)}/actions/bridge_call`,
+        `https://api.telnyx.com/v2/calls/${encodeURIComponent(body.legA)}/actions/bridge`,
         {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
             Authorization: `Bearer ${config.telnyxApiKey}`,
           },
-          body: JSON.stringify({ call_control_id: legB.callControlId }),
+          body: JSON.stringify({ call_control_id: body.legB }),
         },
       );
       const responseBody = await res.json().catch(() => ({}));
@@ -277,7 +220,7 @@ export async function callsRoutes(app: FastifyInstance) {
           details: responseBody,
         });
       }
-      app.log.info({ legA: legA.callControlId, legB: legB.callControlId }, '[calls] conference bridged');
+      app.log.info({ legA: body.legA, legB: body.legB }, '[calls] conference bridged');
       return { ok: true, telnyx: responseBody };
     } catch (e) {
       app.log.error({ err: e }, '[calls] bridge request error');
@@ -360,32 +303,28 @@ export async function callsRoutes(app: FastifyInstance) {
   // ---------- Phase 5.4 (rebuild): Transfer via Call Control ----------
   // The Telnyx WebRTC SDK doesn't expose a .transfer() method on the call
   // object, so transfer has to happen server-side using the leg's
-  // call_control_id (captured by our webhook on call.initiated).
-  app.post('/calls/:telnyxCallId/transfer', { onRequest: [app.authenticate] }, async (request, reply) => {
+  // call_control_id. The URL param is the CC ID (NOT the SDK's call.id) —
+  // the frontend resolves it via /calls/by-telnyx/:id and passes it here.
+  app.post('/calls/:callControlId/transfer', { onRequest: [app.authenticate] }, async (request, reply) => {
     const user = request.user as JwtPayload;
-    const { telnyxCallId } = request.params as { telnyxCallId: string };
+    const { callControlId } = request.params as { callControlId: string };
     const body = (request.body as { to?: string }) ?? {};
     if (!body.to) return reply.code(400).send({ error: 'to is required' });
-
     if (!config.telnyxApiKey) {
       return reply.code(501).send({ error: 'TELNYX_API_KEY not set' });
     }
 
+    // Best-effort lookup of the originating "from" number. If we don't have
+    // a row (shouldn't happen — webhook creates one — but be safe), fall
+    // back to the pilot DID.
     const callRow = await prisma.call.findFirst({
-      where: { telnyxCallId, userId: user.sub },
-      select: { callControlId: true, fromNumber: true },
+      where: { callControlId, userId: user.sub },
+      select: { fromNumber: true },
     });
-    if (!callRow) return reply.code(404).send({ error: 'Call not found' });
-    if (!callRow.callControlId) {
-      return reply.code(409).send({
-        error: 'No callControlId yet — webhook hasn’t fired',
-        hint: 'Link your Telnyx SIP Connection to a Call Control Application so call.initiated webhooks populate this.',
-      });
-    }
 
-    const result = await transfer(callRow.callControlId, {
+    const result = await transfer(callControlId, {
       to: body.to,
-      from: callRow.fromNumber || config.pilotFromNumber,
+      from: callRow?.fromNumber || config.pilotFromNumber,
     });
     if (!result.ok) {
       app.log.warn({ status: result.status, error: result.error }, '[transfer] telnyx rejected');
@@ -393,9 +332,10 @@ export async function callsRoutes(app: FastifyInstance) {
         error: 'telnyx_transfer_failed',
         status: result.status,
         details: result.error,
+        hint: typeof result.error === 'object' ? undefined : 'See server logs.',
       });
     }
-    app.log.info({ legId: callRow.callControlId, to: body.to }, '[transfer] dispatched');
+    app.log.info({ callControlId, to: body.to }, '[transfer] dispatched');
     return { ok: true };
   });
 
@@ -408,9 +348,9 @@ export async function callsRoutes(app: FastifyInstance) {
   // plus the user on leg A. Effectively a 3-way conference.
   app.post('/calls/add-leg', { onRequest: [app.authenticate] }, async (request, reply) => {
     const user = request.user as JwtPayload;
-    const body = (request.body as { legATelnyxCallId?: string; destination?: string; autoBridge?: boolean }) ?? {};
-    if (!body.legATelnyxCallId || !body.destination) {
-      return reply.code(400).send({ error: 'legATelnyxCallId and destination are required' });
+    const body = (request.body as { legAControlId?: string; destination?: string; autoBridge?: boolean }) ?? {};
+    if (!body.legAControlId || !body.destination) {
+      return reply.code(400).send({ error: 'legAControlId and destination are required' });
     }
 
     if (!config.telnyxApiKey) {
@@ -420,17 +360,6 @@ export async function callsRoutes(app: FastifyInstance) {
       return reply.code(501).send({
         error: 'TELNYX_CC_CONNECTION_ID not set',
         hint: 'Set TELNYX_CC_CONNECTION_ID to your Call Control Application connection ID in the Telnyx portal.',
-      });
-    }
-
-    const legA = await prisma.call.findFirst({
-      where: { telnyxCallId: body.legATelnyxCallId, userId: user.sub },
-      select: { callControlId: true },
-    });
-    if (!legA?.callControlId) {
-      return reply.code(409).send({
-        error: 'Leg A has no callControlId yet',
-        hint: 'Wait for the webhook to populate it, or verify Call Control is enabled on the SIP connection.',
       });
     }
 
@@ -446,7 +375,7 @@ export async function callsRoutes(app: FastifyInstance) {
             : `+${cleaned}`;
 
     const clientState = encodeClientState({
-      bridgeTo: legA.callControlId,
+      bridgeTo: body.legAControlId,
       autoBridge: body.autoBridge !== false, // default true
       originatorUserId: user.sub,
     });
@@ -497,7 +426,7 @@ export async function callsRoutes(app: FastifyInstance) {
     });
 
     app.log.info(
-      { legA: legA.callControlId, legB: legBControlId, to: e164 },
+      { legA: body.legAControlId, legB: legBControlId, to: e164 },
       '[add-leg] originated leg B via call control',
     );
 

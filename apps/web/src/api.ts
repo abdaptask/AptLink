@@ -116,8 +116,10 @@ export interface RecordingActionResult {
   hint?: string;
 }
 
-export async function startRecording(token: string, telnyxCallId: string): Promise<RecordingActionResult> {
-  const res = await fetch(`${API_URL}/calls/${encodeURIComponent(telnyxCallId)}/recording/start`, {
+// All these now take the leg's Telnyx callControlId (NOT the SDK's call.id).
+// SipContext resolves the CC id via lookupCall() and passes it here.
+export async function startRecording(token: string, callControlId: string): Promise<RecordingActionResult> {
+  const res = await fetch(`${API_URL}/calls/${encodeURIComponent(callControlId)}/recording/start`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${token}` },
   });
@@ -125,8 +127,8 @@ export async function startRecording(token: string, telnyxCallId: string): Promi
   return { ok: res.ok, ...(body as object) };
 }
 
-export async function stopRecording(token: string, telnyxCallId: string): Promise<RecordingActionResult> {
-  const res = await fetch(`${API_URL}/calls/${encodeURIComponent(telnyxCallId)}/recording/stop`, {
+export async function stopRecording(token: string, callControlId: string): Promise<RecordingActionResult> {
+  const res = await fetch(`${API_URL}/calls/${encodeURIComponent(callControlId)}/recording/stop`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${token}` },
   });
@@ -134,12 +136,12 @@ export async function stopRecording(token: string, telnyxCallId: string): Promis
   return { ok: res.ok, ...(body as object) };
 }
 
-// Phase 5.4: bridge two legs into a 3-way conference.
-export async function mergeCalls(token: string, legA: string, legB: string): Promise<void> {
+// Phase 5.4: bridge two legs into a 3-way conference. Both args are CC ids.
+export async function mergeCalls(token: string, legAControlId: string, legBControlId: string): Promise<void> {
   const res = await fetch(`${API_URL}/calls/conference`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-    body: JSON.stringify({ legA, legB }),
+    body: JSON.stringify({ legA: legAControlId, legB: legBControlId }),
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: 'merge failed' }));
@@ -179,10 +181,11 @@ export async function lookupCall(
   return (await res.json()) as CallLookup;
 }
 
-// Phase 5.4 (rebuild): server-side transfer via Call Control.
+// Phase 5.4 (rebuild): server-side transfer via Call Control. Takes the
+// leg's Telnyx callControlId (not the SDK's call.id).
 export interface TransferResult { ok: boolean; error?: string; hint?: string }
-export async function transferCallApi(token: string, telnyxCallId: string, to: string): Promise<TransferResult> {
-  const res = await fetch(`${API_URL}/calls/${encodeURIComponent(telnyxCallId)}/transfer`, {
+export async function transferCallApi(token: string, callControlId: string, to: string): Promise<TransferResult> {
+  const res = await fetch(`${API_URL}/calls/${encodeURIComponent(callControlId)}/transfer`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
     body: JSON.stringify({ to }),
@@ -202,13 +205,13 @@ export interface AddLegResult {
 }
 export async function addLegApi(
   token: string,
-  legATelnyxCallId: string,
+  legAControlId: string,
   destination: string,
 ): Promise<AddLegResult> {
   const res = await fetch(`${API_URL}/calls/add-leg`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-    body: JSON.stringify({ legATelnyxCallId, destination, autoBridge: true }),
+    body: JSON.stringify({ legAControlId, destination, autoBridge: true }),
   });
   const body = await res.json().catch(() => ({}));
   return { ok: res.ok, ...(body as object) };

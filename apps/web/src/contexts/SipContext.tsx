@@ -232,10 +232,7 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
     // Waits up to 10s for the leg's callControlId to arrive if needed.
     transferCall: async (destination) => {
       const token = sessionStorage.getItem('ace_token');
-      const telnyxCallId = callStateRef.current.callId;
-      if (!token || !telnyxCallId) {
-        return { ok: false, error: 'no_active_call' };
-      }
+      if (!token) return { ok: false, error: 'not_authenticated' };
       if (!activeCallControlIdRef.current) {
         const start = Date.now();
         while (!activeCallControlIdRef.current && Date.now() - start < 10_000) {
@@ -246,11 +243,11 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
             ok: false,
             error: 'no_call_control_id',
             hint:
-              'Telnyx hasn’t registered this call leg. Link your SIP Connection to a Call Control App in the Telnyx portal (see docs/telnyx-call-control-setup.md step 2).',
+              'Telnyx hasn’t registered this call leg yet. Check Render webhook logs.',
           };
         }
       }
-      const res = await transferCallApi(token, telnyxCallId, destination);
+      const res = await transferCallApi(token, activeCallControlIdRef.current, destination);
       return res;
     },
     sendDTMF: (digit) => sipService.sendDTMF(digit),
@@ -267,10 +264,7 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
     // webhook race themselves.
     addCall: async (number) => {
       const token = sessionStorage.getItem('ace_token');
-      const legATelnyxCallId = callStateRef.current.callId;
-      if (!token || !legATelnyxCallId) {
-        return { ok: false, error: 'no_active_call' };
-      }
+      if (!token) return { ok: false, error: 'not_authenticated' };
 
       // Wait for callControlId up to 15s if it hasn't arrived yet.
       if (!activeCallControlIdRef.current) {
@@ -284,12 +278,12 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
             ok: false,
             error: 'no_call_control_id',
             hint:
-              'Telnyx hasn’t registered this call leg. The SIP Connection probably isn’t linked to a Call Control App in the Telnyx portal yet — see docs/telnyx-call-control-setup.md (step 2).',
+              'Telnyx hasn’t registered this call leg yet. Check Render webhook logs.',
           };
         }
       }
 
-      const res = await addLegApi(token, legATelnyxCallId, number);
+      const res = await addLegApi(token, activeCallControlIdRef.current, number);
       if (res.ok && res.legB) {
         setSecondCallNumber(res.legB.toNumber);
         setSecondCallControlId(res.legB.callControlId);
@@ -307,11 +301,11 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
     mergeCalls: async () => {
       // In the new flow Add Call auto-bridges on answer, so by the time the
       // user can tap Merge they're already bridged. We still attempt an
-      // explicit bridge_call as a belt-and-suspenders — if Telnyx returns
+      // explicit bridge as a belt-and-suspenders — if Telnyx returns
       // 409 ("already bridged") we treat it as success.
       const token = sessionStorage.getItem('ace_token');
-      const legA = callState.callId;
-      const legB = secondCallControlId; // server-side leg uses its own id
+      const legA = activeCallControlIdRef.current;
+      const legB = secondCallControlId;
       if (!token || !legA || !legB) return false;
       try {
         await apiMergeCalls(token, legA, legB);
