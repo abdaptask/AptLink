@@ -30,8 +30,6 @@ function createWindow() {
   const devUrl = process.env.VITE_DEV_SERVER_URL;
   if (devUrl) {
     mainWindow.loadURL(devUrl);
-    // Only auto-open DevTools when explicitly requested. Otherwise the user
-    // can toggle via Ctrl+Shift+I or View menu.
     if (process.env.ACE_DEVTOOLS === '1') {
       mainWindow.webContents.openDevTools({ mode: 'detach' });
     }
@@ -55,11 +53,7 @@ function createWindow() {
 }
 
 // ---------- Floating ringer window ----------
-// Small always-on-top popup with Accept / Decline buttons. Loads inline HTML
-// via a data: URL; the preload script still attaches, so the HTML can call
-// window.ace.acceptCall() / declineCall() exactly like the main window.
 function createRingerWindow(callerNumber?: string): void {
-  // If one already exists, just surface it.
   if (ringerWindow && !ringerWindow.isDestroyed()) {
     try {
       ringerWindow.show();
@@ -98,7 +92,6 @@ function createRingerWindow(callerNumber?: string): void {
       sandbox: false,
     },
   });
-  // Pin above full-screen windows too (presentations, video calls, etc.).
   try { ringerWindow.setAlwaysOnTop(true, 'screen-saver'); } catch { /* noop */ }
 
   const html = `<!doctype html>
@@ -110,11 +103,10 @@ function createRingerWindow(callerNumber?: string): void {
     Roboto, sans-serif; user-select: none; -webkit-app-region: drag; }
   .wrap { padding: 20px 24px; display: flex; flex-direction: column;
     justify-content: space-between; height: 100%; box-sizing: border-box; }
-  .tag { font-size: 11px; opacity: .7; letter-spacing: .08em;
+  .tag { font-size: 12px; opacity: .7; letter-spacing: .08em;
     text-transform: uppercase; }
   .caller { font-size: 28px; font-weight: 700; margin-top: 6px;
     word-break: break-all; }
-  .tag { font-size: 12px; }
   .row { display: flex; justify-content: space-around; gap: 16px;
     margin-top: 14px; -webkit-app-region: no-drag; }
   button { width: 72px; height: 72px; border-radius: 50%; border: none;
@@ -144,16 +136,12 @@ function createRingerWindow(callerNumber?: string): void {
   </div>
   <script>
     (function () {
-      var p = new URLSearchParams(window.location.search);
-      var from = p.get('from') || 'Unknown';
-      document.getElementById('caller').textContent = from;
       document.getElementById('accept').addEventListener('click', function () {
         if (window.ace) window.ace.acceptCall();
       });
       document.getElementById('decline').addEventListener('click', function () {
         if (window.ace) window.ace.declineCall();
       });
-      // Listen for close-ringer signal from main
       if (window.ace && window.ace.onClose) {
         window.ace.onClose(function () { window.close(); });
       }
@@ -173,14 +161,10 @@ function createRingerWindow(callerNumber?: string): void {
     return n;
   }
 
-  // Load the inline HTML via a base64 data URL (avoids issues with special
-  // characters in encodeURIComponent for large blobs).
   ringerWindow.loadURL(
     'data:text/html;charset=utf-8;base64,' + Buffer.from(html).toString('base64'),
   );
 
-  // After the page loads, inject the caller number into the DOM (data: URLs
-  // can't carry query params reliably across Electron versions).
   ringerWindow.webContents.once('did-finish-load', () => {
     const safe = formatNumber(callerNumber).replace(/'/g, "\\'");
     ringerWindow?.webContents
@@ -212,8 +196,6 @@ ipcMain.on('ace:incoming-call', (_event, payload: { number?: string; callId?: st
   const win = mainWindow;
   if (!win) return;
 
-  // Aggressively surface the main window: restore from minimized, show if
-  // hidden, focus, briefly always-on-top, and flash the taskbar (Windows).
   try {
     if (win.isMinimized()) win.restore();
     if (!win.isVisible()) win.show();
@@ -227,17 +209,12 @@ ipcMain.on('ace:incoming-call', (_event, payload: { number?: string; callId?: st
     console.error('[main] surface failed', e);
   }
 
-  // Always also show the small floating ringer in the corner so the user can
-  // accept without leaving whatever app they were focused on.
   createRingerWindow(payload?.number);
 });
 
-// Accept/decline come from the ringer window. Forward to main window's renderer
-// which calls sipService.acceptCall() / declineCall() via SipContext.
 ipcMain.on('ace:accept', () => {
   try {
     mainWindow?.webContents.send('ace:accept-request');
-    // On accept, also surface the main window so the user can use in-call UI.
     if (mainWindow) {
       if (mainWindow.isMinimized()) mainWindow.restore();
       mainWindow.show();
@@ -258,7 +235,6 @@ ipcMain.on('ace:decline', () => {
   closeRingerWindow();
 });
 
-// Main window tells us the call ended (e.g. remote hangup before user reacted).
 ipcMain.on('ace:call-ended', () => {
   closeRingerWindow();
   try {
