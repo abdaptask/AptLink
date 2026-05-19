@@ -479,8 +479,10 @@ body {
 }
 /* Row below the keypad. Same 3-column grid as `.keypad` so the contacts
    button sits directly under `*`, the green dial button under `0`, and
-   the backspace under `#`. */
-.call-row {
+   the backspace under `#`. NOTE: must NOT use `.call-row` — that class is
+   shared with the Recents page, which uses `display: flex; flex-direction: column`
+   and would clobber our 3-column grid. */
+.dialpad-actions {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   gap: 0;

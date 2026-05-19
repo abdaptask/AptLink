@@ -433,7 +433,7 @@ export default function Dialpad() {
         ))}
       </div>
 
-      <div className="call-row">
+      <div className="dialpad-actions">
         <button
           type="button"
           className="contacts-btn"
