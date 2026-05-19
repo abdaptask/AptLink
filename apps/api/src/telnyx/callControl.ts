@@ -148,6 +148,27 @@ export function recordStop(legControlId: string): Promise<TelnyxResult> {
   });
 }
 
+// List all legs of a given call session.
+// Telnyx's GET /v2/calls supports filter[call_session_id] which returns every
+// leg sharing that session. For an SDK outbound call this is typically the
+// PSTN leg + the WebRTC client leg — we use this to discover the WC leg's
+// call_control_id at /add-leg time without needing it captured in webhooks.
+export interface TelnyxCallLeg {
+  record_type: 'call';
+  call_control_id: string;
+  call_leg_id: string;
+  call_session_id: string;
+  is_alive: boolean;
+  from?: string;
+  to?: string;
+  client_state?: string | null;
+}
+export function listLegsBySession(sessionId: string): Promise<TelnyxResult<{ data: TelnyxCallLeg[] }>> {
+  return call(`/calls?filter%5Bcall_session_id%5D=${encodeURIComponent(sessionId)}`, {
+    method: 'GET',
+  });
+}
+
 export function hangupCall(legControlId: string): Promise<TelnyxResult> {
   return call(`/calls/${encodeURIComponent(legControlId)}/actions/hangup`, {
     method: 'POST',

@@ -4,7 +4,7 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { prisma } from '@ace/db';
 import { config } from '../config.js';
-import { dial, transfer, encodeClientState, normalizeToE164, conferenceCreate, conferenceJoin } from '../telnyx/callControl.js';
+import { dial, transfer, encodeClientState, normalizeToE164, conferenceCreate, conferenceJoin, listLegsBySession } from '../telnyx/callControl.js';
 
 interface JwtPayload {
   sub: number;
@@ -397,19 +397,61 @@ export async function callsRoutes(app: FastifyInstance) {
           select: { callControlId: true, direction: true, fromNumber: true, toNumber: true },
         })
       : [];
-    const otherLeg = sessionLegs.find((l) => l.callControlId !== body.legAControlId);
+    let otherLeg = sessionLegs.find((l) => l.callControlId !== body.legAControlId);
+    let otherLegSource: 'db' | 'telnyx' | 'none' = otherLeg ? 'db' : 'none';
+
+    // Fallback: Telnyx only emits webhooks for the PSTN side of SDK calls,
+    // so our DB usually has just one row. Query Telnyx's REST API for all
+    // legs sharing this session — that's where the WebRTC client leg lives.
+    if (!otherLeg && legARow?.sessionId) {
+      const legsResult = await listLegsBySession(legARow.sessionId);
+      if (legsResult.ok && Array.isArray(legsResult.data?.data)) {
+        const allLegs = legsResult.data!.data;
+        const sibling = allLegs.find(
+          (l) => l.call_control_id !== body.legAControlId && l.is_alive,
+        );
+        if (sibling) {
+          otherLeg = {
+            callControlId: sibling.call_control_id,
+            direction: 'inbound', // best guess — the WC leg
+            fromNumber: sibling.from ?? '',
+            toNumber: sibling.to ?? '',
+          };
+          otherLegSource = 'telnyx';
+        }
+        app.log.info(
+          {
+            sessionId: legARow.sessionId,
+            legsReturned: allLegs.length,
+            legsDetail: allLegs.map((l) => ({
+              cc: l.call_control_id,
+              alive: l.is_alive,
+              from: l.from,
+              to: l.to,
+            })),
+          },
+          '[add-leg] queried Telnyx for session legs',
+        );
+      } else {
+        app.log.warn(
+          { status: legsResult.status, error: legsResult.error },
+          '[add-leg] Telnyx legs query failed',
+        );
+      }
+    }
+
     app.log.info(
       {
         legAControlId: body.legAControlId,
         legASessionId: legARow?.sessionId,
-        sessionLegsFound: sessionLegs.length,
+        sessionLegsFoundInDb: sessionLegs.length,
         sessionLegsDetail: sessionLegs.map((l) => ({
           cc: l.callControlId,
           dir: l.direction,
           from: l.fromNumber,
           to: l.toNumber,
         })),
-        otherLeg: otherLeg ? { cc: otherLeg.callControlId, dir: otherLeg.direction } : null,
+        otherLeg: otherLeg ? { cc: otherLeg.callControlId, dir: otherLeg.direction, source: otherLegSource } : null,
       },
       '[add-leg] inspected session',
     );
