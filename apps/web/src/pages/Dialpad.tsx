@@ -42,25 +42,19 @@ function flagImageUrl(iso2: string | undefined | null): string {
 }
 
 // Detect the country (and its calling code) from the current number being
-// entered. Always returns a value — defaults to US so the flag + "+1" prefix
-// are visible even when the input is empty.
+// entered. We ONLY switch off the US default when the number explicitly
+// starts with "+" — otherwise a US area code like 973 (NJ) would get
+// misread as +973 (Bahrain) and yank the flag away mid-typing.
 function detectCountry(num: string): { iso: CountryCode; callingCode: string } {
   const fallback = {
     iso: DEFAULT_COUNTRY,
     callingCode: getCountryCallingCode(DEFAULT_COUNTRY),
   };
-  if (!num || num === '+') return fallback;
+  if (!num || !num.startsWith('+')) return fallback;
   try {
-    const probe = num.startsWith('+') ? num : '+' + num.replace(/[^\d]/g, '');
-    const parsed = parsePhoneNumberFromString(probe);
+    const parsed = parsePhoneNumberFromString(num);
     if (parsed?.country) {
       return { iso: parsed.country, callingCode: getCountryCallingCode(parsed.country) };
-    }
-    const ayt = new AsYouType(DEFAULT_COUNTRY);
-    ayt.input(num);
-    const iso = ayt.getCountry();
-    if (iso) {
-      return { iso, callingCode: getCountryCallingCode(iso) };
     }
   } catch {
     /* fall through */
