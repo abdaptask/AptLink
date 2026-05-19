@@ -86,7 +86,8 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
       return;
     }
 
-    sipService.connect({ username, password, callerNumber });
+    const wssUri = import.meta.env.VITE_SIP_WSS_URI as string | undefined;
+    sipService.connect({ username, password, callerNumber, wssUri });
 
     const offAccept = window.ace?.onAcceptRequest?.(() => {
       sipService.acceptCall();

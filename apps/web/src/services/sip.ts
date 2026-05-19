@@ -135,7 +135,12 @@ export class SipService {
 
     this.callerNumber = config.callerNumber ?? '';
     this.realm = config.realm ?? 'sip.telnyx.com';
-    const wssUri = config.wssUri ?? 'wss://sip.telnyx.com:443';
+    // Telnyx SIP-over-WebSocket endpoint. Port 7443 is the conventional WSS
+    // port for SIP (Telnyx, Twilio, most carriers). Some Telnyx accounts
+    // also accept wss://rtc.telnyx.com:443. Override via config.wssUri or
+    // VITE_SIP_WSS_URI if your account uses a different region/host.
+    const wssUri = config.wssUri ?? 'wss://sip.telnyx.com:7443';
+    console.log('[sip] connecting to', wssUri, 'as', config.username);
 
     const socket = new JsSIP.WebSocketInterface(wssUri);
     const uri = `sip:${config.username}@${this.realm}`;
