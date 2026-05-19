@@ -390,58 +390,44 @@ body {
 }
 
 .number-display {
-  font-size: 2.4rem;
-  font-weight: 300;
-  text-align: center;
-  padding: 1.5rem 0 1.5rem;
-  min-height: 5rem;
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 0.4rem;
-  letter-spacing: 0.02em;
+  gap: 0.6rem;
+  padding: 1.2rem 1rem;
+  min-height: 4.5rem;
+  width: 100%;
+  max-width: 360px;
+  margin: 0 auto;
+}
+.number-display-flag-img {
+  width: 28px;
+  height: 20px;
+  object-fit: cover;
+  border-radius: 3px;
+  box-shadow: 0 0 0 0.5px rgba(255, 255, 255, 0.15);
+  flex-shrink: 0;
+}
+.number-display-input {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: none;
+  outline: none;
   color: #fff;
-  word-break: break-all;
-}
-.number-display.empty { color: rgba(255, 255, 255, 0.35); }
-.number-display-prefix {
-  color: #34c759;
-  font-weight: 500;
-  font-size: 0.85em;
-  padding: 0.15em 0.55em;
-  border-radius: 999px;
-  background: rgba(52, 199, 89, 0.15);
+  font-family: inherit;
+  font-size: 1.8rem;
+  font-weight: 300;
+  text-align: center;
   letter-spacing: 0.02em;
+  padding: 0.3rem 0;
+  caret-color: var(--accent);
 }
-.number-display-placeholder { color: rgba(255, 255, 255, 0.3); font-style: normal; }
-[data-theme="light"] .number-display-placeholder { color: rgba(60, 60, 67, 0.4); }
-[data-theme="light"] .number-display.empty { color: var(--text-muted); }
-
-/* Flag emoji shown at the start of the number display. */
-.number-display-flag {
-  font-size: 1.6rem;
-  line-height: 1;
-  display: inline-flex;
-  align-items: center;
-  margin-right: 0.1rem;
-  /* Some platforms (Windows) render flag emoji as text rather than image;
-     keep the font family so the regional-indicator characters work. */
-  font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", system-ui, sans-serif;
+.number-display-input::placeholder {
+  color: rgba(255, 255, 255, 0.3);
 }
-
-/* Blinking caret that sits between the country prefix and where digits land. */
-.number-display-cursor {
-  display: inline-block;
-  color: var(--accent);
-  font-weight: 200;
-  margin: 0 1px;
-  animation: dialpad-caret 1.06s steps(1) infinite;
-  transform: translateY(-1px);
-}
-@keyframes dialpad-caret {
-  0%, 49%   { opacity: 1; }
-  50%, 100% { opacity: 0; }
-}
+[data-theme="light"] .number-display-input { color: var(--text); }
+[data-theme="light"] .number-display-input::placeholder { color: rgba(60, 60, 67, 0.35); }
 .keypad {
   display: grid;
   grid-template-columns: repeat(3, 1fr);

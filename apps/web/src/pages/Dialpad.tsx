@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { Phone, Delete } from 'lucide-react';
 import { AsYouType, parsePhoneNumberFromString, getCountryCallingCode } from 'libphonenumber-js/min';
@@ -31,24 +31,21 @@ const ALLOWED_KEYS = new Set(['0','1','2','3','4','5','6','7','8','9','*','#','+
 const DEFAULT_PREFIX = '+1';
 const DEFAULT_COUNTRY: CountryCode = 'US';
 
-// Convert an ISO 3166-1 alpha-2 country code (e.g., "US", "IN", "GB") to its
-// flag emoji using Unicode regional indicator characters. Works in every
-// modern browser / OS that supports emoji presentation (most do).
-function flagEmoji(iso2: string | undefined | null): string {
-  if (!iso2 || iso2.length !== 2) return '🌐';
-  const upper = iso2.toUpperCase();
-  const A = 0x1f1e6 - 65;
-  return String.fromCodePoint(upper.charCodeAt(0) + A, upper.charCodeAt(1) + A);
+// SVG flag URL from flagcdn.com (free, no key needed). Works on every OS —
+// Windows doesn't render Unicode regional-indicator flags as colored emoji,
+// so we use raster/SVG images instead.
+function flagImageUrl(iso2: string | undefined | null): string {
+  const code = (iso2 ?? 'us').toLowerCase();
+  return `https://flagcdn.com/h20/${code}.png`;
 }
 
 // Detect the country (and its calling code) from the current number being
 // entered. Uses AsYouType so it works on partial input — country is
 // determined as soon as enough digits are typed to disambiguate.
-function detectCountry(num: string): { iso: CountryCode; callingCode: string; flag: string } {
+function detectCountry(num: string): { iso: CountryCode; callingCode: string } {
   const fallback = {
     iso: DEFAULT_COUNTRY,
     callingCode: getCountryCallingCode(DEFAULT_COUNTRY),
-    flag: flagEmoji(DEFAULT_COUNTRY),
   };
   if (!num) return fallback;
   try {
@@ -56,17 +53,12 @@ function detectCountry(num: string): { iso: CountryCode; callingCode: string; fl
     ayt.input(num);
     const iso = ayt.getCountry();
     if (iso) {
-      return { iso, callingCode: getCountryCallingCode(iso), flag: flagEmoji(iso) };
+      return { iso, callingCode: getCountryCallingCode(iso) };
     }
-    // AsYouType couldn't determine yet — try full parser as a second pass.
     if (num.startsWith('+')) {
       const parsed = parsePhoneNumberFromString(num);
       if (parsed?.country) {
-        return {
-          iso: parsed.country,
-          callingCode: getCountryCallingCode(parsed.country),
-          flag: flagEmoji(parsed.country),
-        };
+        return { iso: parsed.country, callingCode: getCountryCallingCode(parsed.country) };
       }
     }
   } catch {
@@ -153,6 +145,7 @@ function parsePastedNumber(raw: string): string {
 
 export default function Dialpad() {
   const [number, setNumber] = useState(DEFAULT_PREFIX);
+  const inputRef = useRef<HTMLInputElement | null>(null);
   const { sipState, callState, call, addCall } = useSip();
   const navigate = useNavigate();
   const location = useLocation();
@@ -320,30 +313,33 @@ export default function Dialpad() {
         </div>
       </div>
 
-      <div
-        className={`number-display ${number === DEFAULT_PREFIX || !number ? 'empty' : ''}`}
-        aria-live="polite"
-        role="textbox"
-      >
-        <span
-          className="number-display-flag"
+      <div className="number-display" aria-live="polite">
+        <img
+          className="number-display-flag-img"
+          src={flagImageUrl(detectCountry(number).iso)}
+          alt={detectCountry(number).iso}
           title={detectCountry(number).iso}
-          aria-label={`Country: ${detectCountry(number).iso}`}
-        >
-          {detectCountry(number).flag}
-        </span>
-        {number === DEFAULT_PREFIX || !number ? (
-          <>
-            <span className="number-display-prefix">+{detectCountry(number).callingCode}</span>
-            <span className="number-display-cursor" aria-hidden="true">|</span>
-            <span className="number-display-placeholder">(000) 000-0000</span>
-          </>
-        ) : (
-          <>
-            {formatNumber(number)}
-            <span className="number-display-cursor" aria-hidden="true">|</span>
-          </>
-        )}
+          onError={(e) => {
+            // If the flag CDN is unreachable, hide the broken image gracefully.
+            (e.currentTarget as HTMLImageElement).style.visibility = 'hidden';
+          }}
+        />
+        <input
+          ref={inputRef}
+          type="tel"
+          inputMode="tel"
+          className="number-display-input"
+          value={formatNumber(number)}
+          placeholder="(000) 000-0000"
+          spellCheck={false}
+          autoComplete="off"
+          onChange={(e) => {
+            // Store the raw chars (digits + + * #) and let the formatter
+            // re-format on next render. Keeps cursor reasonably stable.
+            const raw = e.target.value.replace(/[^\d*#+]/g, '');
+            setNumber(raw || '');
+          }}
+        />
       </div>
 
       <div className="keypad">
