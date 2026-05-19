@@ -259,66 +259,65 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
     sendDTMF: (digit) => sipService.sendDTMF(digit),
     hasSecondCall,
     secondCallNumber,
-    // Phase 5.4 (rebuild): Add Call originates Leg B via Telnyx Call Control
-    // (not the SDK). Server auto-bridges to Leg A on answer so the user hears
-    // the new party immediately. The held-line strip + Merge button become
-    // informational since the bridge happens automatically.
-    //
-    // If activeCallControlId isn't ready yet (webhook hasn't fired), we wait
-    // up to 15s for it to arrive rather than failing immediately. This lets
-    // the user tap Add Call right after a call connects without timing the
-    // webhook race themselves.
+    // Phase 6.1 — Add Call via JsSIP (multiple concurrent SIP sessions).
+    // sipService.addCall puts the active call on SIP hold (RE-INVITE with
+    // sendonly direction) and starts a brand new SIP session for the new
+    // number. From here, two independent SIP dialogs are alive locally.
     addCall: async (number) => {
-      const token = sessionStorage.getItem('ace_token');
-      if (!token) return { ok: false, error: 'not_authenticated' };
-
-      // Wait for callControlId up to 15s if it hasn't arrived yet.
-      if (!activeCallControlIdRef.current) {
-        console.log('[add-call] waiting for callControlId…');
-        const start = Date.now();
-        while (!activeCallControlIdRef.current && Date.now() - start < 15_000) {
-          await new Promise((r) => setTimeout(r, 500));
-        }
-        if (!activeCallControlIdRef.current) {
-          return {
-            ok: false,
-            error: 'no_call_control_id',
-            hint:
-              'Telnyx hasn’t registered this call leg yet. Check Render webhook logs.',
-          };
-        }
+      const current = callStateRef.current;
+      if (!current.callId || current.state !== 'connected') {
+        return { ok: false, error: 'no_active_call', hint: 'You need an active connected call before adding another.' };
       }
-
-      const res = await addLegApi(token, activeCallControlIdRef.current, number);
-      if (res.ok && res.legB) {
-        setSecondCallNumber(res.legB.toNumber);
-        setSecondCallControlId(res.legB.callControlId);
+      try {
+        // Remember the prior active call's destination so the held-strip
+        // UI can show it while the second call rings.
+        const priorOther =
+          current.direction === 'inbound'
+            ? current.fromNumber ?? current.number
+            : current.toNumber ?? current.number;
+        setSecondCallNumber(priorOther ?? null);
         setHasSecondCall(true);
+        sipService.addCall(number);
+        return { ok: true };
+      } catch (e) {
+        setHasSecondCall(false);
+        setSecondCallNumber(null);
+        return {
+          ok: false,
+          error: 'add_call_failed',
+          hint: e instanceof Error ? e.message : 'Add Call failed',
+        };
       }
-      return { ok: res.ok, error: res.error, hint: res.hint };
     },
     swapCalls: () => {
-      // No-op for now in the server-mediated flow — both legs are bridged into
-      // the user's single WebRTC stream once Add Call's auto-bridge fires.
-      // Kept on the interface so the InCall UI doesn't have to special-case.
+      // Phase 6.1 — JsSIP-level swap: holds the current call, unholds the
+      // other one. After swap, the previously-active call's number becomes
+      // the held strip's content.
+      const priorActive = callStateRef.current;
+      const priorOther =
+        priorActive.direction === 'inbound'
+          ? priorActive.fromNumber ?? priorActive.number
+          : priorActive.toNumber ?? priorActive.number;
+      sipService.swapCalls();
+      // Update held-strip to show the now-held call (formerly active).
+      setSecondCallNumber(priorOther ?? null);
     },
     listAudioOutputs: () => sipService.listAudioOutputs(),
     setAudioOutput: (deviceId) => sipService.setAudioOutput(deviceId),
     mergeCalls: async () => {
-      // In the new flow Add Call auto-bridges on answer, so by the time the
-      // user can tap Merge they're already bridged. We still attempt an
-      // explicit bridge as a belt-and-suspenders — if Telnyx returns
-      // 409 ("already bridged") we treat it as success.
-      const token = sessionStorage.getItem('ace_token');
-      const legA = activeCallControlIdRef.current;
-      const legB = secondCallControlId;
-      if (!token || !legA || !legB) return false;
+      // Phase 6.2 — true 3-way conference via Web Audio API mixing.
+      // sipService.startConference() (added below) wires mic + both calls'
+      // remote streams together so all three parties hear each other.
       try {
-        await apiMergeCalls(token, legA, legB);
-        setHasSecondCall(false);
-        setSecondCallNumber(null);
-        setSecondCallControlId(null);
-        return true;
+        const ok = sipService.startConference();
+        if (ok) {
+          // Both calls stay alive; the "held" state goes away because
+          // audio now flows in both directions for both calls.
+          setHasSecondCall(false);
+          setSecondCallNumber(null);
+          setSecondCallControlId(null);
+        }
+        return ok;
       } catch (e) {
         console.warn('[merge] failed', e);
         return false;

@@ -202,7 +202,7 @@ export default function InCall() {
               label="Merge"
               onClick={async () => {
                 const ok = await mergeCalls();
-                showToast(ok ? 'Conference started' : 'Merge failed');
+                showToast(ok ? 'Merged into conference' : 'Merge failed');
               }}
               disabled={!isConnected}
             />
@@ -210,8 +210,8 @@ export default function InCall() {
             <ControlBtn
               icon={<UserPlus size={26} />}
               label="Add Call"
-              onClick={() => showToast('3-way calling under rebuild — coming soon')}
-              disabled
+              onClick={() => navigate('/keypad', { state: { addCall: true } })}
+              disabled={!isConnected}
             />
           )}
           <ControlBtn

@@ -429,7 +429,14 @@ export class SipService {
       }
     }
 
-    if (this.calls.size === 0) this.stopQualityPolling();
+    if (this.calls.size === 0) {
+      this.stopQualityPolling();
+      this.stopConference();
+    }
+    // If we drop below 2 calls during a conference, tear it down.
+    if (this.calls.size < 2 && this.conferenceCtx) {
+      this.stopConference();
+    }
   }
 
   private buildEvent(entry: CallEntry, state: CallState): CallEvent {
@@ -642,6 +649,137 @@ export class SipService {
       console.warn('[sip] hold/unhold failed', e);
     }
     return active.heldLocal;
+  }
+
+  // ---------- 3-way conference (client-side Web Audio mixing) ----------
+  // PJSIP-style audio mixing in the browser. For each call we build a tiny
+  // routing graph:
+  //   - User's mic → all calls' outgoing tracks (parties hear the user)
+  //   - Each call's incoming → user's speaker AND every OTHER call's outgoing
+  //   - All calls have their SIP direction set back to sendrecv (unhold)
+  // Result: all three parties hear each other, hangups are independent.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private conferenceCtx: AudioContext | null = null;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private conferenceMic: MediaStream | null = null;
+
+  startConference(): boolean {
+    if (this.calls.size < 2) {
+      console.warn('[sip] conference needs at least 2 calls');
+      return false;
+    }
+    try {
+      const entries = Array.from(this.calls.values());
+      // Unhold every call so SIP-level audio direction is sendrecv on all legs.
+      for (const e of entries) {
+        try {
+          if (e.heldLocal) {
+            e.session.unhold();
+            e.heldLocal = false;
+          }
+        } catch (err) {
+          console.warn('[sip] conference unhold failed for', e.id, err);
+        }
+      }
+
+      // Build the audio context if not yet running.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const Ctor = (window.AudioContext || (window as any).webkitAudioContext) as typeof AudioContext;
+      const ctx = (this.conferenceCtx ??= new Ctor());
+      void ctx.resume();
+
+      // For each call, capture its remote track as an AudioNode so we can mix.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const remoteSources: { entry: CallEntry; pc: RTCPeerConnection; node: MediaStreamAudioSourceNode }[] = [];
+      for (const e of entries) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const pc: RTCPeerConnection | null = (e.session as any).connection ?? null;
+        if (!pc) continue;
+        const remoteStream = new MediaStream();
+        for (const receiver of pc.getReceivers()) {
+          if (receiver.track?.kind === 'audio') remoteStream.addTrack(receiver.track);
+        }
+        if (remoteStream.getAudioTracks().length === 0) continue;
+        const node = ctx.createMediaStreamSource(remoteStream);
+        remoteSources.push({ entry: e, pc, node });
+      }
+
+      if (remoteSources.length < 2) {
+        console.warn('[sip] conference: not enough remote streams ready');
+        return false;
+      }
+
+      // Per-call outgoing destination: mic + all other calls' incoming.
+      // After we build it, swap the call's outgoing track with this stream's
+      // track via sender.replaceTrack().
+      const outgoingDests = new Map<string, MediaStreamAudioDestinationNode>();
+      for (const rs of remoteSources) {
+        const dest = ctx.createMediaStreamDestination();
+        outgoingDests.set(rs.entry.id, dest);
+      }
+
+      // Mic source — one shared node for all outgoing destinations.
+      // Use a fresh getUserMedia so we don't reuse a stream that's still
+      // wired to a closed AudioContext from a prior conference.
+      return ((): boolean => {
+        void navigator.mediaDevices.getUserMedia({ audio: true }).then(async (micStream) => {
+          this.conferenceMic = micStream;
+          const micNode = ctx.createMediaStreamSource(micStream);
+
+          // Route mic into every outgoing destination.
+          for (const [, dest] of outgoingDests) {
+            micNode.connect(dest);
+          }
+
+          // Route each remote stream into:
+          //   (a) the user's speaker (the primary audio element)
+          //   (b) every OTHER call's outgoing destination
+          // Speakers: we use a single AudioDestinationNode (ctx.destination)
+          // so all remotes mix into the user's audio output.
+          for (const rs of remoteSources) {
+            rs.node.connect(ctx.destination); // user hears this call
+            for (const [otherId, dest] of outgoingDests) {
+              if (otherId !== rs.entry.id) {
+                rs.node.connect(dest); // other party hears this call
+              }
+            }
+          }
+
+          // Replace each call's outgoing audio track with its mixed
+          // destination's track.
+          for (const rs of remoteSources) {
+            const dest = outgoingDests.get(rs.entry.id);
+            if (!dest) continue;
+            const mixedTrack = dest.stream.getAudioTracks()[0];
+            if (!mixedTrack) continue;
+            const sender = rs.pc.getSenders().find((s) => s.track?.kind === 'audio');
+            if (sender) {
+              await sender.replaceTrack(mixedTrack);
+              console.log('[sip] conference: replaced outgoing track on', rs.entry.id);
+            }
+          }
+          console.log('[sip] conference active across', remoteSources.length, 'calls');
+        }).catch((e) => {
+          console.error('[sip] conference: failed to acquire mic', e);
+        });
+        return true;
+      })();
+    } catch (e) {
+      console.error('[sip] startConference threw', e);
+      return false;
+    }
+  }
+
+  /** Tear down the conference audio graph (called on hangup of any leg). */
+  private stopConference(): void {
+    if (this.conferenceMic) {
+      try { this.conferenceMic.getTracks().forEach((t) => t.stop()); } catch { /* noop */ }
+      this.conferenceMic = null;
+    }
+    if (this.conferenceCtx) {
+      try { void this.conferenceCtx.close(); } catch { /* noop */ }
+      this.conferenceCtx = null;
+    }
   }
 
   // ---------- Hold music (Web Audio API + replaceTrack) ----------
@@ -883,6 +1021,7 @@ export class SipService {
     this.activeCallId = null;
     this.incomingCallId = null;
     this.stopQualityPolling();
+    this.stopConference();
     if (this.ua) {
       try { this.ua.stop(); } catch { /* noop */ }
       this.ua = null;
