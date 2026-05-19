@@ -1,11 +1,10 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { Phone, Delete, BookUser, Star, Clock, X } from 'lucide-react';
+import { Phone, Delete, BookUser, Clock, X } from 'lucide-react';
 import { AsYouType, parsePhoneNumberFromString, getCountryCallingCode } from 'libphonenumber-js/min';
 import type { CountryCode } from 'libphonenumber-js/min';
 import { useSip } from '../contexts/SipContext';
 import { getCalls, type CallRecord } from '../api';
-import { getFavorites, type FavoriteContact } from '../lib/userPrefs';
 import { formatPhone } from '../lib/phone';
 import { getCachedJobDivaName } from '../hooks/useJobDivaContact';
 
@@ -30,8 +29,7 @@ const KEYS: Array<{ digit: string; letters?: string }> = [
 
 const ALLOWED_KEYS = new Set(['0','1','2','3','4','5','6','7','8','9','*','#','+']);
 
-// Default country prefix shown on first load — users typically dial US numbers.
-// Backspace can still erase past this; Esc resets to it.
+// Default country prefix used when the user hasn't typed anything yet.
 const DEFAULT_PREFIX = '+1';
 const DEFAULT_COUNTRY: CountryCode = 'US';
 
@@ -44,21 +42,20 @@ function flagImageUrl(iso2: string | undefined | null): string {
 }
 
 // Detect the country (and its calling code) from the current number being
-// entered. Returns null when the input is empty or just the default prefix
-// (so the UI can hide the flag entirely until the user starts dialing).
-function detectCountry(num: string): { iso: CountryCode; callingCode: string } | null {
-  // No flag for empty / default-prefix / bare "+" input.
-  if (!num || num === DEFAULT_PREFIX || num === '+') return null;
+// entered. Always returns a value — defaults to US so the flag + "+1" prefix
+// are visible even when the input is empty.
+function detectCountry(num: string): { iso: CountryCode; callingCode: string } {
+  const fallback = {
+    iso: DEFAULT_COUNTRY,
+    callingCode: getCountryCallingCode(DEFAULT_COUNTRY),
+  };
+  if (!num || num === '+') return fallback;
   try {
-    // Numbers without a + prefix that look international (12+ digits with
-    // a known country calling code) need a + prepended for libphonenumber
-    // to recognize them. e.g., "918850415617" → "+918850415617" (India).
     const probe = num.startsWith('+') ? num : '+' + num.replace(/[^\d]/g, '');
     const parsed = parsePhoneNumberFromString(probe);
     if (parsed?.country) {
       return { iso: parsed.country, callingCode: getCountryCallingCode(parsed.country) };
     }
-    // Otherwise let AsYouType have a shot — it handles partial input.
     const ayt = new AsYouType(DEFAULT_COUNTRY);
     ayt.input(num);
     const iso = ayt.getCountry();
@@ -68,14 +65,7 @@ function detectCountry(num: string): { iso: CountryCode; callingCode: string } |
   } catch {
     /* fall through */
   }
-  // Last-ditch fallback for sub-10-digit US-style input.
-  if (/^\d{1,10}$/.test(num)) {
-    return {
-      iso: DEFAULT_COUNTRY,
-      callingCode: getCountryCallingCode(DEFAULT_COUNTRY),
-    };
-  }
-  return null;
+  return fallback;
 }
 
 // Progressive phone number formatter using libphonenumber-js's AsYouType.
@@ -180,7 +170,10 @@ function parsePastedNumber(raw: string): string {
 }
 
 export default function Dialpad() {
-  const [number, setNumber] = useState(DEFAULT_PREFIX);
+  // Default to empty so the "Enter phone number" placeholder is visible.
+  // Country prefix (+1 by default) is rendered as a separate label to the
+  // left of the input so it's always shown without occupying input space.
+  const [number, setNumber] = useState('');
   const inputRef = useRef<HTMLInputElement | null>(null);
   const { sipState, callState, call, addCall } = useSip();
   const navigate = useNavigate();
@@ -200,12 +193,10 @@ export default function Dialpad() {
 
   const [showContacts, setShowContacts] = useState(false);
   const [recentNumbers, setRecentNumbers] = useState<{ phone: string; label: string; when: string }[]>([]);
-  const [favorites, setFavorites] = useState<FavoriteContact[]>(() => getFavorites());
 
   // Lazy-load recents the first time the user opens the contacts panel.
   useEffect(() => {
     if (!showContacts) return;
-    setFavorites(getFavorites());
     const token = sessionStorage.getItem('ace_token');
     if (!token) return;
     getCalls(token)
@@ -232,12 +223,12 @@ export default function Dialpad() {
 
   const append = useCallback((d: string) => setNumber((n) => n + d), []);
   const backspace = useCallback(() => setNumber((n) => n.slice(0, -1)), []);
-  // Esc resets to the country-code prefix so users don't have to retype "+1"
-  // every time. Use long-press / repeated backspace to wipe completely.
-  const clear = useCallback(() => setNumber(DEFAULT_PREFIX), []);
+  // Esc clears the input. The country flag/prefix remains visible on the
+  // left as a static label (US default), so the user always sees it.
+  const clear = useCallback(() => setNumber(''), []);
 
-  // Treat "+1" (or just "+") alone as no number entered.
-  const hasDialableInput = number.replace(/[^\d]/g, '').length > 0 && number !== DEFAULT_PREFIX;
+  // Anything with at least one dialable digit counts as ready to call.
+  const hasDialableInput = number.replace(/[^\d]/g, '').length > 0;
 
   const handleCall = useCallback(async () => {
     if (!hasDialableInput) return;
@@ -385,17 +376,16 @@ export default function Dialpad() {
         const country = detectCountry(number);
         return (
           <div className="number-display" aria-live="polite">
-            {country && (
-              <img
-                className="number-display-flag-img"
-                src={flagImageUrl(country.iso)}
-                alt={country.iso}
-                title={country.iso}
-                onError={(e) => {
-                  (e.currentTarget as HTMLImageElement).style.visibility = 'hidden';
-                }}
-              />
-            )}
+            <img
+              className="number-display-flag-img"
+              src={flagImageUrl(country.iso)}
+              alt={country.iso}
+              title={country.iso}
+              onError={(e) => {
+                (e.currentTarget as HTMLImageElement).style.visibility = 'hidden';
+              }}
+            />
+            <span className="number-display-prefix-label">+{country.callingCode}</span>
             <input
               ref={inputRef}
               type="tel"
@@ -414,7 +404,7 @@ export default function Dialpad() {
               }}
               onPaste={(e) => {
                 // Intercept paste to do smart country-code detection so things
-                // like "918850415617" become "+918850415617" with the 🇮🇳 flag.
+                // like "918850415617" become "+918850415617" with the India flag.
                 const text = e.clipboardData?.getData('text');
                 if (text) {
                   e.preventDefault();
@@ -455,9 +445,9 @@ export default function Dialpad() {
           className="contacts-btn"
           onClick={() => setShowContacts(true)}
           aria-label="Contacts"
-          title="Recents & Favorites"
+          title="Recent calls"
         >
-          <BookUser size={22} />
+          <BookUser size={28} />
         </button>
         <button
           type="button"
@@ -496,34 +486,6 @@ export default function Dialpad() {
                 <X size={16} />
               </button>
             </div>
-
-            {favorites.length > 0 && (
-              <>
-                <div className="contacts-quickpick-section">
-                  <Star size={12} /> Favorites
-                </div>
-                <ul className="contacts-quickpick-list">
-                  {favorites.map((f) => (
-                    <li key={f.phone}>
-                      <button
-                        type="button"
-                        className="contacts-quickpick-item"
-                        onClick={() => {
-                          setNumber(f.phone);
-                          setShowContacts(false);
-                          setTimeout(() => inputRef.current?.focus(), 0);
-                        }}
-                      >
-                        <span className="contacts-quickpick-name">
-                          {f.label ?? getCachedJobDivaName(f.phone) ?? formatPhone(f.phone)}
-                        </span>
-                        <span className="contacts-quickpick-phone">{formatPhone(f.phone)}</span>
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              </>
-            )}
 
             <div className="contacts-quickpick-section">
               <Clock size={12} /> Recent
