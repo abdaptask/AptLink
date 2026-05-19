@@ -2,7 +2,7 @@
 // thread list on the left (or full screen on narrow), thread detail on the right.
 import { useEffect, useState, useCallback, useRef, useMemo } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Send, ArrowLeft, RefreshCcw, MessageSquarePlus, Image as ImageIcon, Search, X } from 'lucide-react';
+import { Send, ArrowLeft, RefreshCcw, MessageSquarePlus, Image as ImageIcon, Search, X, Zap } from 'lucide-react';
 import {
   getThreads,
   getThread,
@@ -12,6 +12,7 @@ import {
   type MessageRecord,
 } from '../api';
 import { useJobDivaContact, getCachedJobDivaName } from '../hooks/useJobDivaContact';
+import { getQuickReplies } from '../lib/userPrefs';
 
 function formatNumber(raw: string): string {
   const d = (raw || '').replace(/[^\d+]/g, '');
@@ -223,6 +224,15 @@ function ThreadDetail({ number, onBack }: ThreadDetailProps) {
   const [sending, setSending] = useState(false);
   const [attached, setAttached] = useState<string[]>([]);
   const scrollRef = useRef<HTMLDivElement>(null);
+  // Quick replies (user-editable in Settings). Re-read on the custom event
+  // so edits in Settings show up immediately without a page reload.
+  const [quickReplies, setLocalQuickReplies] = useState<string[]>(() => getQuickReplies());
+  const [showQuickReplies, setShowQuickReplies] = useState(false);
+  useEffect(() => {
+    const refresh = () => setLocalQuickReplies(getQuickReplies());
+    window.addEventListener('ace:quickRepliesChanged', refresh);
+    return () => window.removeEventListener('ace:quickRepliesChanged', refresh);
+  }, []);
 
   const load = useCallback(() => {
     const token = sessionStorage.getItem('ace_token');
@@ -340,6 +350,43 @@ function ThreadDetail({ number, onBack }: ThreadDetailProps) {
         onChange={handleFile}
         style={{ display: 'none' }}
       />
+
+      {showQuickReplies && quickReplies.length > 0 && (
+        <div className="quick-reply-popover" role="menu">
+          <div className="quick-reply-popover-header">
+            <span>Quick replies</span>
+            <button
+              type="button"
+              className="icon-btn"
+              onClick={() => setShowQuickReplies(false)}
+              aria-label="Close"
+            >
+              <X size={14} />
+            </button>
+          </div>
+          <ul>
+            {quickReplies.map((r, i) => (
+              <li key={i}>
+                <button
+                  type="button"
+                  className="quick-reply-pop-item"
+                  onClick={() => {
+                    // Replace draft entirely if empty, otherwise append on new line.
+                    setDraft((d) => (d.trim() ? `${d}\n${r}` : r));
+                    setShowQuickReplies(false);
+                  }}
+                >
+                  {r}
+                </button>
+              </li>
+            ))}
+          </ul>
+          <div className="quick-reply-popover-footer muted small">
+            Edit in Settings → Quick replies
+          </div>
+        </div>
+      )}
+
       <div className="compose-row">
         <button
           type="button"
@@ -350,6 +397,17 @@ function ThreadDetail({ number, onBack }: ThreadDetailProps) {
         >
           <ImageIcon size={20} />
         </button>
+        {quickReplies.length > 0 && (
+          <button
+            type="button"
+            className="icon-btn"
+            onClick={() => setShowQuickReplies((v) => !v)}
+            aria-label="Quick replies"
+            title="Quick replies"
+          >
+            <Zap size={20} />
+          </button>
+        )}
         <input
           className="compose-input"
           placeholder="Text message"

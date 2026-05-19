@@ -495,6 +495,250 @@ body {
   to { transform: rotate(360deg); }
 }
 
+/* ============ NOTIFICATION PREFS (Settings) ============ */
+.pref-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+.pref-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.65rem 0.85rem;
+  background: rgba(118, 118, 128, 0.18);
+  border-radius: 10px;
+}
+.pref-row.disabled { opacity: 0.5; }
+.pref-text { flex: 1; min-width: 0; }
+.pref-label { font-size: 0.95rem; }
+.pref-desc {
+  font-size: 0.78rem;
+  color: rgba(235, 235, 245, 0.6);
+  margin-top: 0.1rem;
+}
+.pref-switch {
+  position: relative;
+  display: inline-block;
+  width: 42px;
+  height: 24px;
+  flex-shrink: 0;
+}
+.pref-switch input { opacity: 0; width: 0; height: 0; }
+.pref-slider {
+  position: absolute;
+  cursor: pointer;
+  inset: 0;
+  background: rgba(118, 118, 128, 0.32);
+  border-radius: 24px;
+  transition: background 0.18s;
+}
+.pref-slider::before {
+  content: '';
+  position: absolute;
+  height: 20px;
+  width: 20px;
+  left: 2px;
+  bottom: 2px;
+  background: #fff;
+  border-radius: 50%;
+  transition: transform 0.18s;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+}
+.pref-switch input:checked + .pref-slider { background: #34c759; }
+.pref-switch input:checked + .pref-slider::before { transform: translateX(18px); }
+
+/* ============ QUICK REPLIES (Settings) ============ */
+.quick-reply-list {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+.quick-reply-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.55rem 0.7rem;
+  background: rgba(118, 118, 128, 0.18);
+  border-radius: 10px;
+}
+.quick-reply-handle {
+  color: rgba(235, 235, 245, 0.4);
+  cursor: grab;
+  flex-shrink: 0;
+}
+.quick-reply-text {
+  flex: 1;
+  font-size: 0.9rem;
+  cursor: pointer;
+  line-height: 1.3;
+  word-break: break-word;
+}
+.quick-reply-text:hover { color: #fff; text-decoration: underline; text-decoration-color: rgba(255,255,255,0.3); }
+.quick-reply-input {
+  flex: 1;
+  background: rgba(118, 118, 128, 0.28);
+  border: 0.5px solid rgba(118, 118, 128, 0.5);
+  border-radius: 8px;
+  padding: 0.5rem 0.7rem;
+  color: inherit;
+  font-size: 0.9rem;
+  font-family: inherit;
+  outline: none;
+  min-width: 0;
+}
+.quick-reply-input:focus { border-color: #0a84ff; }
+.quick-reply-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  flex-shrink: 0;
+}
+.quick-reply-action {
+  background: rgba(235, 235, 245, 0.16);
+  border: none;
+  color: #fff;
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  font-family: inherit;
+}
+.quick-reply-action:hover { background: rgba(235, 235, 245, 0.28); }
+.quick-reply-action:disabled { opacity: 0.3; cursor: not-allowed; }
+.quick-reply-action.danger { color: #ff6b6b; }
+.quick-reply-action.danger:hover { background: rgba(255, 59, 48, 0.22); color: #fff; }
+.quick-reply-add {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+/* ============ VOICEMAIL POLISH (bulk select, mark-unread, speed) ============ */
+.vm-select-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.8rem;
+  margin: 0 1rem 0.75rem;
+  padding: 0.5rem 0.85rem;
+  background: rgba(10, 132, 255, 0.18);
+  border: 0.5px solid rgba(10, 132, 255, 0.45);
+  border-radius: 10px;
+}
+.vm-select-count { font-size: 0.85rem; font-weight: 500; }
+.vm-select-actions { display: flex; gap: 0.4rem; flex-wrap: wrap; }
+.device-action.danger { background: rgba(255, 59, 48, 0.25); color: #ff6b6b; }
+.device-action.danger:hover { background: rgba(255, 59, 48, 0.4); color: #fff; }
+.device-action.danger:disabled { opacity: 0.4; }
+
+.vm-row.select-mode { cursor: pointer; }
+.vm-row.selected { background: rgba(10, 132, 255, 0.16); }
+.vm-checkbox {
+  display: inline-flex;
+  align-items: center;
+  margin-right: 0.6rem;
+  color: rgba(235, 235, 245, 0.7);
+}
+.vm-row.selected .vm-checkbox { color: #0a84ff; }
+
+.vm-player-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-top: 0.5rem;
+  flex-wrap: wrap;
+}
+.vm-controls-label {
+  font-size: 0.75rem;
+  color: rgba(235, 235, 245, 0.6);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.vm-rate-group {
+  display: inline-flex;
+  background: rgba(118, 118, 128, 0.2);
+  border-radius: 8px;
+  padding: 2px;
+}
+.vm-rate-btn {
+  background: transparent;
+  border: none;
+  color: rgba(235, 235, 245, 0.75);
+  padding: 0.25rem 0.6rem;
+  border-radius: 6px;
+  font-size: 0.78rem;
+  font-family: inherit;
+  cursor: pointer;
+  font-variant-numeric: tabular-nums;
+}
+.vm-rate-btn:hover { color: #fff; }
+.vm-rate-btn.active {
+  background: #fff;
+  color: #1c1c1e;
+  font-weight: 600;
+}
+
+/* ============ QUICK REPLY POPOVER (Messages compose row) ============ */
+.quick-reply-popover {
+  position: absolute;
+  bottom: 70px;
+  left: 12px;
+  right: 12px;
+  max-width: 380px;
+  background: #1c1c1e;
+  border: 0.5px solid rgba(255, 255, 255, 0.12);
+  border-radius: 12px;
+  padding: 0.5rem;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.4);
+  z-index: 20;
+  max-height: 60vh;
+  overflow-y: auto;
+}
+.quick-reply-popover-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.2rem 0.5rem 0.4rem;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: rgba(235, 235, 245, 0.6);
+}
+.quick-reply-popover ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.quick-reply-pop-item {
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  color: inherit;
+  font-family: inherit;
+  padding: 0.55rem 0.7rem;
+  border-radius: 8px;
+  font-size: 0.92rem;
+  cursor: pointer;
+  line-height: 1.3;
+}
+.quick-reply-pop-item:hover { background: rgba(255, 255, 255, 0.08); }
+.quick-reply-popover-footer {
+  padding: 0.4rem 0.5rem 0.1rem;
+  text-align: center;
+}
+
 /* ============ SHARED SEARCH BAR (Recents / Messages / Voicemail) ============ */
 .search-bar {
   display: flex;

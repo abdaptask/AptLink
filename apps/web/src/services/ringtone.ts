@@ -1,6 +1,7 @@
 // Classic North-American phone ring synthesized via Web Audio API.
 // 440 Hz + 480 Hz mixed, 2 seconds on / 4 seconds off, looped.
 // No audio asset needed — the SDK can crank it in any browser.
+import { getNotificationPrefs } from '../lib/userPrefs';
 
 class Ringtone {
   private ctx: AudioContext | null = null;
@@ -12,6 +13,11 @@ class Ringtone {
 
   start(): void {
     if (this.playing) return;
+
+    // Honour user notification prefs — silent if ringtone disabled.
+    const prefs = getNotificationPrefs();
+    if (!prefs.ringtone) return;
+
     this.playing = true;
 
     // Lazy-create AudioContext (must happen in a user-gesture-induced path
@@ -45,16 +51,17 @@ class Ringtone {
     osc2.start();
     this.oscs = [osc1, osc2];
 
-    // Envelope: 2s ring on, 4s silent, loop.
+    // Envelope: 2s ring on, 4s silent, loop. Peak amplitude is scaled by
+    // the user's ringtoneVolume preference (0-1) → peak 0..0.4.
     const cycle = () => {
       if (!this.playing || !this.gain || !this.ctx) return;
+      const vol = Math.max(0, Math.min(1, getNotificationPrefs().ringtoneVolume));
+      const peak = 0.4 * vol;
       const now = this.ctx.currentTime;
-      // Ring on: ramp up to 0.2 over 20 ms, hold for 2s.
       this.gain.gain.cancelScheduledValues(now);
       this.gain.gain.setValueAtTime(0, now);
-      this.gain.gain.linearRampToValueAtTime(0.2, now + 0.02);
-      // Ring off: ramp down at 2s, hold 0 until 6s.
-      this.gain.gain.setValueAtTime(0.2, now + 2);
+      this.gain.gain.linearRampToValueAtTime(peak, now + 0.02);
+      this.gain.gain.setValueAtTime(peak, now + 2);
       this.gain.gain.linearRampToValueAtTime(0, now + 2.02);
     };
 

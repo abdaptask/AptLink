@@ -1,8 +1,20 @@
 // Phase 5.6 — Voicemail list. Populated by webhook when Telnyx finishes
 // recording an unanswered call.
-import { useCallback, useEffect, useState, useMemo } from 'react';
+import { useCallback, useEffect, useState, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Phone, Trash2, RefreshCcw, Play, Voicemail as VoicemailIcon, Search, X } from 'lucide-react';
+import {
+  Phone,
+  Trash2,
+  RefreshCcw,
+  Play,
+  Voicemail as VoicemailIcon,
+  Search,
+  X,
+  Circle,
+  CheckCircle2,
+  CheckSquare,
+  Square,
+} from 'lucide-react';
 import {
   getVoicemails,
   markVoicemailListened,
@@ -47,8 +59,29 @@ export default function Voicemail() {
   const [error, setError] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<number | null>(null);
   const [search, setSearch] = useState('');
+  const [selectMode, setSelectMode] = useState(false);
+  const [selected, setSelected] = useState<Set<number>>(new Set());
   const { sipState, call } = useSip();
   const navigate = useNavigate();
+
+  function toggleSelected(id: number) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+  function selectAllFiltered(ids: number[]) {
+    setSelected(new Set(ids));
+  }
+  function clearSelection() {
+    setSelected(new Set());
+  }
+  function exitSelectMode() {
+    setSelectMode(false);
+    setSelected(new Set());
+  }
 
   // Client-side filter: phone digits, transcription text, and cached
   // JobDiva contact name.
@@ -110,6 +143,35 @@ export default function Voicemail() {
     }
   }
 
+  async function handleBulkDelete() {
+    const token = sessionStorage.getItem('ace_token');
+    if (!token || selected.size === 0) return;
+    if (!confirm(`Delete ${selected.size} voicemail${selected.size === 1 ? '' : 's'}?`)) return;
+    const ids = Array.from(selected);
+    // Optimistic — remove from UI, then fire deletes in parallel.
+    setItems((prev) => prev.filter((p) => !selected.has(p.id)));
+    setSelected(new Set());
+    await Promise.allSettled(ids.map((id) => deleteVoicemail(token, id)));
+  }
+
+  async function handleToggleUnread(vm: VoicemailRecord) {
+    const token = sessionStorage.getItem('ace_token');
+    if (!token) return;
+    const nowListened = !vm.listenedAt;
+    try {
+      await markVoicemailListened(token, vm.id, nowListened);
+      setItems((prev) =>
+        prev.map((p) =>
+          p.id === vm.id
+            ? { ...p, listenedAt: nowListened ? new Date().toISOString() : null }
+            : p,
+        ),
+      );
+    } catch {
+      /* ignore */
+    }
+  }
+
   function handleCallBack(vm: VoicemailRecord) {
     if (!vm.fromNumber) return;
     if (sipState !== 'registered') {
@@ -124,9 +186,33 @@ export default function Voicemail() {
     <div className="voicemail">
       <div className="voicemail-header">
         <h2>Voicemail</h2>
-        <button className="icon-btn" onClick={load} disabled={loading} aria-label="Refresh">
-          <RefreshCcw size={18} className={loading ? 'spin' : ''} />
-        </button>
+        <div style={{ display: 'flex', gap: 8 }}>
+          {!selectMode && items.length > 0 && (
+            <button
+              type="button"
+              className="icon-btn"
+              onClick={() => setSelectMode(true)}
+              aria-label="Select"
+              title="Select multiple"
+            >
+              <CheckSquare size={18} />
+            </button>
+          )}
+          {selectMode && (
+            <button
+              type="button"
+              className="icon-btn"
+              onClick={exitSelectMode}
+              aria-label="Cancel selection"
+              title="Cancel"
+            >
+              <X size={18} />
+            </button>
+          )}
+          <button className="icon-btn" onClick={load} disabled={loading} aria-label="Refresh">
+            <RefreshCcw size={18} className={loading ? 'spin' : ''} />
+          </button>
+        </div>
       </div>
 
       <div className="search-bar">
@@ -166,15 +252,52 @@ export default function Voicemail() {
         </div>
       )}
 
+      {selectMode && (
+        <div className="vm-select-bar">
+          <span className="vm-select-count">
+            {selected.size} selected
+          </span>
+          <div className="vm-select-actions">
+            <button
+              type="button"
+              className="device-action"
+              onClick={() => selectAllFiltered(filtered.map((v) => v.id))}
+            >
+              Select all
+            </button>
+            <button
+              type="button"
+              className="device-action"
+              onClick={clearSelection}
+              disabled={selected.size === 0}
+            >
+              Clear
+            </button>
+            <button
+              type="button"
+              className="device-action primary danger"
+              onClick={handleBulkDelete}
+              disabled={selected.size === 0}
+            >
+              <Trash2 size={14} /> Delete ({selected.size})
+            </button>
+          </div>
+        </div>
+      )}
+
       <ul className="vm-list">
         {filtered.map((vm) => (
           <VoicemailRow
             key={vm.id}
             vm={vm}
             expanded={expandedId === vm.id}
+            selectMode={selectMode}
+            checked={selected.has(vm.id)}
+            onToggleSelect={() => toggleSelected(vm.id)}
             onExpand={() => handleExpand(vm)}
             onCallBack={() => handleCallBack(vm)}
             onDelete={() => handleDelete(vm)}
+            onToggleUnread={() => handleToggleUnread(vm)}
           />
         ))}
       </ul>
@@ -185,24 +308,48 @@ export default function Voicemail() {
 function VoicemailRow({
   vm,
   expanded,
+  selectMode,
+  checked,
+  onToggleSelect,
   onExpand,
   onCallBack,
   onDelete,
+  onToggleUnread,
 }: {
   vm: VoicemailRecord;
   expanded: boolean;
+  selectMode: boolean;
+  checked: boolean;
+  onToggleSelect: () => void;
   onExpand: () => void;
   onCallBack: () => void;
   onDelete: () => void;
+  onToggleUnread: () => void;
 }) {
   const jd = useJobDivaContact(vm.fromNumber);
   const label = jd?.name ?? formatNumber(vm.fromNumber);
   const unread = !vm.listenedAt;
+  const audioRef = useRef<HTMLAudioElement>(null);
+  const [playbackRate, setPlaybackRate] = useState(1);
+
+  // Apply playback rate whenever it changes (and after the audio element mounts).
+  useEffect(() => {
+    if (audioRef.current) audioRef.current.playbackRate = playbackRate;
+  }, [playbackRate, expanded]);
+
   return (
-    <li className={`vm-row${unread ? ' unread' : ''}${expanded ? ' expanded' : ''}`}>
-      <div className="vm-row-main" onClick={onExpand}>
+    <li className={`vm-row${unread ? ' unread' : ''}${expanded ? ' expanded' : ''}${selectMode ? ' select-mode' : ''}${checked ? ' selected' : ''}`}>
+      <div
+        className="vm-row-main"
+        onClick={selectMode ? onToggleSelect : onExpand}
+      >
+        {selectMode && (
+          <span className="vm-checkbox" aria-hidden="true">
+            {checked ? <CheckSquare size={18} /> : <Square size={18} />}
+          </span>
+        )}
         <div className="vm-left">
-          {unread && <span className="vm-dot" aria-label="Unread" />}
+          {!selectMode && unread && <span className="vm-dot" aria-label="Unread" />}
           <div className="vm-text">
             <div className="vm-number">{label}</div>
             <div className="vm-meta">
@@ -211,21 +358,53 @@ function VoicemailRow({
             </div>
           </div>
         </div>
-        <div className="vm-right">
-          <button type="button" className="vm-action" aria-label="Play" onClick={(e) => { e.stopPropagation(); onExpand(); }}>
-            <Play size={16} />
-          </button>
-          <button type="button" className="vm-action callback" aria-label="Call back" onClick={(e) => { e.stopPropagation(); onCallBack(); }}>
-            <Phone size={16} />
-          </button>
-          <button type="button" className="vm-action delete" aria-label="Delete" onClick={(e) => { e.stopPropagation(); onDelete(); }}>
-            <Trash2 size={16} />
-          </button>
-        </div>
+        {!selectMode && (
+          <div className="vm-right">
+            <button type="button" className="vm-action" aria-label="Play" onClick={(e) => { e.stopPropagation(); onExpand(); }}>
+              <Play size={16} />
+            </button>
+            <button
+              type="button"
+              className="vm-action"
+              aria-label={unread ? 'Mark as read' : 'Mark as unread'}
+              title={unread ? 'Mark as read' : 'Mark as unread'}
+              onClick={(e) => { e.stopPropagation(); onToggleUnread(); }}
+            >
+              {unread ? <CheckCircle2 size={16} /> : <Circle size={16} />}
+            </button>
+            <button type="button" className="vm-action callback" aria-label="Call back" onClick={(e) => { e.stopPropagation(); onCallBack(); }}>
+              <Phone size={16} />
+            </button>
+            <button type="button" className="vm-action delete" aria-label="Delete" onClick={(e) => { e.stopPropagation(); onDelete(); }}>
+              <Trash2 size={16} />
+            </button>
+          </div>
+        )}
       </div>
-      {expanded && (
+      {expanded && !selectMode && (
         <div className="vm-body">
-          <audio controls src={vm.recordingUrl} preload="none" style={{ width: '100%' }} />
+          <audio
+            ref={audioRef}
+            controls
+            src={vm.recordingUrl}
+            preload="metadata"
+            style={{ width: '100%' }}
+          />
+          <div className="vm-player-controls">
+            <span className="vm-controls-label">Speed</span>
+            <div className="vm-rate-group" role="group" aria-label="Playback speed">
+              {[0.5, 1, 1.5, 2].map((r) => (
+                <button
+                  key={r}
+                  type="button"
+                  className={`vm-rate-btn${playbackRate === r ? ' active' : ''}`}
+                  onClick={() => setPlaybackRate(r)}
+                >
+                  {r}×
+                </button>
+              ))}
+            </div>
+          </div>
           {vm.transcription && (
             <p className="vm-transcript">
               <span className="vm-transcript-tag">Transcript</span>

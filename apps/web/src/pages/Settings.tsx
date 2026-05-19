@@ -11,7 +11,21 @@ import {
   Eye,
   EyeOff,
   ChevronRight,
+  Bell,
+  MessageSquare,
+  Plus,
+  Trash2,
+  GripVertical,
 } from 'lucide-react';
+import {
+  DEFAULT_QUICK_REPLIES,
+  getQuickReplies,
+  setQuickReplies,
+  resetQuickReplies,
+  getNotificationPrefs,
+  setNotificationPrefs,
+  type NotificationPrefs,
+} from '../lib/userPrefs';
 
 interface AudioDevice {
   deviceId: string;
@@ -30,6 +44,8 @@ const SECTIONS: SectionDef[] = [
   { key: 'telnyx', label: 'Telnyx', icon: Phone, blurb: 'SIP credentials', Component: TelnyxSection },
   { key: 'microphone', label: 'Microphone', icon: Mic, blurb: 'Input device', Component: MicrophoneSection },
   { key: 'speaker', label: 'Speaker', icon: Volume2, blurb: 'Output device', Component: SpeakerSection },
+  { key: 'notifications', label: 'Notifications', icon: Bell, blurb: 'Calls + SMS alerts', Component: NotificationsSection },
+  { key: 'quick-replies', label: 'Quick replies', icon: MessageSquare, blurb: 'SMS templates', Component: QuickRepliesSection },
 ];
 
 const DEFAULT_SECTION = SECTIONS[0].key;
@@ -355,6 +371,276 @@ function DeviceList({
           {selected === d.deviceId && <Check size={18} />}
         </button>
       ))}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Notifications section
+// ---------------------------------------------------------------------------
+function NotificationsSection() {
+  const [prefs, setPrefsLocal] = useState<NotificationPrefs>(() => getNotificationPrefs());
+
+  function update(partial: Partial<NotificationPrefs>) {
+    const next = setNotificationPrefs(partial);
+    setPrefsLocal(next);
+  }
+
+  return (
+    <div className="settings-section">
+      <p className="settings-blurb">
+        Control how the dialer notifies you about incoming calls and SMS.
+        These preferences are stored on this device only.
+      </p>
+
+      <div className="pref-list">
+        <PrefToggle
+          label="In-app banner for incoming calls"
+          description="Shows the full-screen ring UI when a call comes in."
+          checked={prefs.inAppToast}
+          onChange={(v) => update({ inAppToast: v })}
+        />
+        <PrefToggle
+          label="Ringtone"
+          description="Play a synth ringtone on incoming calls."
+          checked={prefs.ringtone}
+          onChange={(v) => update({ ringtone: v })}
+        />
+        <div className={`pref-row ${prefs.ringtone ? '' : 'disabled'}`}>
+          <div className="pref-text">
+            <div className="pref-label">Ringtone volume</div>
+            <div className="pref-desc">{Math.round(prefs.ringtoneVolume * 100)}%</div>
+          </div>
+          <input
+            type="range"
+            min={0}
+            max={1}
+            step={0.05}
+            value={prefs.ringtoneVolume}
+            onChange={(e) => update({ ringtoneVolume: Number(e.target.value) })}
+            disabled={!prefs.ringtone}
+            style={{ flex: 1, marginLeft: '1rem', maxWidth: 200 }}
+          />
+        </div>
+        <PrefToggle
+          label="Desktop notification when minimized"
+          description="OS-level popup when the app window is hidden."
+          checked={prefs.desktopNotification}
+          onChange={(v) => update({ desktopNotification: v })}
+        />
+        <PrefToggle
+          label="New SMS notification"
+          description="Toast + sound when an inbound message arrives."
+          checked={prefs.smsNotification}
+          onChange={(v) => update({ smsNotification: v })}
+        />
+      </div>
+    </div>
+  );
+}
+
+function PrefToggle({
+  label,
+  description,
+  checked,
+  onChange,
+}: {
+  label: string;
+  description?: string;
+  checked: boolean;
+  onChange: (v: boolean) => void;
+}) {
+  return (
+    <div className="pref-row">
+      <div className="pref-text">
+        <div className="pref-label">{label}</div>
+        {description && <div className="pref-desc">{description}</div>}
+      </div>
+      <label className="pref-switch">
+        <input
+          type="checkbox"
+          checked={checked}
+          onChange={(e) => onChange(e.target.checked)}
+        />
+        <span className="pref-slider" />
+      </label>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Quick replies section (editable SMS templates)
+// ---------------------------------------------------------------------------
+function QuickRepliesSection() {
+  const [replies, setReplies] = useState<string[]>(() => getQuickReplies());
+  const [draft, setDraft] = useState('');
+  const [editingIndex, setEditingIndex] = useState<number | null>(null);
+  const [editingValue, setEditingValue] = useState('');
+
+  function add() {
+    const v = draft.trim();
+    if (!v) return;
+    const next = [...replies, v];
+    setReplies(next);
+    setQuickReplies(next);
+    setDraft('');
+  }
+
+  function remove(idx: number) {
+    const next = replies.filter((_, i) => i !== idx);
+    setReplies(next);
+    setQuickReplies(next);
+    if (editingIndex === idx) setEditingIndex(null);
+  }
+
+  function startEdit(idx: number) {
+    setEditingIndex(idx);
+    setEditingValue(replies[idx]);
+  }
+
+  function saveEdit() {
+    if (editingIndex === null) return;
+    const v = editingValue.trim();
+    if (!v) {
+      remove(editingIndex);
+      setEditingIndex(null);
+      return;
+    }
+    const next = [...replies];
+    next[editingIndex] = v;
+    setReplies(next);
+    setQuickReplies(next);
+    setEditingIndex(null);
+  }
+
+  function move(idx: number, delta: number) {
+    const target = idx + delta;
+    if (target < 0 || target >= replies.length) return;
+    const next = [...replies];
+    [next[idx], next[target]] = [next[target], next[idx]];
+    setReplies(next);
+    setQuickReplies(next);
+  }
+
+  function resetToDefaults() {
+    if (!confirm('Replace your quick replies with the defaults?')) return;
+    resetQuickReplies();
+    setReplies(DEFAULT_QUICK_REPLIES);
+  }
+
+  return (
+    <div className="settings-section">
+      <p className="settings-blurb">
+        Preset messages you can send with one tap from any conversation.
+        Stored on this device only.
+      </p>
+
+      <ul className="quick-reply-list">
+        {replies.length === 0 && (
+          <li className="muted small" style={{ padding: '0.5rem 0' }}>
+            No quick replies yet. Add one below.
+          </li>
+        )}
+        {replies.map((r, idx) => (
+          <li key={`${idx}-${r}`} className="quick-reply-item">
+            <span
+              className="quick-reply-handle"
+              aria-label="Reorder"
+              title="Drag to reorder (or use the arrow buttons)"
+            >
+              <GripVertical size={14} />
+            </span>
+            {editingIndex === idx ? (
+              <>
+                <input
+                  className="quick-reply-input"
+                  value={editingValue}
+                  onChange={(e) => setEditingValue(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') saveEdit();
+                    if (e.key === 'Escape') setEditingIndex(null);
+                  }}
+                  autoFocus
+                />
+                <button type="button" className="device-action primary" onClick={saveEdit}>
+                  Save
+                </button>
+                <button
+                  type="button"
+                  className="device-action"
+                  onClick={() => setEditingIndex(null)}
+                >
+                  Cancel
+                </button>
+              </>
+            ) : (
+              <>
+                <span className="quick-reply-text" onClick={() => startEdit(idx)}>
+                  {r}
+                </span>
+                <div className="quick-reply-actions">
+                  <button
+                    type="button"
+                    className="quick-reply-action"
+                    onClick={() => move(idx, -1)}
+                    disabled={idx === 0}
+                    aria-label="Move up"
+                    title="Move up"
+                  >
+                    ↑
+                  </button>
+                  <button
+                    type="button"
+                    className="quick-reply-action"
+                    onClick={() => move(idx, 1)}
+                    disabled={idx === replies.length - 1}
+                    aria-label="Move down"
+                    title="Move down"
+                  >
+                    ↓
+                  </button>
+                  <button
+                    type="button"
+                    className="quick-reply-action danger"
+                    onClick={() => remove(idx)}
+                    aria-label="Delete"
+                    title="Delete"
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                </div>
+              </>
+            )}
+          </li>
+        ))}
+      </ul>
+
+      <div className="quick-reply-add">
+        <input
+          className="quick-reply-input"
+          placeholder="Add a new quick reply…"
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') add();
+          }}
+          maxLength={320}
+        />
+        <button
+          type="button"
+          className="device-action primary"
+          onClick={add}
+          disabled={!draft.trim()}
+        >
+          <Plus size={14} /> Add
+        </button>
+      </div>
+
+      <div className="device-actions" style={{ marginTop: '1.2rem' }}>
+        <button type="button" className="device-action" onClick={resetToDefaults}>
+          <RotateCcw size={14} /> Reset to defaults
+        </button>
+      </div>
     </div>
   );
 }
