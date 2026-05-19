@@ -306,19 +306,49 @@ export class SipService {
     });
     session.on('sdp', (data: { type?: string; sdp?: string; originator?: string }) => {
       console.log('[sip] SDP', data?.originator, data?.type);
-      // Print the full SDP so we can diagnose codec / DTLS / SRTP issues
-      // (e.g. "Bad Media Description" errors from the WebRTC stack).
       if (data?.sdp) {
+        // For remote SDP, add the WebRTC attributes Chrome requires that
+        // Telnyx's FreeSWITCH backend doesn't emit by default:
+        //   - a=rtcp-mux         (mux RTP+RTCP on same port)
+        //   - a=group:BUNDLE 0   (bundle media streams)
+        //   - a=rtcp-rsize       (reduced-size RTCP)
+        // Without these, Chrome's setRemoteDescription throws and JsSIP
+        // surfaces "Bad Media Description".
+        if (data.originator === 'remote') {
+          let s = data.sdp;
+          let mutated = false;
+          if (!/a=rtcp-mux/m.test(s)) {
+            s = s.replace(/(m=audio[^\n]*\n)/g, '$1a=rtcp-mux\r\n');
+            mutated = true;
+          }
+          if (!/a=group:BUNDLE/m.test(s)) {
+            // Insert after the s= line (session description line)
+            s = s.replace(/(s=[^\n]*\n)/, '$1a=group:BUNDLE 0\r\n');
+            mutated = true;
+          }
+          if (!/a=rtcp-rsize/m.test(s)) {
+            s = s.replace(/(m=audio[^\n]*\n)/g, '$1a=rtcp-rsize\r\n');
+            mutated = true;
+          }
+          if (mutated) {
+            console.log('[sip] munged remote SDP for Chrome compatibility');
+            data.sdp = s;
+          }
+        }
+
         console.log('[sip] SDP content:\n' + data.sdp);
-        // Quick highlights
         const hasFingerprint = /a=fingerprint:/i.test(data.sdp);
         const hasSetup = /a=setup:/i.test(data.sdp);
+        const hasMux = /a=rtcp-mux/i.test(data.sdp);
+        const hasBundle = /a=group:BUNDLE/i.test(data.sdp);
         const profile = (data.sdp.match(/m=audio \d+ ([A-Z/]+)/i) || [])[1];
         console.log('[sip] SDP summary', {
           origin: data.originator,
           profile,
           hasDtlsFingerprint: hasFingerprint,
           hasDtlsSetup: hasSetup,
+          hasMux,
+          hasBundle,
         });
       }
     });
