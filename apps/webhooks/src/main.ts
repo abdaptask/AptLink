@@ -534,6 +534,7 @@ app.post('/webhooks/telnyx/calls', async (request) => {
                 recordingUrl: recordingUrls[0],
                 durationSeconds: Math.max(1, Math.round(durSec)),
                 transcription: payload.transcription_text ?? null,
+                receivedAt: new Date(),
               },
             });
             app.log.info({ recording: recordingUrls[0] }, '[vm] voicemail row created');
