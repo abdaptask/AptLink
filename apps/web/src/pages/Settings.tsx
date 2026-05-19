@@ -20,7 +20,12 @@ import {
   Moon,
   Monitor,
   Palette,
+  UserCircle,
+  Download,
+  Upload,
+  Database,
 } from 'lucide-react';
+import { getMe, updateMe } from '../api';
 import {
   DEFAULT_QUICK_REPLIES,
   getQuickReplies,
@@ -48,12 +53,14 @@ interface SectionDef {
 }
 
 const SECTIONS: SectionDef[] = [
+  { key: 'account', label: 'Account', icon: UserCircle, blurb: 'Name, DID, SIP', Component: AccountSection },
   { key: 'appearance', label: 'Appearance', icon: Palette, blurb: 'Light / dark / system', Component: AppearanceSection },
   { key: 'telnyx', label: 'Telnyx', icon: Phone, blurb: 'SIP credentials', Component: TelnyxSection },
   { key: 'microphone', label: 'Microphone', icon: Mic, blurb: 'Input device', Component: MicrophoneSection },
   { key: 'speaker', label: 'Speaker', icon: Volume2, blurb: 'Output device', Component: SpeakerSection },
   { key: 'notifications', label: 'Notifications', icon: Bell, blurb: 'Calls + SMS alerts', Component: NotificationsSection },
   { key: 'quick-replies', label: 'Quick replies', icon: MessageSquare, blurb: 'SMS templates', Component: QuickRepliesSection },
+  { key: 'data', label: 'Data', icon: Database, blurb: 'Backup & restore', Component: DataSection },
 ];
 
 const DEFAULT_SECTION = SECTIONS[0].key;
@@ -110,6 +117,141 @@ export default function Settings() {
           <ActiveComponent />
         </div>
       </main>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Account — name, email (read-only), DID, SIP username
+// Multi-user routing on the server uses didNumber + sipUsername to figure out
+// which user a webhook event belongs to, so they need to be correct.
+// ---------------------------------------------------------------------------
+interface AccountState {
+  firstName: string;
+  lastName: string;
+  sipUsername: string;
+  didNumber: string;
+  email: string;
+}
+function AccountSection() {
+  const [state, setState] = useState<AccountState | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const token = sessionStorage.getItem('ace_token');
+    if (!token) return;
+    getMe(token)
+      .then((u) =>
+        setState({
+          firstName: u.firstName ?? '',
+          lastName: u.lastName ?? '',
+          sipUsername: u.sipUsername ?? '',
+          didNumber: u.didNumber ?? '',
+          email: u.email,
+        }),
+      )
+      .catch((e: Error) => setError(e.message));
+  }, []);
+
+  async function save() {
+    const token = sessionStorage.getItem('ace_token');
+    if (!token || !state) return;
+    setSaving(true);
+    setError(null);
+    try {
+      const updated = await updateMe(token, {
+        firstName: state.firstName || null,
+        lastName: state.lastName || null,
+        sipUsername: state.sipUsername || null,
+        didNumber: state.didNumber || null,
+      });
+      setState((cur) =>
+        cur
+          ? {
+              ...cur,
+              firstName: updated.firstName ?? '',
+              lastName: updated.lastName ?? '',
+              sipUsername: updated.sipUsername ?? '',
+              didNumber: updated.didNumber ?? '',
+            }
+          : cur,
+      );
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (!state) {
+    return <div className="settings-section">{error ?? 'Loading…'}</div>;
+  }
+
+  return (
+    <div className="settings-section">
+      <p className="settings-blurb">
+        Your profile info. The DID + SIP username route inbound calls and SMS
+        to your account — set these to match your Telnyx setup.
+      </p>
+
+      <div className="cred-grid">
+        <label className="cred-field">
+          <span>Email (read-only)</span>
+          <input type="email" value={state.email} disabled />
+        </label>
+        <label className="cred-field">
+          <span>First name</span>
+          <input
+            type="text"
+            value={state.firstName}
+            onChange={(e) => setState({ ...state, firstName: e.target.value })}
+          />
+        </label>
+        <label className="cred-field">
+          <span>Last name</span>
+          <input
+            type="text"
+            value={state.lastName}
+            onChange={(e) => setState({ ...state, lastName: e.target.value })}
+          />
+        </label>
+        <label className="cred-field">
+          <span>DID (your Telnyx phone number, +E.164)</span>
+          <input
+            type="tel"
+            placeholder="+15555550100"
+            value={state.didNumber}
+            onChange={(e) => setState({ ...state, didNumber: e.target.value })}
+          />
+        </label>
+        <label className="cred-field">
+          <span>SIP username</span>
+          <input
+            type="text"
+            placeholder="ace-dialer-abdulla"
+            autoComplete="off"
+            value={state.sipUsername}
+            onChange={(e) => setState({ ...state, sipUsername: e.target.value })}
+          />
+        </label>
+      </div>
+
+      {error && <div className="error" style={{ marginTop: '0.6rem' }}>{error}</div>}
+
+      <div className="device-actions">
+        <button
+          type="button"
+          className="device-action primary"
+          onClick={save}
+          disabled={saving}
+        >
+          {saving ? 'Saving…' : saved ? '✓ Saved' : 'Save changes'}
+        </button>
+      </div>
     </div>
   );
 }
@@ -393,6 +535,120 @@ function SpeakerSection() {
           <RotateCcw size={14} /> Use system default
         </button>
       </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Data — backup/restore of localStorage preferences
+// Exports every ace_* key as a JSON file. Importing the file restores them
+// (overwriting current values). Useful when switching devices.
+// ---------------------------------------------------------------------------
+function DataSection() {
+  const [status, setStatus] = useState<string | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  function collectPrefs(): Record<string, string> {
+    const out: Record<string, string> = {};
+    for (let i = 0; i < localStorage.length; i += 1) {
+      const k = localStorage.key(i);
+      if (!k || !k.startsWith('ace_')) continue;
+      // Sensitive: skip Telnyx password from the backup file by default.
+      if (k === 'ace_sip_password') continue;
+      const v = localStorage.getItem(k);
+      if (v !== null) out[k] = v;
+    }
+    return out;
+  }
+
+  function exportPrefs() {
+    const prefs = collectPrefs();
+    const payload = {
+      app: 'ace-dialer',
+      exportedAt: new Date().toISOString(),
+      version: 1,
+      prefs,
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `ace-dialer-prefs-${new Date().toISOString().slice(0, 10)}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    setStatus(`Exported ${Object.keys(prefs).length} settings.`);
+    setTimeout(() => setStatus(null), 3000);
+  }
+
+  function triggerImport() {
+    fileRef.current?.click();
+  }
+
+  function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    if (!confirm('Importing will overwrite your current preferences. Continue?')) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const text = reader.result as string;
+        const parsed = JSON.parse(text);
+        const prefs = parsed?.prefs;
+        if (!prefs || typeof prefs !== 'object') {
+          setStatus('That doesn’t look like an ACE Dialer backup file.');
+          return;
+        }
+        let n = 0;
+        for (const [k, v] of Object.entries(prefs)) {
+          if (typeof v === 'string' && k.startsWith('ace_')) {
+            localStorage.setItem(k, v);
+            n += 1;
+          }
+        }
+        // Notify other components that prefs changed.
+        window.dispatchEvent(new CustomEvent('ace:quickRepliesChanged'));
+        window.dispatchEvent(new CustomEvent('ace:notificationPrefsChanged'));
+        window.dispatchEvent(new CustomEvent('ace:themeChanged'));
+        setStatus(`Restored ${n} settings. Reloading…`);
+        setTimeout(() => window.location.reload(), 800);
+      } catch (err) {
+        setStatus((err as Error).message);
+      }
+    };
+    reader.onerror = () => setStatus('Failed to read file.');
+    reader.readAsText(file);
+  }
+
+  return (
+    <div className="settings-section">
+      <p className="settings-blurb">
+        Back up your preferences (notification prefs, quick replies, theme,
+        audio device choices) to a JSON file. Restore them on another device
+        by importing the same file. Your SIP password is excluded for
+        security.
+      </p>
+
+      <input
+        ref={fileRef}
+        type="file"
+        accept="application/json"
+        onChange={handleFile}
+        style={{ display: 'none' }}
+      />
+
+      <div className="device-actions">
+        <button type="button" className="device-action primary" onClick={exportPrefs}>
+          <Download size={14} /> Export preferences
+        </button>
+        <button type="button" className="device-action" onClick={triggerImport}>
+          <Upload size={14} /> Import preferences
+        </button>
+      </div>
+
+      {status && <p className="muted small" style={{ marginTop: '0.6rem' }}>{status}</p>}
     </div>
   );
 }

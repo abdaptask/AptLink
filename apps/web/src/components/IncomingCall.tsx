@@ -8,17 +8,11 @@ import { Phone, PhoneOff } from 'lucide-react';
 import { useSip } from '../contexts/SipContext';
 import { ringtone } from '../services/ringtone';
 import { useJobDivaContact } from '../hooks/useJobDivaContact';
+import { notify } from '../lib/notify';
+import { formatPhone } from '../lib/phone';
 
 function formatNumber(n: string | undefined): string {
-  if (!n) return 'Unknown';
-  const digits = n.replace(/[^\d]/g, '');
-  if (digits.length === 11 && digits.startsWith('1')) {
-    return `(${digits.slice(1, 4)}) ${digits.slice(4, 7)}-${digits.slice(7)}`;
-  }
-  if (digits.length === 10) {
-    return `(${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6)}`;
-  }
-  return n;
+  return formatPhone(n) || 'Unknown';
 }
 
 export default function IncomingCall() {
@@ -42,6 +36,22 @@ export default function IncomingCall() {
   // Call the hook unconditionally (rules of hooks). It's safe with undefined.
   const callerNumber = incoming?.fromNumber ?? incoming?.number;
   const jd = useJobDivaContact(callerNumber);
+
+  // Fire an OS desktop notification when the tab is hidden so users don't miss
+  // calls while the window is in the background. Respects notification prefs.
+  useEffect(() => {
+    if (!incoming) return;
+    const label = jd?.name ?? formatNumber(callerNumber);
+    void notify({
+      title: 'Incoming call',
+      body: label,
+      tag: `incoming-${incoming.callId ?? 'x'}`,
+      prefKey: 'desktopNotification',
+      onClick: () => {
+        navigate('/in-call');
+      },
+    });
+  }, [incoming, jd, callerNumber, navigate]);
 
   if (!incoming) return null;
 

@@ -37,6 +37,64 @@ export function resetQuickReplies(): void {
   window.dispatchEvent(new CustomEvent('ace:quickRepliesChanged'));
 }
 
+// ---------- Favorites (starred contacts) ----------
+export interface FavoriteContact {
+  /** E.164 number (or whatever the user typed). Stored as-is. */
+  phone: string;
+  /** Optional display label. Falls back to JobDiva name / formatted phone. */
+  label?: string | null;
+  /** Timestamp it was starred (used for default sort). */
+  addedAt: string;
+}
+const FAVORITES_KEY = 'ace_favorites';
+
+function normalizeFavoritePhone(phone: string): string {
+  return phone.replace(/[^\d+]/g, '');
+}
+
+export function getFavorites(): FavoriteContact[] {
+  try {
+    const raw = localStorage.getItem(FAVORITES_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((v): v is FavoriteContact => typeof v?.phone === 'string');
+  } catch {
+    return [];
+  }
+}
+function saveFavorites(list: FavoriteContact[]): void {
+  localStorage.setItem(FAVORITES_KEY, JSON.stringify(list));
+  window.dispatchEvent(new CustomEvent('ace:favoritesChanged'));
+}
+
+export function isFavorite(phone: string): boolean {
+  if (!phone) return false;
+  const target = normalizeFavoritePhone(phone);
+  if (!target) return false;
+  return getFavorites().some((f) => normalizeFavoritePhone(f.phone) === target);
+}
+export function addFavorite(phone: string, label?: string | null): void {
+  if (!phone) return;
+  const target = normalizeFavoritePhone(phone);
+  if (!target) return;
+  const list = getFavorites();
+  if (list.some((f) => normalizeFavoritePhone(f.phone) === target)) return;
+  list.push({ phone, label: label ?? null, addedAt: new Date().toISOString() });
+  saveFavorites(list);
+}
+export function removeFavorite(phone: string): void {
+  if (!phone) return;
+  const target = normalizeFavoritePhone(phone);
+  if (!target) return;
+  const list = getFavorites().filter((f) => normalizeFavoritePhone(f.phone) !== target);
+  saveFavorites(list);
+}
+export function toggleFavorite(phone: string, label?: string | null): boolean {
+  if (isFavorite(phone)) { removeFavorite(phone); return false; }
+  addFavorite(phone, label); return true;
+}
+
 // ---------- Theme preference ----------
 export type ThemePref = 'system' | 'light' | 'dark';
 const THEME_KEY = 'ace_theme';

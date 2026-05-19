@@ -70,6 +70,68 @@ export async function authRoutes(app: FastifyInstance) {
       firstName: user.firstName,
       lastName: user.lastName,
       isAdmin: user.isAdmin,
+      sipUsername: user.sipUsername,
+      didNumber: user.didNumber,
     };
+  });
+
+  // PATCH /auth/me — let a user update their own profile fields. Multi-user
+  // routing depends on didNumber + sipUsername being correct, so users can
+  // self-serve from Settings → Account.
+  const UpdateMeSchema = z.object({
+    firstName: z.string().optional(),
+    lastName: z.string().optional(),
+    sipUsername: z.string().optional(),
+    didNumber: z.string().optional(),
+  });
+  app.patch('/auth/me', { onRequest: [app.authenticate] }, async (request: FastifyRequest, reply) => {
+    const jwtUser = request.user as JwtPayload;
+    const parsed = UpdateMeSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: 'Invalid request', details: parsed.error.flatten() });
+    }
+    const updates: Record<string, string | null> = {};
+    const b = parsed.data;
+    if (b.firstName !== undefined)   updates.firstName = b.firstName || null;
+    if (b.lastName !== undefined)    updates.lastName = b.lastName || null;
+    if (b.sipUsername !== undefined) updates.sipUsername = b.sipUsername || null;
+    if (b.didNumber !== undefined) {
+      // Normalize to E.164 — strips whitespace/dashes, adds +1 if it looks like US.
+      const cleaned = b.didNumber.replace(/[^\d+]/g, '');
+      updates.didNumber = cleaned
+        ? cleaned.startsWith('+')
+          ? cleaned
+          : cleaned.length === 11 && cleaned.startsWith('1')
+            ? `+${cleaned}`
+            : cleaned.length === 10
+              ? `+1${cleaned}`
+              : `+${cleaned}`
+        : null;
+    }
+
+    try {
+      const updated = await prisma.user.update({
+        where: { id: jwtUser.sub },
+        data: updates,
+      });
+      return {
+        id: updated.id,
+        email: updated.email,
+        firstName: updated.firstName,
+        lastName: updated.lastName,
+        isAdmin: updated.isAdmin,
+        sipUsername: updated.sipUsername,
+        didNumber: updated.didNumber,
+      };
+    } catch (e) {
+      // Unique constraint violations on sipUsername / didNumber.
+      const msg = e instanceof Error ? e.message : 'update failed';
+      if (/unique/i.test(msg)) {
+        return reply.code(409).send({
+          error: 'A SIP username or DID number is already in use by another account.',
+        });
+      }
+      return reply.code(500).send({ error: msg });
+    }
   });
 }

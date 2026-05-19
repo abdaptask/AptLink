@@ -15,10 +15,16 @@ import {
   ArrowLeftRight,
   Merge,
   Check,
+  SignalHigh,
+  SignalMedium,
+  SignalLow,
+  Signal,
 } from 'lucide-react';
 import { useSip } from '../contexts/SipContext';
 import { ringtone } from '../services/ringtone';
 import { useJobDivaContact } from '../hooks/useJobDivaContact';
+import { formatPhone } from '../lib/phone';
+import type { CallQuality } from '../services/sip';
 
 function formatDuration(seconds: number): string {
   const m = Math.floor(seconds / 60);
@@ -27,15 +33,7 @@ function formatDuration(seconds: number): string {
 }
 
 function formatNumber(n: string | undefined): string {
-  if (!n) return '';
-  const d = n.replace(/[^\d]/g, '');
-  if (d.length === 11 && d.startsWith('1')) {
-    return `(${d.slice(1, 4)}) ${d.slice(4, 7)}-${d.slice(7)}`;
-  }
-  if (d.length === 10) {
-    return `(${d.slice(0, 3)}) ${d.slice(3, 6)}-${d.slice(6)}`;
-  }
-  return n;
+  return formatPhone(n);
 }
 
 const DTMF_KEYS = ['1','2','3','4','5','6','7','8','9','*','0','#'];
@@ -43,6 +41,7 @@ const DTMF_KEYS = ['1','2','3','4','5','6','7','8','9','*','0','#'];
 export default function InCall() {
   const {
     callState,
+    callQuality,
     hangup,
     toggleMute,
     toggleHold,
@@ -169,7 +168,12 @@ export default function InCall() {
 
       <div className="in-call-header">
         <div className="in-call-name">{callerLabel}</div>
-        <div className="in-call-time">{subtitle}</div>
+        <div className="in-call-time">
+          {subtitle}
+          {isConnected && callQuality.level !== 'unknown' && (
+            <QualityIndicator quality={callQuality} />
+          )}
+        </div>
       </div>
 
       {!showKeypad && !showTransfer && (
@@ -359,5 +363,27 @@ function ControlBtn({
       <span className="ic-ctrl-icon">{icon}</span>
       <span className="ic-ctrl-label">{label}</span>
     </button>
+  );
+}
+
+function QualityIndicator({ quality }: { quality: CallQuality }) {
+  const Icon =
+    quality.level === 'good' ? SignalHigh :
+    quality.level === 'fair' ? SignalMedium :
+    quality.level === 'poor' ? SignalLow :
+    Signal;
+  const label =
+    quality.level === 'good' ? 'Good connection' :
+    quality.level === 'fair' ? 'Fair connection' :
+    quality.level === 'poor' ? 'Poor connection' :
+    'Measuring…';
+  const jitterMs = (quality.jitter * 1000).toFixed(0);
+  const lossPct = (quality.loss * 100).toFixed(1);
+  const rttMs = quality.rtt !== null ? (quality.rtt * 1000).toFixed(0) : '—';
+  const title = `${label} · jitter ${jitterMs}ms · loss ${lossPct}% · rtt ${rttMs}ms`;
+  return (
+    <span className={`call-quality call-quality-${quality.level}`} title={title} aria-label={label}>
+      <Icon size={14} />
+    </span>
   );
 }

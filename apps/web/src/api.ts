@@ -9,6 +9,29 @@ export interface User {
   firstName: string | null;
   lastName: string | null;
   isAdmin: boolean;
+  // Phase 5.7 — multi-user. Optional because older API responses don't include them.
+  sipUsername?: string | null;
+  didNumber?: string | null;
+}
+
+export interface UpdateMeInput {
+  firstName?: string | null;
+  lastName?: string | null;
+  sipUsername?: string | null;
+  didNumber?: string | null;
+}
+
+export async function updateMe(token: string, input: UpdateMeInput): Promise<User> {
+  const res = await fetch(`${API_URL}/auth/me`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify(input),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'update failed' }));
+    throw new Error(err.error || `HTTP ${res.status}`);
+  }
+  return res.json();
 }
 
 export interface LoginResponse {

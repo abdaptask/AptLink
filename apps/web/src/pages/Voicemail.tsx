@@ -25,6 +25,7 @@ import {
 } from '../api';
 import { useSip } from '../contexts/SipContext';
 import { useJobDivaContact, getCachedJobDivaName } from '../hooks/useJobDivaContact';
+import { formatPhone } from '../lib/phone';
 
 function formatDuration(seconds: number): string {
   if (!seconds) return '';
@@ -34,12 +35,7 @@ function formatDuration(seconds: number): string {
 }
 
 function formatNumber(raw: string): string {
-  const d = (raw || '').replace(/[^\d+]/g, '');
-  if (!d) return '—';
-  if (d.startsWith('+1') && d.length === 12) {
-    return `(${d.slice(2, 5)}) ${d.slice(5, 8)}-${d.slice(8)}`;
-  }
-  return d;
+  return formatPhone(raw) || '—';
 }
 
 function formatTime(iso: string): string {

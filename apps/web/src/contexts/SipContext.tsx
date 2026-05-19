@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useRef, useState } from 'react';
-import { sipService, type SipState, type CallEvent } from '../services/sip';
+import { sipService, type SipState, type CallEvent, type CallQuality } from '../services/sip';
 import {
   createCall,
   updateCall,
@@ -18,6 +18,7 @@ export interface ServerActionResult {
 interface SipContextValue {
   sipState: SipState;
   callState: CallEvent;
+  callQuality: CallQuality;
   incoming: CallEvent | null;
   /** call_control_id for the active leg, populated by the webhook after connect. */
   activeCallControlId: string | null;
@@ -62,6 +63,7 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
   const [secondCallNumber, setSecondCallNumber] = useState<string | null>(null);
   const [activeCallControlId, setActiveCallControlId] = useState<string | null>(null);
   const [secondCallControlId, setSecondCallControlId] = useState<string | null>(null);
+  const [callQuality, setCallQuality] = useState<CallQuality>({ level: 'unknown', jitter: 0, loss: 0, rtt: null });
   const logRef = useRef<Map<string, CallLogState>>(new Map());
   const rejectedRef = useRef<Set<string>>(new Set());
   const currentIncomingRef = useRef<string | null>(null);
@@ -98,6 +100,7 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
     });
 
     const offState = sipService.on<SipState>('state', (s) => setSipState(s));
+    const offQuality = sipService.on<CallQuality>('quality', (q) => setCallQuality(q));
     const offCall = sipService.on<CallEvent>('call', (e) => {
       if (e.state === 'incoming') {
         setIncoming(e);
@@ -145,6 +148,7 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
     return () => {
       offState();
       offCall();
+      offQuality();
       if (offAccept) offAccept();
       if (offDecline) offDecline();
       sipService.disconnect();
@@ -214,6 +218,7 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
   const value: SipContextValue = {
     sipState,
     callState,
+    callQuality,
     incoming,
     activeCallControlId,
     secondCallControlId,

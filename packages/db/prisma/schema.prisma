@@ -22,6 +22,15 @@ model User {
   phoneExtension  String?   @map("phone_extension")
   sipPassword     String?   @map("sip_password")
   jobDivaUserId   String?   @map("jobdiva_user_id")
+  /// Phase 5.7 (multi-user): the Telnyx SIP credential username this user logs
+  /// into the WebRTC SDK with. Used by the webhook handler to route call
+  /// events back to the right user (matching on the SIP user that initiated
+  /// or received the leg).
+  sipUsername     String?   @unique @map("sip_username")
+  /// Phase 5.7 (multi-user): the DID (E.164 phone number) assigned to this
+  /// user. Used by the webhook handler to route inbound SMS/calls to the
+  /// right user (matching on the called number).
+  didNumber       String?   @unique @map("did_number")
   isAdmin         Boolean   @default(false) @map("is_admin")
   isActive        Boolean   @default(true)  @map("is_active")
   lastLoginAt     DateTime? @map("last_login_at")

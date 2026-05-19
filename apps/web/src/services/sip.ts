@@ -3,6 +3,16 @@ import { TelnyxRTC } from '@telnyx/webrtc';
 
 export type SipState = 'disconnected' | 'connecting' | 'registered' | 'failed';
 export type CallState = 'idle' | 'calling' | 'ringing' | 'connected' | 'ended' | 'incoming';
+export type CallQualityLevel = 'good' | 'fair' | 'poor' | 'unknown';
+export interface CallQuality {
+  level: CallQualityLevel;
+  /** Inbound jitter in seconds (RTCInboundRtpStreamStats.jitter). */
+  jitter: number;
+  /** Loss rate 0–1 over the last sample (computed delta packetsLost / packetsReceived). */
+  loss: number;
+  /** Round-trip time in seconds, if available. */
+  rtt: number | null;
+}
 
 export interface SipConfig {
   username: string;
@@ -53,6 +63,11 @@ export class SipService {
   private callerNumber: string = '';
   private audioEl: HTMLAudioElement;
   private listeners: Map<string, Set<Listener>> = new Map();
+  // Call quality polling — runs every 2s while a call is connected and
+  // computes jitter / packet loss / RTT from the underlying peer connection.
+  private qualityTimer: ReturnType<typeof setInterval> | null = null;
+  private lastPacketsLost = 0;
+  private lastPacketsReceived = 0;
 
   constructor() {
     this.audioEl = document.createElement('audio');
@@ -182,6 +197,7 @@ export class SipService {
             this.audioEl.play().catch(() => {});
             applySpeakerSelection(this.audioEl);
           }
+          this.startQualityPolling();
           break;
         case 'hangup':
         case 'destroy':
@@ -195,8 +211,9 @@ export class SipService {
             this.incomingCall = null;
           }
           if (this.currentCall && this.currentCall.id === call.id) {
-            // Active call ended — reset hold state.
+            // Active call ended — reset hold state + stop quality polling.
             this.heldLocal = false;
+            this.stopQualityPolling();
             // If a held second call exists, promote it to active.
             if (this.secondCall) {
               try {
@@ -483,12 +500,95 @@ export class SipService {
     }
   }
 
+  // ---------- Call quality polling ----------
+  // WebRTC stats are surfaced via the underlying RTCPeerConnection. The
+  // Telnyx SDK exposes it as `call.peer`, `call.rtcPeerConnection`, or via
+  // `call.getStats()` depending on version. We try the most common shapes.
+  private startQualityPolling(): void {
+    this.stopQualityPolling();
+    this.lastPacketsLost = 0;
+    this.lastPacketsReceived = 0;
+    this.qualityTimer = setInterval(() => { void this.pollQualityOnce(); }, 2000);
+    // Fire one immediately so the UI doesn't sit on "unknown" for 2s.
+    void this.pollQualityOnce();
+  }
+  private stopQualityPolling(): void {
+    if (this.qualityTimer) {
+      clearInterval(this.qualityTimer);
+      this.qualityTimer = null;
+    }
+    this.emit<CallQuality>('quality', { level: 'unknown', jitter: 0, loss: 0, rtt: null });
+  }
+  private async pollQualityOnce(): Promise<void> {
+    const call = this.currentCall;
+    if (!call) return;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const c: any = call;
+    let report: RTCStatsReport | null = null;
+    try {
+      // Preferred: SDK exposes a getStats() that returns a Promise<RTCStatsReport>.
+      if (typeof c.getStats === 'function') {
+        report = await c.getStats();
+      } else if (c.peer?.instance?.getStats) {
+        report = await c.peer.instance.getStats();
+      } else if (c.rtcPeerConnection?.getStats) {
+        report = await c.rtcPeerConnection.getStats();
+      } else if (c.peer?.getStats) {
+        report = await c.peer.getStats();
+      }
+    } catch (e) {
+      // Don't spam — fall back to unknown quality.
+      console.debug('[sip] getStats failed', e);
+    }
+    if (!report) return;
+
+    let jitter = 0;
+    let packetsLost = 0;
+    let packetsReceived = 0;
+    let rtt: number | null = null;
+    report.forEach((s) => {
+      // Inbound audio quality
+      if (s.type === 'inbound-rtp' && (s.kind === 'audio' || (s as { mediaType?: string }).mediaType === 'audio')) {
+        const r = s as { jitter?: number; packetsLost?: number; packetsReceived?: number };
+        if (typeof r.jitter === 'number') jitter = Math.max(jitter, r.jitter);
+        if (typeof r.packetsLost === 'number') packetsLost = Math.max(packetsLost, r.packetsLost);
+        if (typeof r.packetsReceived === 'number') packetsReceived = Math.max(packetsReceived, r.packetsReceived);
+      }
+      // ICE RTT
+      if (s.type === 'candidate-pair' && (s as { state?: string }).state === 'succeeded') {
+        const r = s as { currentRoundTripTime?: number };
+        if (typeof r.currentRoundTripTime === 'number') rtt = r.currentRoundTripTime;
+      }
+    });
+
+    // Compute loss rate over this sampling interval.
+    const dLost = Math.max(0, packetsLost - this.lastPacketsLost);
+    const dRecv = Math.max(0, packetsReceived - this.lastPacketsReceived);
+    const loss = dRecv + dLost > 0 ? dLost / (dRecv + dLost) : 0;
+    this.lastPacketsLost = packetsLost;
+    this.lastPacketsReceived = packetsReceived;
+
+    // Bucket into good/fair/poor. Thresholds based on typical VoIP guidance:
+    //   - Jitter <30 ms = good, <60 ms = fair, else poor
+    //   - Loss   <1%    = good, <5%    = fair, else poor
+    //   - RTT    <200ms = good, <400ms = fair, else poor
+    const jms = jitter * 1000;
+    const lossPct = loss * 100;
+    const rttMs = rtt !== null ? rtt * 1000 : 0;
+    let level: CallQualityLevel = 'good';
+    if (jms >= 60 || lossPct >= 5 || (rtt !== null && rttMs >= 400)) level = 'poor';
+    else if (jms >= 30 || lossPct >= 1 || (rtt !== null && rttMs >= 200)) level = 'fair';
+
+    this.emit<CallQuality>('quality', { level, jitter, loss, rtt });
+  }
+
   disconnect(): void {
     this.hangup();
     this.declineCall();
     if (this.secondCall && typeof this.secondCall.hangup === 'function') {
       try { this.secondCall.hangup(); } catch { /* noop */ }
     }
+    this.stopQualityPolling();
     this.client?.disconnect();
     this.client = null;
     this.currentCall = null;

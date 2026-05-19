@@ -2,7 +2,7 @@
 // thread list on the left (or full screen on narrow), thread detail on the right.
 import { useEffect, useState, useCallback, useRef, useMemo } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Send, ArrowLeft, RefreshCcw, MessageSquarePlus, Image as ImageIcon, Search, X, Zap, Phone, History } from 'lucide-react';
+import { Send, ArrowLeft, RefreshCcw, MessageSquarePlus, Image as ImageIcon, Search, X, Zap, Phone, History, Star } from 'lucide-react';
 import {
   getThreads,
   getThread,
@@ -16,14 +16,11 @@ import {
 } from '../api';
 import { useJobDivaContact, getCachedJobDivaName } from '../hooks/useJobDivaContact';
 import { useSip } from '../contexts/SipContext';
-import { getQuickReplies } from '../lib/userPrefs';
+import { getQuickReplies, isFavorite, toggleFavorite } from '../lib/userPrefs';
+import { formatPhone } from '../lib/phone';
 
 function formatNumber(raw: string): string {
-  const d = (raw || '').replace(/[^\d+]/g, '');
-  if (d.startsWith('+1') && d.length === 12) {
-    return `(${d.slice(2, 5)}) ${d.slice(5, 8)}-${d.slice(8)}`;
-  }
-  return d;
+  return formatPhone(raw);
 }
 
 function formatRelative(iso: string): string {
@@ -261,6 +258,15 @@ function ThreadDetail({ number, onBack }: ThreadDetailProps) {
     navigate('/in-call');
   }
 
+  // Favorite state for this thread's contact.
+  const [favorited, setFavorited] = useState<boolean>(() => isFavorite(number));
+  useEffect(() => { setFavorited(isFavorite(number)); }, [number]);
+  function handleToggleFav() {
+    const name = jd?.name ?? null;
+    const next = toggleFavorite(number, name);
+    setFavorited(next);
+  }
+
   const load = useCallback(() => {
     const token = sessionStorage.getItem('ace_token');
     if (!token) return;
@@ -343,6 +349,14 @@ function ThreadDetail({ number, onBack }: ThreadDetailProps) {
             <span className="thread-header-sub">{formatNumber(number)}</span>
           )}
         </div>
+        <button
+          className={`icon-btn thread-fav-btn ${favorited ? 'active' : ''}`}
+          onClick={handleToggleFav}
+          aria-label={favorited ? 'Remove from favorites' : 'Add to favorites'}
+          title={favorited ? 'Remove from favorites' : 'Add to favorites'}
+        >
+          <Star size={18} fill={favorited ? 'currentColor' : 'none'} />
+        </button>
         <button
           className="icon-btn thread-call-btn"
           onClick={handleCall}

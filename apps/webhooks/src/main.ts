@@ -8,6 +8,56 @@ const SERVICE_NAME = 'ace-dialer-webhooks';
 const START_TIME = new Date().toISOString();
 const TELNYX_API_KEY = process.env.TELNYX_API_KEY ?? '';
 
+// Phase 5.7 — multi-user routing.
+// PILOT_USER_ID is the fallback when we can't match a webhook event to a
+// specific user (e.g. SMS to a number not assigned to anyone yet). Existing
+// data shouldn't break.
+const FALLBACK_USER_ID = Number(process.env.PILOT_USER_ID ?? 1);
+
+// Normalize a phone for matching across stored formats. Compare on last-10.
+function last10(p: string | undefined | null): string {
+  return (p ?? '').replace(/[^\d]/g, '').slice(-10);
+}
+
+/**
+ * Find which user this webhook event belongs to. Strategy:
+ *   - If we have a SIP username (Telnyx puts it in sip_username for SIP
+ *     events), match users.sip_username.
+ *   - Otherwise compare last-10 of the candidate phone numbers (from / to)
+ *     against users.did_number. Whichever side matches a known DID is the
+ *     owner.
+ *   - Fall back to FALLBACK_USER_ID if nothing matches.
+ */
+async function resolveUserId(opts: {
+  sipUsername?: string | null;
+  fromNumber?: string | null;
+  toNumber?: string | null;
+}): Promise<number> {
+  // 1. SIP username (exact match)
+  if (opts.sipUsername) {
+    const u = await prisma.user.findFirst({
+      where: { sipUsername: opts.sipUsername },
+      select: { id: true },
+    });
+    if (u) return u.id;
+  }
+  // 2. DID match — last10 digits of either from or to.
+  const candidates = [opts.toNumber, opts.fromNumber]
+    .map(last10)
+    .filter((d) => d.length === 10);
+  if (candidates.length > 0) {
+    const allUsersWithDid = await prisma.user.findMany({
+      where: { didNumber: { not: null } },
+      select: { id: true, didNumber: true },
+    });
+    for (const c of candidates) {
+      const match = allUsersWithDid.find((u) => last10(u.didNumber) === c);
+      if (match) return match.id;
+    }
+  }
+  return FALLBACK_USER_ID;
+}
+
 // Decode the client_state Telnyx echoes back on every call event. We use it
 // to carry "what to do when this leg answers" instructions:
 //   - bridgeTo   (legacy 2-leg bridge — still supported as fallback)
@@ -74,8 +124,9 @@ async function joinConference(
   return { ok: res.ok, status: res.status, ...(res.ok ? {} : { error: body }) };
 }
 
-// Phase 5: pilot has one user. Hardcoded until multi-user support lands.
-const PILOT_USER_ID = 1;
+// Phase 5.7 — multi-user. PILOT_NUMBER is the fallback DID used for inbound
+// voicemails when we can't resolve a user. New users get their own DID via
+// users.did_number → the resolveUserId() helper above routes events.
 const PILOT_NUMBER = process.env.PILOT_TELNYX_NUMBER ?? '+17322001305';
 
 const app = Fastify({
@@ -146,6 +197,11 @@ app.post('/webhooks/telnyx/calls', async (request) => {
 
     switch (event.event_type) {
       case 'call.initiated': {
+        const ownerUserId = await resolveUserId({
+          sipUsername: payload.sip_username ?? payload.client_username ?? null,
+          fromNumber,
+          toNumber,
+        });
         await prisma.call.upsert({
           where: { telnyxCallId: callId },
           update: {
@@ -153,7 +209,7 @@ app.post('/webhooks/telnyx/calls', async (request) => {
             ...(callControlId ? { callControlId } : {}),
           },
           create: {
-            userId: PILOT_USER_ID,
+            userId: ownerUserId,
             telnyxCallId: callId,
             sessionId: payload.call_session_id ?? null,
             callControlId: callControlId ?? null,
@@ -233,9 +289,14 @@ app.post('/webhooks/telnyx/calls', async (request) => {
           },
         });
         if (updated.count === 0 && startedAt) {
+          const ownerUserId = await resolveUserId({
+            sipUsername: payload.sip_username ?? payload.client_username ?? null,
+            fromNumber,
+            toNumber,
+          });
           await prisma.call.create({
             data: {
-              userId: PILOT_USER_ID,
+              userId: ownerUserId,
               telnyxCallId: callId,
               sessionId: payload.call_session_id ?? null,
               direction,
@@ -317,13 +378,15 @@ app.post('/webhooks/telnyx/sms', async (request) => {
 
     switch (eventType) {
       case 'message.received': {
-        // Inbound: from = the PSTN caller, to = our DID.
+        // Inbound: from = the PSTN caller, to = our DID. Route to whichever
+        // user owns this DID (Phase 5.7 multi-user).
         const threadKey = fromNumber; // the other party
+        const ownerUserId = await resolveUserId({ toNumber, fromNumber });
         await prisma.message.upsert({
           where: { telnyxMessageId },
           update: { status: 'received' },
           create: {
-            userId: PILOT_USER_ID,
+            userId: ownerUserId,
             telnyxMessageId,
             threadKey,
             direction: 'inbound',
@@ -523,9 +586,11 @@ app.post('/webhooks/telnyx/voicemail', async (request) => {
       return { received: true };
     }
 
+    // Phase 5.7 — route the voicemail to the user that owns the called DID.
+    const ownerUserId = await resolveUserId({ toNumber, fromNumber });
     await prisma.voicemail.create({
       data: {
-        userId: PILOT_USER_ID,
+        userId: ownerUserId,
         telnyxCallId: telnyxCallId ?? null,
         fromNumber,
         toNumber: toNumber ?? PILOT_NUMBER,
