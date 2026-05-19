@@ -199,9 +199,13 @@ export class SipService {
       password: config.password,
       // Identity for outgoing INVITEs — Telnyx uses this for the From header.
       display_name: 'ACE Dialer',
-      // Re-register every 5 minutes to keep the SIP registration warm.
+      // Re-register every 60 seconds. Browsers throttle background-tab
+      // timers heavily after ~5 minutes, so a longer expiry means the
+      // refresh can be missed and Telnyx silently drops our registration.
+      // 60s is short enough to keep the registration alive across most
+      // throttling windows, and inexpensive (a single SIP REGISTER message).
       register: true,
-      register_expires: 300,
+      register_expires: 60,
       // IMPORTANT: session_timers MUST be false for Telnyx. With it on,
       // JsSIP sends re-INVITE/UPDATE every ~90s and Telnyx 481s the call
       // (no matching dialog) which then teardown the call. Off = the call
@@ -244,6 +248,43 @@ export class SipService {
 
     this.emit<SipState>('state', 'connecting');
     this.ua.start();
+
+    // Recover from background-tab throttling.
+    // When the tab becomes visible again, check the SIP UA state and force
+    // a re-register if it's drifted offline. Without this, the dialer
+    // silently fails to receive inbound calls after sitting in a background
+    // tab for a few minutes — because the registration timer was throttled
+    // and Telnyx dropped the registration server-side.
+    this.installVisibilityRecovery();
+  }
+
+  private visibilityHandler: (() => void) | null = null;
+  private installVisibilityRecovery(): void {
+    // Idempotent — don't double-attach if connect() is ever called twice.
+    if (this.visibilityHandler) return;
+    this.visibilityHandler = () => {
+      if (typeof document === 'undefined' || document.visibilityState !== 'visible') return;
+      if (!this.ua) return;
+      try {
+        const isRegistered = this.ua.isRegistered?.() ?? false;
+        const isConnected = this.ua.isConnected?.() ?? false;
+        console.log('[sip] visibility=visible — connected:', isConnected, 'registered:', isRegistered);
+        if (!isConnected) {
+          // WebSocket got torn down. JsSIP's auto-reconnect should kick in,
+          // but we nudge it just in case.
+          try { this.ua.start(); } catch (e) { console.warn('[sip] visibility ua.start threw', e); }
+        } else if (!isRegistered) {
+          // Socket alive, but registration lapsed. Force a new REGISTER.
+          try { this.ua.register(); } catch (e) { console.warn('[sip] visibility register threw', e); }
+        }
+      } catch (e) {
+        console.warn('[sip] visibility handler error', e);
+      }
+    };
+    document.addEventListener('visibilitychange', this.visibilityHandler);
+    // Also fire on `focus` for good measure — some browsers don't always
+    // emit visibilitychange when alt-tabbing to the window.
+    window.addEventListener('focus', this.visibilityHandler);
   }
 
   // ---------- Call lifecycle (outbound / inbound common path) ----------
