@@ -8,7 +8,7 @@
   "scripts": {
     "build": "tsc",
     "generate": "prisma generate",
-    "db:push": "prisma db push",
+    "db:push": "prisma db push --accept-data-loss",
     "db:studio": "prisma studio",
     "seed": "tsx --env-file=../../.env prisma/seed.ts"
   },
