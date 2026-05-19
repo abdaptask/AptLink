@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { Phone, Delete } from 'lucide-react';
+import { AsYouType } from 'libphonenumber-js/min';
 import { useSip } from '../contexts/SipContext';
 
 interface DialpadLocationState {
@@ -24,17 +25,28 @@ const KEYS: Array<{ digit: string; letters?: string }> = [
 
 const ALLOWED_KEYS = new Set(['0','1','2','3','4','5','6','7','8','9','*','#','+']);
 
+// Default country prefix shown on first load — users typically dial US numbers.
+// Backspace can still erase past this; Esc resets to it.
+const DEFAULT_PREFIX = '+1';
+
+// Progressive phone number formatter using libphonenumber-js's AsYouType.
+// Handles "+1 (973) 727-0611", "+44 20 1234 5678", etc. — formats as you type.
 function formatNumber(raw: string): string {
-  const d = raw.replace(/[^\d*#+]/g, '');
-  if (d.length === 0) return '';
-  if (d.length <= 3) return d;
-  if (d.length <= 6) return `${d.slice(0, 3)} ${d.slice(3)}`;
-  if (d.length <= 10) return `${d.slice(0, 3)} ${d.slice(3, 6)} ${d.slice(6)}`;
-  return `+${d.slice(0, d.length - 10)} ${d.slice(-10, -7)} ${d.slice(-7, -4)} ${d.slice(-4)}`;
+  const cleaned = raw.replace(/[^\d*#+]/g, '');
+  if (cleaned.length === 0) return '';
+  // Allow DTMF chars (* #) only when typed alone; AsYouType drops them.
+  if (cleaned === '*' || cleaned === '#' || /^[*#]+$/.test(cleaned)) return cleaned;
+  try {
+    const fmt = new AsYouType('US');
+    const out = fmt.input(cleaned);
+    return out || cleaned;
+  } catch {
+    return cleaned;
+  }
 }
 
 export default function Dialpad() {
-  const [number, setNumber] = useState('');
+  const [number, setNumber] = useState(DEFAULT_PREFIX);
   const { sipState, callState, call, addCall } = useSip();
   const navigate = useNavigate();
   const location = useLocation();
@@ -53,10 +65,15 @@ export default function Dialpad() {
 
   const append = useCallback((d: string) => setNumber((n) => n + d), []);
   const backspace = useCallback(() => setNumber((n) => n.slice(0, -1)), []);
-  const clear = useCallback(() => setNumber(''), []);
+  // Esc resets to the country-code prefix so users don't have to retype "+1"
+  // every time. Use long-press / repeated backspace to wipe completely.
+  const clear = useCallback(() => setNumber(DEFAULT_PREFIX), []);
+
+  // Treat "+1" (or just "+") alone as no number entered.
+  const hasDialableInput = number.replace(/[^\d]/g, '').length > 0 && number !== DEFAULT_PREFIX;
 
   const handleCall = useCallback(async () => {
-    if (!number) return;
+    if (!hasDialableInput) return;
     if (sipState !== 'registered') {
       alert(`Can't call yet — SIP state: ${sipState}. Wait for "Registered" badge above keypad.`);
       return;
@@ -79,7 +96,7 @@ export default function Dialpad() {
       call(number);
     }
     navigate('/in-call');
-  }, [number, sipState, isAddCall, call, addCall, navigate]);
+  }, [number, hasDialableInput, sipState, isAddCall, call, addCall, navigate]);
 
   // Keyboard input — listen at the document level so the dialpad is "always focused".
   useEffect(() => {
@@ -174,10 +191,25 @@ export default function Dialpad() {
         </div>
       )}
 
-      <div className={statusClass}>{statusLabel}</div>
+      <div className="dialpad-top">
+        <div className={statusClass}>{statusLabel}</div>
+        <div className="keyboard-hint top">
+          Type digits with your keyboard · Enter to call · Backspace to delete · Esc to clear
+        </div>
+      </div>
 
-      <div className="number-display" aria-live="polite">
-        {formatNumber(number) || ' '}
+      <div
+        className={`number-display ${number === DEFAULT_PREFIX || !number ? 'empty' : ''}`}
+        aria-live="polite"
+      >
+        {number === DEFAULT_PREFIX || !number ? (
+          <>
+            <span className="number-display-prefix">+1</span>
+            <span className="number-display-placeholder">(000) 000-0000</span>
+          </>
+        ) : (
+          formatNumber(number)
+        )}
       </div>
 
       <div className="keypad">
@@ -200,12 +232,12 @@ export default function Dialpad() {
           type="button"
           className="call-btn"
           onClick={handleCall}
-          disabled={!number || sipState !== 'registered'}
+          disabled={!hasDialableInput || sipState !== 'registered'}
           aria-label="Call"
         >
           <Phone size={32} strokeWidth={2} fill="white" />
         </button>
-        {number && (
+        {hasDialableInput && (
           <button
             type="button"
             className="backspace-btn"
@@ -215,10 +247,6 @@ export default function Dialpad() {
             <Delete size={26} />
           </button>
         )}
-      </div>
-
-      <div className="keyboard-hint">
-        Type digits with your keyboard · Enter to call · Backspace to delete · Esc to clear
       </div>
     </div>
   );

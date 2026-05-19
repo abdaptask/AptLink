@@ -372,16 +372,50 @@ body {
   justify-content: flex-end;
   min-height: 100%;
 }
+/* ============ DIALPAD TOP STRIP (hint + status) ============ */
+.dialpad-top {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding-top: 0.4rem;
+}
+.keyboard-hint.top {
+  margin-top: 0;
+  padding-bottom: 0;
+  font-size: 0.68rem;
+  text-align: center;
+  color: rgba(255, 255, 255, 0.4);
+  letter-spacing: 0.01em;
+}
+
 .number-display {
-  font-size: 2.6rem;
+  font-size: 2.4rem;
   font-weight: 300;
   text-align: center;
-  padding: 2.5rem 0 2rem;
-  min-height: 6rem;
+  padding: 1.5rem 0 1.5rem;
+  min-height: 5rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
   letter-spacing: 0.02em;
   color: #fff;
   word-break: break-all;
 }
+.number-display.empty { color: rgba(255, 255, 255, 0.35); }
+.number-display-prefix {
+  color: #34c759;
+  font-weight: 500;
+  font-size: 0.85em;
+  padding: 0.15em 0.55em;
+  border-radius: 999px;
+  background: rgba(52, 199, 89, 0.15);
+  letter-spacing: 0.02em;
+}
+.number-display-placeholder { color: rgba(255, 255, 255, 0.3); font-style: normal; }
+[data-theme="light"] .number-display-placeholder { color: rgba(60, 60, 67, 0.4); }
+[data-theme="light"] .number-display.empty { color: var(--text-muted); }
 .keypad {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
