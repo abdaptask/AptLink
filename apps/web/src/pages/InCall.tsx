@@ -153,46 +153,74 @@ export default function InCall() {
 
   return (
     <div className="in-call">
-      {hasSecondCall && (
-        <div className="held-line-strip">
-          <button
-            type="button"
-            className="held-line-main"
-            onClick={() => swapCalls()}
-            title="Tap to switch to this call"
-          >
-            <span className="held-tag">On hold</span>
-            <span className="held-num">{formatNumber(secondCallNumber ?? undefined)}</span>
-            <span className="held-swap">
-              <ArrowLeftRight size={14} /> Swap
-            </span>
-          </button>
-          <button
-            type="button"
-            className="held-line-hangup"
-            onClick={() => {
-              if (secondCallId) {
-                hangupCall(secondCallId);
-                showToast('Ended held call');
-              }
-            }}
-            title="End the held call"
-            aria-label="End held call"
-          >
-            <PhoneOff size={16} />
-          </button>
+      {hasSecondCall ? (
+        // Two-call mode: show BOTH calls as matching pill cards so the user
+        // sees each number, knows which is active vs held, and can end either
+        // independently. Tap the held card to swap.
+        <div className="calls-strip">
+          <div className="call-pill active">
+            <div className="call-pill-info">
+              <span className="call-pill-tag">Active</span>
+              <span className="call-pill-num">{callerLabel}</span>
+              <span className="call-pill-status">
+                {subtitle}
+                {isConnected && callQuality.level !== 'unknown' && (
+                  <QualityIndicator quality={callQuality} />
+                )}
+              </span>
+            </div>
+            <button
+              type="button"
+              className="call-pill-end"
+              onClick={hangup}
+              title="End the active call"
+              aria-label="End active call"
+            >
+              <PhoneOff size={16} />
+            </button>
+          </div>
+          <div className="call-pill held">
+            <button
+              type="button"
+              className="call-pill-info call-pill-tap"
+              onClick={() => swapCalls()}
+              title="Tap to swap to this call"
+            >
+              <span className="call-pill-tag">On hold</span>
+              <span className="call-pill-num">
+                {formatNumber(secondCallNumber ?? undefined)}
+              </span>
+              <span className="call-pill-status">
+                <ArrowLeftRight size={12} /> Tap to swap
+              </span>
+            </button>
+            <button
+              type="button"
+              className="call-pill-end"
+              onClick={() => {
+                if (secondCallId) {
+                  hangupCall(secondCallId);
+                  showToast('Ended held call');
+                }
+              }}
+              title="End the held call"
+              aria-label="End held call"
+            >
+              <PhoneOff size={16} />
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="in-call-header">
+          <div className="in-call-name">{callerLabel}</div>
+          <div className="in-call-time">
+            {subtitle}
+            {isConnected && callQuality.level !== 'unknown' && (
+              <QualityIndicator quality={callQuality} />
+            )}
+          </div>
         </div>
       )}
-
-      <div className="in-call-header">
-        <div className="in-call-name">{callerLabel}</div>
-        <div className="in-call-time">
-          {subtitle}
-          {isConnected && callQuality.level !== 'unknown' && (
-            <QualityIndicator quality={callQuality} />
-          )}
-        </div>
-      </div>
 
       {!showKeypad && !showTransfer && (
         <div className="in-call-grid">

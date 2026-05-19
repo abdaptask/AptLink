@@ -326,6 +326,12 @@ export class SipService {
 
     // Outbound call lifecycle
     if (direction === 'outbound') {
+      // CRITICAL for Add Call: promote this new session to active BEFORE
+      // emitting 'calling' so SipContext's "ignore non-active events" filter
+      // lets this event through. Without this, the 2nd call's calling/ringing
+      // states never reach the UI (and the ringback hook never fires).
+      // Any pre-existing call has already been held by addCall() above.
+      this.activeCallId = callId;
       this.emit<CallEvent>('call', this.buildEvent(entry, 'calling'));
     } else {
       // Inbound: park this call as the "incoming" until user accepts/declines.
@@ -593,7 +599,10 @@ export class SipService {
   /** Start a second concurrent call — used by Add Call. */
   addCall(rawNumber: string): void {
     if (!this.ua) throw new Error('SIP not connected');
-    // Hold the currently active call before starting a new one.
+    // Hold the currently active call before starting a new one. While held,
+    // mute its per-call <audio> element AND the primary audio element so we
+    // don't get "audio in a pipe" — phantom RTP from the held leg playing
+    // underneath the new call's ringback.
     const current = this.activeCallId ? this.calls.get(this.activeCallId) : null;
     if (current) {
       try {
@@ -602,6 +611,9 @@ export class SipService {
       } catch (e) {
         console.warn('[sip] hold for addCall failed', e);
       }
+      if (current.audioEl) current.audioEl.muted = true;
+      // Clear primary so we don't keep playing the held leg's stream.
+      this.primaryAudioEl.srcObject = null;
     }
     this.call(rawNumber);
   }
@@ -621,6 +633,8 @@ export class SipService {
       } catch (e) {
         console.warn('[sip] swap hold failed', e);
       }
+      // Mute the now-held call so only the unhold-side is audible.
+      if (current.audioEl) current.audioEl.muted = true;
     }
     if (next) {
       try {
@@ -630,7 +644,12 @@ export class SipService {
         console.warn('[sip] swap unhold failed', e);
       }
       this.activeCallId = next.id;
-      if (next.audioEl) this.primaryAudioEl.srcObject = next.audioEl.srcObject;
+      // Unmute the now-active call's per-call element and route its stream
+      // to the primary speaker.
+      if (next.audioEl) {
+        next.audioEl.muted = false;
+        this.primaryAudioEl.srcObject = next.audioEl.srcObject;
+      }
       // Emit a 'call' event for the now-active session so the UI's callState
       // reflects the swap (number, direction, etc. all update).
       this.emit<CallEvent>('call', this.buildEvent(next, 'connected'));
