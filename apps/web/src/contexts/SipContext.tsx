@@ -55,6 +55,10 @@ interface SipContextValue {
   conferenceOtherNumber: string | null;
   /** Session id of the second participant during conference. */
   conferenceOtherId: string | null;
+  /** Mute or unmute a specific participant in the active conference. */
+  toggleConferenceParticipantMute: (callId: string) => boolean;
+  /** Returns true if the given participant is currently muted. */
+  isConferenceParticipantMuted: (callId: string) => boolean;
   // Audio device selection
   listAudioOutputs: () => Promise<MediaDeviceInfo[]>;
   setAudioOutput: (deviceId: string) => Promise<void>;
@@ -379,6 +383,17 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
     conferenceActive,
     conferenceOtherNumber,
     conferenceOtherId,
+    toggleConferenceParticipantMute: (callId: string) => {
+      const wasMuted = sipService.isConferenceParticipantMuted(callId);
+      if (wasMuted) {
+        sipService.unmuteConferenceParticipant(callId);
+      } else {
+        sipService.muteConferenceParticipant(callId);
+      }
+      return !wasMuted;
+    },
+    isConferenceParticipantMuted: (callId: string) =>
+      sipService.isConferenceParticipantMuted(callId),
   };
 
   return <SipContext.Provider value={value}>{children}</SipContext.Provider>;

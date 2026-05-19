@@ -2984,6 +2984,31 @@ button.call-pill-info:hover { background: rgba(255, 255, 255, 0.05); }
 }
 .call-pill-end:hover { background: rgba(255, 59, 48, 0.35); color: #fff; }
 .call-pill-end:active { background: rgba(255, 59, 48, 0.5); }
+/* Mute control inside a conference pill. Slate gray when off, blue when
+   muted so it's obvious which participant is silenced. */
+.call-pill-mute {
+  flex: 0 0 auto;
+  background: rgba(255, 255, 255, 0.08);
+  border: none;
+  border-left: 1px solid rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.85);
+  width: 48px;
+  align-self: stretch;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+.call-pill-mute:hover { background: rgba(255, 255, 255, 0.16); color: #fff; }
+.call-pill-mute.active {
+  background: rgba(255, 159, 10, 0.22);
+  color: #ff9f0a;
+}
+.call-pill-mute.active:hover { background: rgba(255, 159, 10, 0.35); }
+/* Visual cue on the whole pill when this participant is muted. */
+.call-pill.p-muted .call-pill-num { color: rgba(255, 255, 255, 0.6); }
+.call-pill.p-muted .call-pill-tag { color: #ff9f0a; }
 
 /* Phase 5.4 — held line strip shown above in-call header when a second call exists */
 /* Held-call strip becomes a two-button row: a Swap action on the left, a

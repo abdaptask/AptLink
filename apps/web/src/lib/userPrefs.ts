@@ -41,8 +41,13 @@ export function resetQuickReplies(): void {
 export interface FavoriteContact {
   /** E.164 number (or whatever the user typed). Stored as-is. */
   phone: string;
-  /** Optional display label. Falls back to JobDiva name / formatted phone. */
+  /** Optional display label. Computed from firstName+lastName when those are
+   *  set; falls back to JobDiva name / formatted phone otherwise. */
   label?: string | null;
+  /** Contact first name (entered by the user when adding). */
+  firstName?: string | null;
+  /** Contact last name (entered by the user when adding). */
+  lastName?: string | null;
   /** Timestamp it was starred (used for default sort). */
   addedAt: string;
 }
@@ -74,13 +79,36 @@ export function isFavorite(phone: string): boolean {
   if (!target) return false;
   return getFavorites().some((f) => normalizeFavoritePhone(f.phone) === target);
 }
-export function addFavorite(phone: string, label?: string | null): void {
+export interface AddFavoriteOptions {
+  /** Optional display label override. If not provided, we build one from
+   *  firstName + lastName, or fall back to JobDiva / formatted phone. */
+  label?: string | null;
+  firstName?: string | null;
+  lastName?: string | null;
+}
+export function addFavorite(phone: string, opts?: AddFavoriteOptions | string | null): void {
   if (!phone) return;
   const target = normalizeFavoritePhone(phone);
   if (!target) return;
+  // Back-compat: callers used to pass a plain label string as 2nd arg.
+  const options: AddFavoriteOptions =
+    typeof opts === 'string' || opts == null
+      ? { label: opts ?? null }
+      : opts;
   const list = getFavorites();
   if (list.some((f) => normalizeFavoritePhone(f.phone) === target)) return;
-  list.push({ phone, label: label ?? null, addedAt: new Date().toISOString() });
+  // Synthesize label from name parts if user didn't pass one explicitly.
+  const nameJoined = [options.firstName, options.lastName]
+    .map((p) => (p ?? '').trim())
+    .filter(Boolean)
+    .join(' ');
+  list.push({
+    phone,
+    label: options.label ?? (nameJoined || null),
+    firstName: options.firstName ?? null,
+    lastName: options.lastName ?? null,
+    addedAt: new Date().toISOString(),
+  });
   saveFavorites(list);
 }
 export function removeFavorite(phone: string): void {
@@ -93,6 +121,23 @@ export function removeFavorite(phone: string): void {
 export function toggleFavorite(phone: string, label?: string | null): boolean {
   if (isFavorite(phone)) { removeFavorite(phone); return false; }
   addFavorite(phone, label); return true;
+}
+/** Update first/last name (and derived label) for an existing favorite. */
+export function updateFavoriteName(phone: string, firstName: string, lastName: string): void {
+  if (!phone) return;
+  const target = normalizeFavoritePhone(phone);
+  if (!target) return;
+  const list = getFavorites();
+  const idx = list.findIndex((f) => normalizeFavoritePhone(f.phone) === target);
+  if (idx === -1) return;
+  const joined = [firstName, lastName].map((p) => p.trim()).filter(Boolean).join(' ');
+  list[idx] = {
+    ...list[idx],
+    firstName: firstName.trim() || null,
+    lastName: lastName.trim() || null,
+    label: joined || null,
+  };
+  saveFavorites(list);
 }
 
 // ---------- Hold music ----------

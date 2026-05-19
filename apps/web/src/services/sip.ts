@@ -852,6 +852,20 @@ export class SipService {
   private conferenceCtx: AudioContext | null = null;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private conferenceMic: MediaStream | null = null;
+  /** Per-participant audio graph state — used by mute/unmute. We keep
+   *  references so we can disconnect/reconnect a participant's source from
+   *  the speaker and from every other call's outgoing destination, hiding
+   *  their voice from everyone in the conference. */
+  private conferenceParticipants: Map<
+    string,
+    {
+      sourceNode: MediaStreamAudioSourceNode;
+      // Outgoing destinations of all OTHER participants — disconnect these
+      // to silence this participant for everyone else.
+      otherDests: MediaStreamAudioDestinationNode[];
+      muted: boolean;
+    }
+  > = new Map();
 
   startConference(): boolean {
     if (this.calls.size < 2) {
@@ -926,13 +940,23 @@ export class SipService {
           //   (b) every OTHER call's outgoing destination
           // Speakers: we use a single AudioDestinationNode (ctx.destination)
           // so all remotes mix into the user's audio output.
+          this.conferenceParticipants.clear();
           for (const rs of remoteSources) {
             rs.node.connect(ctx.destination); // user hears this call
+            const otherDests: MediaStreamAudioDestinationNode[] = [];
             for (const [otherId, dest] of outgoingDests) {
               if (otherId !== rs.entry.id) {
                 rs.node.connect(dest); // other party hears this call
+                otherDests.push(dest);
               }
             }
+            // Track so mute/unmute can disconnect/reconnect this participant
+            // from every "outbound to others" path plus the speaker.
+            this.conferenceParticipants.set(rs.entry.id, {
+              sourceNode: rs.node,
+              otherDests,
+              muted: false,
+            });
           }
 
           // Replace each call's outgoing audio track with its mixed
@@ -960,12 +984,57 @@ export class SipService {
     }
   }
 
+  /**
+   * Mute a participant in an active conference. After muting, neither the
+   * user nor any other party can hear this person, but they still hear
+   * everyone (their inbound track is untouched). Returns true if state
+   * changed, false otherwise (e.g., not in conference or unknown id).
+   */
+  muteConferenceParticipant(callId: string): boolean {
+    const p = this.conferenceParticipants.get(callId);
+    if (!p || p.muted) return false;
+    const ctx = this.conferenceCtx;
+    if (!ctx) return false;
+    try {
+      // Disconnect from speaker so we don't hear them.
+      p.sourceNode.disconnect(ctx.destination);
+    } catch { /* node may not be connected on some browsers — ignore */ }
+    for (const dest of p.otherDests) {
+      try {
+        p.sourceNode.disconnect(dest);
+      } catch { /* same */ }
+    }
+    p.muted = true;
+    console.log('[sip] muted conference participant', callId);
+    return true;
+  }
+
+  /** Reverse muteConferenceParticipant. */
+  unmuteConferenceParticipant(callId: string): boolean {
+    const p = this.conferenceParticipants.get(callId);
+    if (!p || !p.muted) return false;
+    const ctx = this.conferenceCtx;
+    if (!ctx) return false;
+    p.sourceNode.connect(ctx.destination);
+    for (const dest of p.otherDests) {
+      p.sourceNode.connect(dest);
+    }
+    p.muted = false;
+    console.log('[sip] unmuted conference participant', callId);
+    return true;
+  }
+
+  isConferenceParticipantMuted(callId: string): boolean {
+    return !!this.conferenceParticipants.get(callId)?.muted;
+  }
+
   /** Tear down the conference audio graph (called on hangup of any leg).
    *  Any remaining call has its outgoing sender pointed at the (now dead)
    *  MediaStreamDestination — we must replace that with a fresh mic track
    *  so the surviving call still hears the user. */
   private stopConference(): void {
     const hadConference = !!this.conferenceCtx;
+    this.conferenceParticipants.clear();
     if (this.conferenceMic) {
       try { this.conferenceMic.getTracks().forEach((t) => t.stop()); } catch { /* noop */ }
       this.conferenceMic = null;

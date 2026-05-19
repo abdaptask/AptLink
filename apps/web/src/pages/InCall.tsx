@@ -56,9 +56,15 @@ export default function InCall() {
     conferenceActive,
     conferenceOtherNumber,
     conferenceOtherId,
+    toggleConferenceParticipantMute,
+    isConferenceParticipantMuted,
     listAudioOutputs,
     setAudioOutput,
   } = useSip();
+  // Tick to force re-renders when per-participant mute state flips. We
+  // don't track it in React state inside SipContext (the service owns it)
+  // so we manually bump a counter when the user toggles.
+  const [, setMuteTick] = useState(0);
   const [duration, setDuration] = useState(0);
   const [muted, setMuted] = useState(false);
   const [onHold, setOnHold] = useState(false);
@@ -158,54 +164,103 @@ export default function InCall() {
     <div className="in-call">
       {conferenceActive ? (
         // Conference mode: both calls bridged via Web Audio mixing. Show
-        // both participants identically with their own end buttons — user
-        // can drop either party without ending the whole conference.
+        // both participants identically with their own mute + end buttons.
+        // Mute disconnects that participant from the audio graph so nobody
+        // hears them (they still hear everyone else).
         <div className="calls-strip">
           <div className="conf-banner">Conference · {formatDuration(duration)}</div>
-          <div className="call-pill conference">
-            <div className="call-pill-info">
-              <span className="call-pill-tag">Participant 1</span>
-              <span className="call-pill-num">{callerLabel}</span>
-              <span className="call-pill-status">
-                {isConnected && callQuality.level !== 'unknown' && (
-                  <QualityIndicator quality={callQuality} />
-                )}
-                In conference
-              </span>
-            </div>
-            <button
-              type="button"
-              className="call-pill-end"
-              onClick={hangup}
-              title="Drop this participant from the conference"
-              aria-label="Drop participant 1"
-            >
-              <PhoneOff size={16} />
-            </button>
-          </div>
-          <div className="call-pill conference">
-            <div className="call-pill-info">
-              <span className="call-pill-tag">Participant 2</span>
-              <span className="call-pill-num">
-                {formatNumber(conferenceOtherNumber ?? undefined)}
-              </span>
-              <span className="call-pill-status">In conference</span>
-            </div>
-            <button
-              type="button"
-              className="call-pill-end"
-              onClick={() => {
-                if (conferenceOtherId) {
-                  hangupCall(conferenceOtherId);
-                  showToast('Dropped from conference');
-                }
-              }}
-              title="Drop this participant from the conference"
-              aria-label="Drop participant 2"
-            >
-              <PhoneOff size={16} />
-            </button>
-          </div>
+          {(() => {
+            const activeId = callState.callId ?? '';
+            const activeMuted =
+              !!activeId && isConferenceParticipantMuted(activeId);
+            return (
+              <div className={`call-pill conference${activeMuted ? ' p-muted' : ''}`}>
+                <div className="call-pill-info">
+                  <span className="call-pill-tag">
+                    Participant 1{activeMuted ? ' · muted' : ''}
+                  </span>
+                  <span className="call-pill-num">{callerLabel}</span>
+                  <span className="call-pill-status">
+                    {isConnected && callQuality.level !== 'unknown' && (
+                      <QualityIndicator quality={callQuality} />
+                    )}
+                    {activeMuted ? 'Muted in conference' : 'In conference'}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  className={`call-pill-mute${activeMuted ? ' active' : ''}`}
+                  onClick={() => {
+                    if (!activeId) return;
+                    const nowMuted = toggleConferenceParticipantMute(activeId);
+                    setMuteTick((t) => t + 1);
+                    showToast(nowMuted ? 'Muted participant 1' : 'Unmuted participant 1');
+                  }}
+                  title={activeMuted ? 'Unmute this participant' : 'Mute this participant'}
+                  aria-label={activeMuted ? 'Unmute participant 1' : 'Mute participant 1'}
+                >
+                  {activeMuted ? <MicOff size={16} /> : <Mic size={16} />}
+                </button>
+                <button
+                  type="button"
+                  className="call-pill-end"
+                  onClick={hangup}
+                  title="Drop this participant from the conference"
+                  aria-label="Drop participant 1"
+                >
+                  <PhoneOff size={16} />
+                </button>
+              </div>
+            );
+          })()}
+          {(() => {
+            const otherMuted =
+              !!conferenceOtherId &&
+              isConferenceParticipantMuted(conferenceOtherId);
+            return (
+              <div className={`call-pill conference${otherMuted ? ' p-muted' : ''}`}>
+                <div className="call-pill-info">
+                  <span className="call-pill-tag">
+                    Participant 2{otherMuted ? ' · muted' : ''}
+                  </span>
+                  <span className="call-pill-num">
+                    {formatNumber(conferenceOtherNumber ?? undefined)}
+                  </span>
+                  <span className="call-pill-status">
+                    {otherMuted ? 'Muted in conference' : 'In conference'}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  className={`call-pill-mute${otherMuted ? ' active' : ''}`}
+                  onClick={() => {
+                    if (!conferenceOtherId) return;
+                    const nowMuted = toggleConferenceParticipantMute(conferenceOtherId);
+                    setMuteTick((t) => t + 1);
+                    showToast(nowMuted ? 'Muted participant 2' : 'Unmuted participant 2');
+                  }}
+                  title={otherMuted ? 'Unmute this participant' : 'Mute this participant'}
+                  aria-label={otherMuted ? 'Unmute participant 2' : 'Mute participant 2'}
+                >
+                  {otherMuted ? <MicOff size={16} /> : <Mic size={16} />}
+                </button>
+                <button
+                  type="button"
+                  className="call-pill-end"
+                  onClick={() => {
+                    if (conferenceOtherId) {
+                      hangupCall(conferenceOtherId);
+                      showToast('Dropped from conference');
+                    }
+                  }}
+                  title="Drop this participant from the conference"
+                  aria-label="Drop participant 2"
+                >
+                  <PhoneOff size={16} />
+                </button>
+              </div>
+            );
+          })()}
         </div>
       ) : hasSecondCall ? (
         // Two-call mode: show BOTH calls as matching pill cards so the user

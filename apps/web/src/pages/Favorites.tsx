@@ -17,7 +17,8 @@ export default function Favorites() {
   const [favs, setFavs] = useState<FavoriteContact[]>(() => getFavorites());
   const [showAdd, setShowAdd] = useState(false);
   const [draftPhone, setDraftPhone] = useState('');
-  const [draftLabel, setDraftLabel] = useState('');
+  const [draftFirst, setDraftFirst] = useState('');
+  const [draftLast, setDraftLast] = useState('');
   const { sipState, call } = useSip();
   const navigate = useNavigate();
 
@@ -46,9 +47,13 @@ export default function Favorites() {
   function handleAdd() {
     const phone = draftPhone.trim();
     if (!phone) return;
-    addFavorite(toE164(phone), draftLabel.trim() || null);
+    addFavorite(toE164(phone), {
+      firstName: draftFirst.trim() || null,
+      lastName: draftLast.trim() || null,
+    });
     setDraftPhone('');
-    setDraftLabel('');
+    setDraftFirst('');
+    setDraftLast('');
     setShowAdd(false);
   }
 
@@ -99,17 +104,31 @@ export default function Favorites() {
               onChange={(e) => setDraftPhone(e.target.value)}
               autoFocus
             />
-            <input
-              className="ict-input"
-              placeholder="Display name (optional)"
-              value={draftLabel}
-              onChange={(e) => setDraftLabel(e.target.value)}
-              style={{ marginTop: '0.5rem' }}
-            />
+            <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.5rem' }}>
+              <input
+                className="ict-input"
+                placeholder="First name (optional)"
+                value={draftFirst}
+                onChange={(e) => setDraftFirst(e.target.value)}
+                style={{ flex: 1 }}
+              />
+              <input
+                className="ict-input"
+                placeholder="Last name (optional)"
+                value={draftLast}
+                onChange={(e) => setDraftLast(e.target.value)}
+                style={{ flex: 1 }}
+              />
+            </div>
             <div className="ict-actions">
               <button
                 className="ict-cancel"
-                onClick={() => { setShowAdd(false); setDraftPhone(''); setDraftLabel(''); }}
+                onClick={() => {
+                  setShowAdd(false);
+                  setDraftPhone('');
+                  setDraftFirst('');
+                  setDraftLast('');
+                }}
               >
                 Cancel
               </button>
