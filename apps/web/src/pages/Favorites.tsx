@@ -208,6 +208,33 @@ export default function Favorites() {
   );
 }
 
+// Initials for the round avatar.
+// Rules (in order):
+//   - If firstName + lastName both present: take first letter of each, uppercase.
+//       "Abdulla Sheikh" → "AS",  "A Sheikh" → "AS",  "Abdulla S" → "AS"
+//   - If only firstName: first letter of firstName.
+//   - If only lastName: first letter of lastName.
+//   - Otherwise, fall back to the display label (first letter, or the first
+//     letter of each whitespace-separated word, up to 2).
+function favoriteInitials(fav: FavoriteContact, fallbackName: string): string {
+  const first = (fav.firstName ?? '').trim();
+  const last = (fav.lastName ?? '').trim();
+  if (first && last) {
+    return (first[0] + last[0]).toUpperCase();
+  }
+  if (first) return first[0].toUpperCase();
+  if (last) return last[0].toUpperCase();
+  // Fall back to label / JobDiva name. Take initials of first two words.
+  const words = (fallbackName ?? '').trim().split(/\s+/).filter(Boolean);
+  if (words.length >= 2) {
+    return (words[0][0] + words[1][0]).toUpperCase();
+  }
+  if (words.length === 1) {
+    return words[0][0].toUpperCase();
+  }
+  return '?';
+}
+
 function FavoriteRow({
   fav,
   onCall,
@@ -226,7 +253,7 @@ function FavoriteRow({
     <li className="favorite-row">
       <button type="button" className="favorite-main" onClick={onCall}>
         <span className="favorite-avatar">
-          {(name[0] ?? '?').toUpperCase()}
+          {favoriteInitials(fav, name)}
         </span>
         <span className="favorite-text">
           <span className="favorite-name">{name}</span>

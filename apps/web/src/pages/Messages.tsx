@@ -16,7 +16,7 @@ import {
 } from '../api';
 import { useJobDivaContact, getCachedJobDivaName } from '../hooks/useJobDivaContact';
 import { useSip } from '../contexts/SipContext';
-import { getQuickReplies, isFavorite, toggleFavorite } from '../lib/userPrefs';
+import { getQuickReplies, isFavorite, addFavorite, removeFavorite } from '../lib/userPrefs';
 import { formatPhone } from '../lib/phone';
 
 function formatNumber(raw: string): string {
@@ -261,10 +261,35 @@ function ThreadDetail({ number, onBack }: ThreadDetailProps) {
   // Favorite state for this thread's contact.
   const [favorited, setFavorited] = useState<boolean>(() => isFavorite(number));
   useEffect(() => { setFavorited(isFavorite(number)); }, [number]);
+  // Same Add-to-Favorites modal flow as the Recents page: prompt for first
+  // and last name when adding (so the favorite carries a friendly label),
+  // unfavorite silently when removing.
+  const [favModal, setFavModal] = useState<
+    | null
+    | { firstName: string; lastName: string }
+  >(null);
   function handleToggleFav() {
-    const name = jd?.name ?? null;
-    const next = toggleFavorite(number, name);
-    setFavorited(next);
+    if (favorited) {
+      removeFavorite(number);
+      setFavorited(false);
+      return;
+    }
+    // Seed first/last from cached JobDiva name like "First Last".
+    const cached = jd?.name ?? '';
+    const parts = cached.trim().split(/\s+/);
+    setFavModal({
+      firstName: parts[0] ?? '',
+      lastName: parts.slice(1).join(' '),
+    });
+  }
+  function saveFavFromModal() {
+    if (!favModal) return;
+    addFavorite(number, {
+      firstName: favModal.firstName.trim() || null,
+      lastName: favModal.lastName.trim() || null,
+    });
+    setFavorited(true);
+    setFavModal(null);
   }
 
   const load = useCallback(() => {
@@ -367,6 +392,91 @@ function ThreadDetail({ number, onBack }: ThreadDetailProps) {
           <Phone size={18} />
         </button>
       </div>
+
+      {favModal && (
+        <div className="compose-modal" onClick={() => setFavModal(null)}>
+          <div
+            className="fav-modal"
+            onClick={(e) => e.stopPropagation()}
+            role="dialog"
+            aria-labelledby="fav-modal-title-msg"
+          >
+            <div className="fav-modal-header">
+              <Star size={18} fill="currentColor" className="fav-modal-icon" />
+              <h3 id="fav-modal-title-msg">Add to favorites</h3>
+            </div>
+            <div className="fav-modal-phone">
+              {formatPhone(number) || number}
+            </div>
+            <form
+              onSubmit={(e) => { e.preventDefault(); saveFavFromModal(); }}
+              autoComplete="off"
+            >
+              <input
+                type="text"
+                name="username"
+                autoComplete="username"
+                style={{ display: 'none' }}
+                tabIndex={-1}
+                aria-hidden="true"
+              />
+              <div className="fav-modal-row">
+                <label className="fav-modal-field">
+                  <span className="fav-modal-label">First name</span>
+                  <input
+                    type="text"
+                    className="fav-modal-input"
+                    placeholder="Optional"
+                    value={favModal.firstName}
+                    onChange={(e) =>
+                      setFavModal({ ...favModal, firstName: e.target.value })
+                    }
+                    autoFocus
+                    autoComplete="off"
+                    autoCorrect="off"
+                    spellCheck={false}
+                    data-1p-ignore
+                    data-lpignore="true"
+                    data-form-type="other"
+                    name="fav-first"
+                  />
+                </label>
+                <label className="fav-modal-field">
+                  <span className="fav-modal-label">Last name</span>
+                  <input
+                    type="text"
+                    className="fav-modal-input"
+                    placeholder="Optional"
+                    value={favModal.lastName}
+                    onChange={(e) =>
+                      setFavModal({ ...favModal, lastName: e.target.value })
+                    }
+                    autoComplete="off"
+                    autoCorrect="off"
+                    spellCheck={false}
+                    data-1p-ignore
+                    data-lpignore="true"
+                    data-form-type="other"
+                    name="fav-last"
+                  />
+                </label>
+              </div>
+              <div className="fav-modal-actions">
+                <button
+                  type="button"
+                  className="fav-modal-cancel"
+                  onClick={() => setFavModal(null)}
+                >
+                  Cancel
+                </button>
+                <button type="submit" className="fav-modal-save">
+                  Save
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       {history && (history.summary.callCount > 0 || history.summary.voicemailCount > 0 || history.summary.messageCount > 0) && (
         <button
