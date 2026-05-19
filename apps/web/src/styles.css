@@ -1163,7 +1163,21 @@ body {
 .callback-ico {
   color: #007aff;
   opacity: 0.85;
+  background: transparent;
+  border: none;
+  padding: 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
 }
+.callback-ico:hover { opacity: 1; }
+.sms-ico {
+  color: #34c759;
+  border-radius: 50%;
+  background: rgba(52, 199, 89, 0.14);
+}
+.sms-ico:hover { background: rgba(52, 199, 89, 0.28); }
 .recording-toggle {
   background: rgba(0, 122, 255, 0.18);
   border: none;

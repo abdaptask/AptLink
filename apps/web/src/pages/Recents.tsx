@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { PhoneIncoming, PhoneOutgoing, PhoneMissed, Phone, RefreshCcw, Play, Search, X } from 'lucide-react';
+import { PhoneIncoming, PhoneOutgoing, PhoneMissed, Phone, RefreshCcw, Play, Search, X, MessageSquare } from 'lucide-react';
 import { getCalls, type CallRecord } from '../api';
 import { useSip } from '../contexts/SipContext';
 import { useJobDivaContact, getCachedJobDivaName } from '../hooks/useJobDivaContact';
@@ -130,6 +130,12 @@ export default function Recents() {
     navigate('/in-call');
   }
 
+  function handleSendSms(c: CallRecord) {
+    const target = c.direction === 'inbound' ? c.fromNumber : c.toNumber;
+    if (!target) return;
+    navigate(`/messages?to=${encodeURIComponent(target)}`);
+  }
+
   return (
     <div className="recents">
       <div className="recents-header">
@@ -182,6 +188,7 @@ export default function Recents() {
             c={c}
             expanded={expandedId === c.id}
             onCallBack={() => handleCallBack(c)}
+            onSendSms={() => handleSendSms(c)}
             onToggleRecording={() => setExpandedId(expandedId === c.id ? null : c.id)}
           />
         ))}
@@ -194,11 +201,13 @@ function RecentRow({
   c,
   expanded,
   onCallBack,
+  onSendSms,
   onToggleRecording,
 }: {
   c: CallRecord;
   expanded: boolean;
   onCallBack: () => void;
+  onSendSms: () => void;
   onToggleRecording: () => void;
 }) {
   const number = c.direction === 'inbound' ? c.fromNumber : c.toNumber;
@@ -238,7 +247,19 @@ function RecentRow({
             </button>
           )}
           <span className="call-time">{formatTime(c.startedAt)}</span>
-          <Phone size={18} className="callback-ico" />
+          <button
+            type="button"
+            className="callback-ico sms-ico"
+            aria-label="Send message"
+            title="Send message"
+            onClick={(e) => {
+              e.stopPropagation();
+              onSendSms();
+            }}
+          >
+            <MessageSquare size={16} />
+          </button>
+          <Phone size={18} className="callback-ico" aria-hidden="true" />
         </div>
       </div>
       {expanded && c.recordingUrl && (

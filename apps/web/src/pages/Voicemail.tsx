@@ -14,6 +14,7 @@ import {
   CheckCircle2,
   CheckSquare,
   Square,
+  MessageSquare,
 } from 'lucide-react';
 import {
   getVoicemails,
@@ -182,6 +183,11 @@ export default function Voicemail() {
     navigate('/in-call');
   }
 
+  function handleSendSms(vm: VoicemailRecord) {
+    if (!vm.fromNumber) return;
+    navigate(`/messages?to=${encodeURIComponent(vm.fromNumber)}`);
+  }
+
   return (
     <div className="voicemail">
       <div className="voicemail-header">
@@ -296,6 +302,7 @@ export default function Voicemail() {
             onToggleSelect={() => toggleSelected(vm.id)}
             onExpand={() => handleExpand(vm)}
             onCallBack={() => handleCallBack(vm)}
+            onSendSms={() => handleSendSms(vm)}
             onDelete={() => handleDelete(vm)}
             onToggleUnread={() => handleToggleUnread(vm)}
           />
@@ -313,6 +320,7 @@ function VoicemailRow({
   onToggleSelect,
   onExpand,
   onCallBack,
+  onSendSms,
   onDelete,
   onToggleUnread,
 }: {
@@ -323,6 +331,7 @@ function VoicemailRow({
   onToggleSelect: () => void;
   onExpand: () => void;
   onCallBack: () => void;
+  onSendSms: () => void;
   onDelete: () => void;
   onToggleUnread: () => void;
 }) {
@@ -374,6 +383,9 @@ function VoicemailRow({
             </button>
             <button type="button" className="vm-action callback" aria-label="Call back" onClick={(e) => { e.stopPropagation(); onCallBack(); }}>
               <Phone size={16} />
+            </button>
+            <button type="button" className="vm-action" aria-label="Send message" title="Send message" onClick={(e) => { e.stopPropagation(); onSendSms(); }}>
+              <MessageSquare size={16} />
             </button>
             <button type="button" className="vm-action delete" aria-label="Delete" onClick={(e) => { e.stopPropagation(); onDelete(); }}>
               <Trash2 size={16} />
