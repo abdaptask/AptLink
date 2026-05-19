@@ -4,7 +4,7 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { prisma } from '@ace/db';
 import { config } from '../config.js';
-import { dial, transfer, encodeClientState, normalizeToE164 } from '../telnyx/callControl.js';
+import { dial, transfer, encodeClientState, normalizeToE164, conferenceCreate, conferenceJoin } from '../telnyx/callControl.js';
 
 interface JwtPayload {
   sub: number;
@@ -347,48 +347,115 @@ export async function callsRoutes(app: FastifyInstance) {
     return { ok: true };
   });
 
-  // ---------- Phase 5.4 (rebuild): Server-originated Add Call (Leg B) ----------
-  // Originates the second leg via Call Control (not the WebRTC SDK), so we
-  // have its call_control_id immediately and don't have to race a webhook.
-  // The leg's `client_state` carries the active leg's call_control_id; when
-  // Telnyx fires `call.answered` on leg B, the webhook handler reads the
-  // client_state and bridges leg B onto leg A → both parties hear each other,
-  // plus the user on leg A. Effectively a 3-way conference.
+  // ---------- Phase 5.4 (rebuild v2): Add Call via Telnyx Conference ----------
+  // Replaces the legacy "bridge" flow. Conference gives us proper N-way
+  // semantics: each leg can hang up independently without ending the call
+  // for the others. The user's WebRTC leg ends the conference on exit so
+  // their hangup tears it down for everyone else (matches iPhone behavior).
+  //
+  // Flow:
+  //   1. Look up Leg A's PSTN leg row (callControlId match)
+  //   2. Find its sessionId, then list all sibling legs in the same session.
+  //      That sibling is the WebRTC leg (the user's side).
+  //   3. Create a Telnyx Conference with the WebRTC leg as the initial
+  //      participant (end_conference_on_exit: true). This means the user
+  //      hears the conference mix and ending the user's leg ends everything.
+  //   4. Join the PSTN A leg to the conference (end_conference_on_exit: false).
+  //   5. Originate Leg B via Call Control with client_state.joinConfId set.
+  //      The webhook handler joins Leg B to the conference on call.answered.
   app.post('/calls/add-leg', { onRequest: [app.authenticate] }, async (request, reply) => {
     const user = request.user as JwtPayload;
-    const body = (request.body as { legAControlId?: string; destination?: string; autoBridge?: boolean }) ?? {};
+    const body = (request.body as { legAControlId?: string; destination?: string }) ?? {};
     if (!body.legAControlId || !body.destination) {
       return reply.code(400).send({ error: 'legAControlId and destination are required' });
     }
-
     if (!config.telnyxApiKey) {
       return reply.code(501).send({ error: 'TELNYX_API_KEY not set' });
     }
     if (!config.telnyxCcConnectionId) {
       return reply.code(501).send({
         error: 'TELNYX_CC_CONNECTION_ID not set',
-        hint: 'Set TELNYX_CC_CONNECTION_ID to your Call Control Application connection ID in the Telnyx portal.',
+        hint: 'Set TELNYX_CC_CONNECTION_ID to your Call Control Application connection ID.',
       });
     }
 
-    // Normalize destination to E.164 (Telnyx requires + prefix).
-    const e164 = normalizeToE164(body.destination);
+    // Step 1+2: find Leg A's row + its sibling WebRTC leg in the same session.
+    const legARow = await prisma.call.findFirst({
+      where: { callControlId: body.legAControlId, userId: user.sub },
+      select: { id: true, sessionId: true, telnyxCallId: true },
+    });
+    if (!legARow?.sessionId) {
+      return reply.code(409).send({
+        error: 'leg_a_session_not_found',
+        hint: 'No sessionId on Leg A row. The webhook may not have populated it yet — retry in a couple seconds.',
+      });
+    }
+    const sessionLegs = await prisma.call.findMany({
+      where: {
+        sessionId: legARow.sessionId,
+        userId: user.sub,
+        callControlId: { not: null },
+      },
+      select: { callControlId: true, direction: true, fromNumber: true, toNumber: true },
+    });
+    const otherLeg = sessionLegs.find((l) => l.callControlId !== body.legAControlId);
 
+    // Step 3: create conference with the user's leg as initial participant.
+    // If we found a WebRTC sibling, use it (preferred — user hears the mix).
+    // Otherwise fall back to the PSTN leg (degraded — user may lose audio
+    // when the conference takes over the bridge).
+    const userLeg = otherLeg?.callControlId ?? body.legAControlId;
+    const confName = `addcall-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    app.log.info(
+      { confName, userLeg, sessionId: legARow.sessionId, foundSibling: !!otherLeg?.callControlId },
+      '[add-leg] creating conference',
+    );
+    const confResult = await conferenceCreate(confName, userLeg, {
+      endConfOnExit: true, // user's leg ending = end conference for all
+      beepEnabled: 'never',
+    });
+    if (!confResult.ok) {
+      app.log.warn({ status: confResult.status, error: confResult.error }, '[add-leg] conference create failed');
+      return reply.code(502).send({
+        error: 'telnyx_conference_create_failed',
+        status: confResult.status,
+        details: confResult.error,
+        hint: 'See server logs for the Telnyx error detail.',
+      });
+    }
+    const confId = confResult.data?.data?.id;
+    if (!confId) {
+      app.log.error({ data: confResult.data }, '[add-leg] missing conference id in telnyx response');
+      return reply.code(502).send({ error: 'telnyx_response_invalid' });
+    }
+
+    // Step 4: join the OTHER existing leg (the PSTN A leg, if we used WC as
+    // initial — or vice versa) to the conference. end_conference_on_exit:
+    // false so this side hanging up doesn't kill everyone.
+    if (otherLeg?.callControlId) {
+      const joinAResult = await conferenceJoin(confId, body.legAControlId, { endConfOnExit: false });
+      if (!joinAResult.ok) {
+        app.log.warn({ status: joinAResult.status, error: joinAResult.error }, '[add-leg] join legA to conf failed');
+        // Don't fail the whole flow — try originating leg B anyway.
+      }
+    }
+
+    // Step 5: originate Leg B via Call Control with client_state telling the
+    // webhook to auto-join it to this conference on answer.
+    const toE164 = normalizeToE164(body.destination);
     const clientState = encodeClientState({
-      bridgeTo: body.legAControlId,
-      autoBridge: body.autoBridge !== false, // default true
+      joinConfId: confId,
+      endConfOnExit: false, // other party hanging up doesn't end conference
       originatorUserId: user.sub,
     });
-
     const dialResult = await dial({
-      to: e164,
+      to: toE164,
       from: config.pilotFromNumber,
       connectionId: config.telnyxCcConnectionId,
       clientState,
     });
-
     if (!dialResult.ok) {
-      app.log.warn({ status: dialResult.status, error: dialResult.error }, '[add-leg] telnyx dial failed');
+      app.log.warn({ status: dialResult.status, error: dialResult.error }, '[add-leg] dial failed');
       return reply.code(502).send({
         error: 'telnyx_dial_failed',
         status: dialResult.status,
@@ -398,44 +465,39 @@ export async function callsRoutes(app: FastifyInstance) {
 
     const legBControlId = dialResult.data?.data?.call_control_id;
     const legBSessionId = dialResult.data?.data?.call_session_id;
-    const legBCallLegId = dialResult.data?.data?.call_leg_id;
-
+    const legBLegId = dialResult.data?.data?.call_leg_id;
     if (!legBControlId) {
-      app.log.error({ data: dialResult.data }, '[add-leg] telnyx response missing call_control_id');
       return reply.code(502).send({ error: 'telnyx_response_invalid' });
     }
 
-    // Persist Leg B so the rest of the app (recording, conference merge, etc.)
-    // can find it by its telnyxCallId. We use the call_leg_id as our local
-    // telnyxCallId since that's what the SDK would normally generate.
-    const localCallId = legBCallLegId ?? legBControlId;
     await prisma.call.upsert({
-      where: { telnyxCallId: localCallId },
-      update: { callControlId: legBControlId, sessionId: legBSessionId ?? null, status: 'initiated' },
+      where: { telnyxCallId: legBControlId },
+      update: { sessionId: legBSessionId ?? null, status: 'initiated' },
       create: {
         userId: user.sub,
-        telnyxCallId: localCallId,
+        telnyxCallId: legBControlId,
         sessionId: legBSessionId ?? null,
         callControlId: legBControlId,
         direction: 'outbound',
         fromNumber: config.pilotFromNumber,
-        toNumber: e164,
+        toNumber: toE164,
         status: 'initiated',
         startedAt: new Date(),
       },
     });
 
     app.log.info(
-      { legA: body.legAControlId, legB: legBControlId, to: e164 },
-      '[add-leg] originated leg B via call control',
+      { confId, legA: body.legAControlId, userLeg, legB: legBControlId, to: toE164 },
+      '[add-leg] conference setup complete; leg B dialing',
     );
 
     return {
       ok: true,
+      conferenceId: confId,
       legB: {
-        telnyxCallId: localCallId,
+        telnyxCallId: legBLegId ?? legBControlId,
         callControlId: legBControlId,
-        toNumber: e164,
+        toNumber: toE164,
       },
     };
   });

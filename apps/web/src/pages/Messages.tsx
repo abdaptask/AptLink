@@ -1,8 +1,8 @@
 // Phase 5.3 — SMS/MMS conversations. iMessage-style two-pane layout:
 // thread list on the left (or full screen on narrow), thread detail on the right.
-import { useEffect, useState, useCallback, useRef } from 'react';
+import { useEffect, useState, useCallback, useRef, useMemo } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Send, ArrowLeft, RefreshCcw, MessageSquarePlus, Image as ImageIcon } from 'lucide-react';
+import { Send, ArrowLeft, RefreshCcw, MessageSquarePlus, Image as ImageIcon, Search, X } from 'lucide-react';
 import {
   getThreads,
   getThread,
@@ -11,7 +11,7 @@ import {
   type ThreadSummary,
   type MessageRecord,
 } from '../api';
-import { useJobDivaContact } from '../hooks/useJobDivaContact';
+import { useJobDivaContact, getCachedJobDivaName } from '../hooks/useJobDivaContact';
 
 function formatNumber(raw: string): string {
   const d = (raw || '').replace(/[^\d+]/g, '');
@@ -48,6 +48,7 @@ export default function Messages() {
   const [active, setActive] = useState<string | null>(null);
   const [showCompose, setShowCompose] = useState(false);
   const [composeTo, setComposeTo] = useState('');
+  const [search, setSearch] = useState('');
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
 
@@ -75,6 +76,22 @@ export default function Messages() {
   // For each thread, which side number is "the other party"?
   const otherParty = (t: ThreadSummary) => t.threadKey;
 
+  // Client-side thread filter: digits, cached JobDiva name, and the
+  // last-message preview body.
+  const filteredThreads = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return threads;
+    const qDigits = q.replace(/[^\d]/g, '');
+    return threads.filter((t) => {
+      const digits = (t.threadKey || '').replace(/[^\d]/g, '');
+      if (qDigits && digits.includes(qDigits)) return true;
+      if ((t.body ?? '').toLowerCase().includes(q)) return true;
+      const cachedName = getCachedJobDivaName(t.threadKey);
+      if (cachedName && cachedName.toLowerCase().includes(q)) return true;
+      return false;
+    });
+  }, [threads, search]);
+
   return (
     <div className="messages">
       {!active ? (
@@ -100,6 +117,27 @@ export default function Messages() {
             </div>
           </div>
 
+          <div className="search-bar">
+            <Search size={16} className="search-icon" aria-hidden="true" />
+            <input
+              type="search"
+              className="search-input"
+              placeholder="Search conversations"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
+            {search && (
+              <button
+                type="button"
+                className="search-clear"
+                onClick={() => setSearch('')}
+                aria-label="Clear search"
+              >
+                <X size={14} />
+              </button>
+            )}
+          </div>
+
           {error && <div className="error" style={{ margin: '0 1rem 1rem' }}>{error}</div>}
 
           {!loading && threads.length === 0 && !error && (
@@ -109,8 +147,14 @@ export default function Messages() {
             </div>
           )}
 
+          {!loading && threads.length > 0 && filteredThreads.length === 0 && (
+            <div className="empty-state">
+              <p>No conversations match “{search}”.</p>
+            </div>
+          )}
+
           <ul className="thread-list">
-            {threads.map((t) => (
+            {filteredThreads.map((t) => (
               <ThreadRow
                 key={t.id}
                 thread={t}

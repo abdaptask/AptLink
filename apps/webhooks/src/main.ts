@@ -9,11 +9,14 @@ const START_TIME = new Date().toISOString();
 const TELNYX_API_KEY = process.env.TELNYX_API_KEY ?? '';
 
 // Decode the client_state Telnyx echoes back on every call event. We use it
-// to carry "what to do when this leg answers" instructions (e.g. auto-bridge
-// to leg A for an Add Call / Merge flow).
+// to carry "what to do when this leg answers" instructions:
+//   - bridgeTo   (legacy 2-leg bridge — still supported as fallback)
+//   - joinConfId (new: join this leg to an existing Telnyx Conference)
 interface ClientState {
-  bridgeTo?: string;        // call_control_id of the leg to auto-bridge with
-  autoBridge?: boolean;     // default true if bridgeTo present
+  bridgeTo?: string;
+  autoBridge?: boolean;
+  joinConfId?: string;
+  endConfOnExit?: boolean;
   originatorUserId?: number;
 }
 function decodeClientState(s: string | undefined | null): ClientState | null {
@@ -25,9 +28,8 @@ function decodeClientState(s: string | undefined | null): ClientState | null {
   }
 }
 
-// Bridge two Telnyx legs together via the Voice API. Called from the webhook
-// when leg B (server-originated via Call Control) answers and carries a
-// client_state telling us to bridge with leg A.
+// Bridge two Telnyx legs together via the Voice API (legacy fallback for
+// the old Add Call flow — used only when client_state lacks joinConfId).
 async function bridgeLegs(legA: string, legB: string): Promise<{ ok: boolean; status?: number; error?: unknown }> {
   if (!TELNYX_API_KEY) return { ok: false, error: 'TELNYX_API_KEY not set on webhooks service' };
   const res = await fetch(
@@ -39,6 +41,33 @@ async function bridgeLegs(legA: string, legB: string): Promise<{ ok: boolean; st
         Authorization: `Bearer ${TELNYX_API_KEY}`,
       },
       body: JSON.stringify({ call_control_id: legB }),
+    },
+  );
+  const body = await res.json().catch(() => ({}));
+  return { ok: res.ok, status: res.status, ...(res.ok ? {} : { error: body }) };
+}
+
+// Join a leg into an existing Telnyx Conference. Used by the new Add Call
+// flow — server originates Leg B via Call Control, then this fires on
+// call.answered to put Leg B into the same conference room as Leg A.
+async function joinConference(
+  conferenceId: string,
+  callControlId: string,
+  opts: { endConfOnExit?: boolean } = {},
+): Promise<{ ok: boolean; status?: number; error?: unknown }> {
+  if (!TELNYX_API_KEY) return { ok: false, error: 'TELNYX_API_KEY not set on webhooks service' };
+  const res = await fetch(
+    `https://api.telnyx.com/v2/conferences/${encodeURIComponent(conferenceId)}/actions/join`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${TELNYX_API_KEY}`,
+      },
+      body: JSON.stringify({
+        call_control_id: callControlId,
+        end_conference_on_exit: opts.endConfOnExit ?? false,
+      }),
     },
   );
   const body = await res.json().catch(() => ({}));
@@ -95,7 +124,12 @@ app.post('/webhooks/telnyx/calls', async (request) => {
     }
 
     const payload = event.payload ?? {};
-    const callId: string | undefined = payload.call_session_id ?? payload.call_control_id;
+    // Phase 5.4 rebuild: key each row by call_control_id (one row PER LEG),
+    // not call_session_id (which is shared across both legs and used to be
+    // overwriting them). The sessionId column groups sibling legs.
+    const callControlId: string | undefined = payload.call_control_id;
+    const sessionId: string | undefined = payload.call_session_id;
+    const callId: string | undefined = callControlId ?? sessionId;
     if (!callId) {
       app.log.warn('[telnyx] no call id in payload');
       return { received: true };
@@ -104,10 +138,9 @@ app.post('/webhooks/telnyx/calls', async (request) => {
     const direction = payload.direction === 'outgoing' ? 'outbound' : 'inbound';
     const fromNumber: string = payload.from ?? '';
     const toNumber: string = payload.to ?? '';
-    const callControlId: string | undefined = payload.call_control_id;
 
     app.log.info(
-      { eventType: event.event_type, callId, direction, fromNumber, toNumber },
+      { eventType: event.event_type, callControlId, sessionId, direction, fromNumber, toNumber },
       '[telnyx] call event'
     );
 
@@ -146,13 +179,22 @@ app.post('/webhooks/telnyx/calls', async (request) => {
         });
 
         // Phase 5.4 (rebuild): server-originated Leg B carries a client_state
-        // telling us to auto-bridge with Leg A as soon as it answers.
-        // This is what makes "Add Call" actually merge — the user (still on
-        // Leg A's WebRTC stream) starts hearing Leg B the moment they answer.
+        // telling us either to auto-bridge (legacy) or to join a Conference
+        // (new — proper 3-way with independent hangup behavior).
         if (event.event_type === 'call.answered' && callControlId) {
           const state = decodeClientState(payload.client_state);
-          if (state?.bridgeTo && state.autoBridge !== false) {
-            app.log.info({ legA: state.bridgeTo, legB: callControlId }, '[webhook] auto-bridging on answer');
+          if (state?.joinConfId) {
+            app.log.info({ confId: state.joinConfId, leg: callControlId }, '[webhook] auto-joining conference');
+            const result = await joinConference(state.joinConfId, callControlId, {
+              endConfOnExit: state.endConfOnExit ?? false,
+            });
+            if (!result.ok) {
+              app.log.error({ result }, '[webhook] auto-join failed');
+            } else {
+              app.log.info({ confId: state.joinConfId, leg: callControlId }, '[webhook] auto-join success');
+            }
+          } else if (state?.bridgeTo && state.autoBridge !== false) {
+            app.log.info({ legA: state.bridgeTo, legB: callControlId }, '[webhook] auto-bridging on answer (legacy)');
             const result = await bridgeLegs(state.bridgeTo, callControlId);
             if (!result.ok) {
               app.log.error({ result }, '[webhook] auto-bridge failed');

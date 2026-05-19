@@ -81,11 +81,47 @@ export function dial(opts: {
   });
 }
 
-// Bridge two existing legs together (3-way merge for our flow).
+// Bridge two existing legs together (legacy 2-leg pattern — limited:
+// when one leg hangs up, the other ends too).
 export function bridge(legA: string, legB: string): Promise<TelnyxResult> {
   return call(`/calls/${encodeURIComponent(legA)}/actions/bridge`, {
     method: 'POST',
     body: JSON.stringify({ call_control_id: legB }),
+  });
+}
+
+// Create a Telnyx Conference with one initial participant. Returns the
+// conference id, which subsequent legs can join via conferenceJoin().
+// Use this for proper N-way conferences where each leg can hang up
+// independently without ending the whole call.
+export function conferenceCreate(
+  name: string,
+  initialCallControlId: string,
+  opts: { endConfOnExit?: boolean; beepEnabled?: 'always' | 'on_enter' | 'on_exit' | 'never' } = {},
+): Promise<TelnyxResult<{ data: { id: string; name: string; status: string } }>> {
+  return call('/conferences', {
+    method: 'POST',
+    body: JSON.stringify({
+      name,
+      call_control_id: initialCallControlId,
+      end_conference_on_exit: opts.endConfOnExit ?? false,
+      beep_enabled: opts.beepEnabled ?? 'never',
+    }),
+  });
+}
+
+// Add an existing leg to an active conference.
+export function conferenceJoin(
+  conferenceId: string,
+  callControlId: string,
+  opts: { endConfOnExit?: boolean } = {},
+): Promise<TelnyxResult> {
+  return call(`/conferences/${encodeURIComponent(conferenceId)}/actions/join`, {
+    method: 'POST',
+    body: JSON.stringify({
+      call_control_id: callControlId,
+      end_conference_on_exit: opts.endConfOnExit ?? false,
+    }),
   });
 }
 

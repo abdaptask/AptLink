@@ -1,8 +1,8 @@
 // Phase 5.6 — Voicemail list. Populated by webhook when Telnyx finishes
 // recording an unanswered call.
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Phone, Trash2, RefreshCcw, Play, Voicemail as VoicemailIcon } from 'lucide-react';
+import { Phone, Trash2, RefreshCcw, Play, Voicemail as VoicemailIcon, Search, X } from 'lucide-react';
 import {
   getVoicemails,
   markVoicemailListened,
@@ -10,7 +10,7 @@ import {
   type VoicemailRecord,
 } from '../api';
 import { useSip } from '../contexts/SipContext';
-import { useJobDivaContact } from '../hooks/useJobDivaContact';
+import { useJobDivaContact, getCachedJobDivaName } from '../hooks/useJobDivaContact';
 
 function formatDuration(seconds: number): string {
   if (!seconds) return '';
@@ -46,8 +46,25 @@ export default function Voicemail() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<number | null>(null);
+  const [search, setSearch] = useState('');
   const { sipState, call } = useSip();
   const navigate = useNavigate();
+
+  // Client-side filter: phone digits, transcription text, and cached
+  // JobDiva contact name.
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return items;
+    const qDigits = q.replace(/[^\d]/g, '');
+    return items.filter((vm) => {
+      const digits = (vm.fromNumber || '').replace(/[^\d]/g, '');
+      if (qDigits && digits.includes(qDigits)) return true;
+      if ((vm.transcription ?? '').toLowerCase().includes(q)) return true;
+      const cachedName = getCachedJobDivaName(vm.fromNumber);
+      if (cachedName && cachedName.toLowerCase().includes(q)) return true;
+      return false;
+    });
+  }, [items, search]);
 
   const load = useCallback(() => {
     const token = sessionStorage.getItem('ace_token');
@@ -112,6 +129,27 @@ export default function Voicemail() {
         </button>
       </div>
 
+      <div className="search-bar">
+        <Search size={16} className="search-icon" aria-hidden="true" />
+        <input
+          type="search"
+          className="search-input"
+          placeholder="Search voicemails"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+        />
+        {search && (
+          <button
+            type="button"
+            className="search-clear"
+            onClick={() => setSearch('')}
+            aria-label="Clear search"
+          >
+            <X size={14} />
+          </button>
+        )}
+      </div>
+
       {error && <div className="error" style={{ margin: '0 1rem 1rem' }}>{error}</div>}
 
       {!loading && items.length === 0 && !error && (
@@ -122,8 +160,14 @@ export default function Voicemail() {
         </div>
       )}
 
+      {!loading && items.length > 0 && filtered.length === 0 && (
+        <div className="empty-state">
+          <p>No voicemails match “{search}”.</p>
+        </div>
+      )}
+
       <ul className="vm-list">
-        {items.map((vm) => (
+        {filtered.map((vm) => (
           <VoicemailRow
             key={vm.id}
             vm={vm}

@@ -1,9 +1,9 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { PhoneIncoming, PhoneOutgoing, PhoneMissed, Phone, RefreshCcw, Play } from 'lucide-react';
+import { PhoneIncoming, PhoneOutgoing, PhoneMissed, Phone, RefreshCcw, Play, Search, X } from 'lucide-react';
 import { getCalls, type CallRecord } from '../api';
 import { useSip } from '../contexts/SipContext';
-import { useJobDivaContact } from '../hooks/useJobDivaContact';
+import { useJobDivaContact, getCachedJobDivaName } from '../hooks/useJobDivaContact';
 
 function formatDuration(seconds: number): string {
   if (!seconds) return '';
@@ -77,6 +77,7 @@ export default function Recents() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<number | null>(null);
+  const [search, setSearch] = useState('');
   const { sipState, call } = useSip();
   const navigate = useNavigate();
 
@@ -94,6 +95,29 @@ export default function Recents() {
   useEffect(() => {
     load();
   }, [load]);
+
+  // Client-side filter. Matches against:
+  //   - phone digits (both fromNumber + toNumber so single-direction works)
+  //   - status label ("Missed", "Outgoing", etc.)
+  //   - hangup cause
+  //   - cached JobDiva contact name (instantly for contacts we've already
+  //     looked up; first-time searches need the cache to warm via row render)
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return calls;
+    const qDigits = q.replace(/[^\d]/g, '');
+    return calls.filter((c) => {
+      const number = c.direction === 'inbound' ? c.fromNumber : c.toNumber;
+      const fromDigits = (c.fromNumber || '').replace(/[^\d]/g, '');
+      const toDigits = (c.toNumber || '').replace(/[^\d]/g, '');
+      if (qDigits && (fromDigits.includes(qDigits) || toDigits.includes(qDigits))) return true;
+      if (statusLabel(c).toLowerCase().includes(q)) return true;
+      if ((c.hangupCause ?? '').toLowerCase().includes(q)) return true;
+      const cachedName = getCachedJobDivaName(number);
+      if (cachedName && cachedName.toLowerCase().includes(q)) return true;
+      return false;
+    });
+  }, [calls, search]);
 
   function handleCallBack(c: CallRecord) {
     const target = c.direction === 'inbound' ? c.fromNumber : c.toNumber;
@@ -115,6 +139,27 @@ export default function Recents() {
         </button>
       </div>
 
+      <div className="search-bar">
+        <Search size={16} className="search-icon" aria-hidden="true" />
+        <input
+          type="search"
+          className="search-input"
+          placeholder="Search by number or status"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+        />
+        {search && (
+          <button
+            type="button"
+            className="search-clear"
+            onClick={() => setSearch('')}
+            aria-label="Clear search"
+          >
+            <X size={14} />
+          </button>
+        )}
+      </div>
+
       {error && <div className="error" style={{ margin: '0 1rem 1rem' }}>{error}</div>}
 
       {!loading && calls.length === 0 && !error && (
@@ -124,8 +169,14 @@ export default function Recents() {
         </div>
       )}
 
+      {!loading && calls.length > 0 && filtered.length === 0 && (
+        <div className="empty-state">
+          <p>No results for “{search}”.</p>
+        </div>
+      )}
+
       <ul className="call-list">
-        {calls.map((c) => (
+        {filtered.map((c) => (
           <RecentRow
             key={c.id}
             c={c}
@@ -152,6 +203,8 @@ function RecentRow({
 }) {
   const number = c.direction === 'inbound' ? c.fromNumber : c.toNumber;
   const missed = isMissed(c);
+  // Calling this hook here warms the JobDiva cache as the rows render, so
+  // the parent's name-based filter starts matching on subsequent keystrokes.
   const jd = useJobDivaContact(number);
   const displayName = jd?.name ?? formatNumber(number);
   return (
