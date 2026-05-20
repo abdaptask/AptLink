@@ -712,6 +712,51 @@ export class SipService {
     }
   }
 
+  /**
+   * Hold a call using the music-aware path used everywhere we hold.
+   * Centralised so Add Call, Swap, and Hold & Accept all behave the same:
+   *   - If music is configured: swap outgoing track to music (don't SIP-hold,
+   *     because session.hold() sets RTP to inactive and the music track
+   *     never reaches the remote).
+   *   - Otherwise: plain session.hold() — silent for the held party.
+   * Either way the audio element is muted so the held leg's voice doesn't
+   * bleed into the new call's audio.
+   */
+  private async holdCallWithMusicIfConfigured(entry: CallEntry): Promise<void> {
+    if (entry.heldLocal) return;
+    const musicWanted = getHoldMusicEnabled() && Boolean(getHoldMusicDataUrl());
+    if (musicWanted) {
+      if (entry.audioEl) entry.audioEl.muted = true;
+      await this.startHoldMusic(entry);
+    } else {
+      try {
+        entry.session.hold();
+      } catch (e) {
+        console.warn('[sip] hold failed', e);
+      }
+      if (entry.audioEl) entry.audioEl.muted = true;
+    }
+    entry.heldLocal = true;
+  }
+
+  /** Reverse of holdCallWithMusicIfConfigured. */
+  private async unholdCallWithMusicIfConfigured(entry: CallEntry): Promise<void> {
+    if (!entry.heldLocal) return;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const wasMusicHold = !!(entry as any).__holdMusic;
+    if (wasMusicHold) {
+      await this.stopHoldMusic(entry);
+    } else {
+      try {
+        entry.session.unhold();
+      } catch (e) {
+        console.warn('[sip] unhold failed', e);
+      }
+    }
+    if (entry.audioEl) entry.audioEl.muted = false;
+    entry.heldLocal = false;
+  }
+
   /** Start a second concurrent call — used by Add Call. */
   addCall(rawNumber: string): void {
     if (!this.ua) throw new Error('SIP not connected');
@@ -721,13 +766,7 @@ export class SipService {
     // underneath the new call's ringback.
     const current = this.activeCallId ? this.calls.get(this.activeCallId) : null;
     if (current) {
-      try {
-        current.session.hold();
-        current.heldLocal = true;
-      } catch (e) {
-        console.warn('[sip] hold for addCall failed', e);
-      }
-      if (current.audioEl) current.audioEl.muted = true;
+      void this.holdCallWithMusicIfConfigured(current);
       // Clear primary so we don't keep playing the held leg's stream.
       this.primaryAudioEl.srcObject = null;
     }
@@ -743,29 +782,16 @@ export class SipService {
     const current = this.activeCallId ? this.calls.get(this.activeCallId) : null;
     const next = this.calls.get(nextId);
     if (current && current.id !== nextId) {
-      try {
-        current.session.hold();
-        current.heldLocal = true;
-      } catch (e) {
-        console.warn('[sip] swap hold failed', e);
-      }
-      // Mute the now-held call so only the unhold-side is audible.
-      if (current.audioEl) current.audioEl.muted = true;
+      void this.holdCallWithMusicIfConfigured(current);
     }
     if (next) {
-      try {
-        next.session.unhold();
-        next.heldLocal = false;
-      } catch (e) {
-        console.warn('[sip] swap unhold failed', e);
-      }
+      void this.unholdCallWithMusicIfConfigured(next);
       this.activeCallId = next.id;
-      // Unmute the now-active call's per-call element and route its stream
-      // to the primary speaker.
+      // Route the now-active call's stream to the primary speaker.
       if (next.audioEl) {
-        next.audioEl.muted = false;
         this.primaryAudioEl.srcObject = next.audioEl.srcObject;
       }
+      this.primaryAudioEl.muted = false;
       // Emit a 'call' event for the now-active session so the UI's callState
       // reflects the swap (number, direction, etc. all update).
       this.emit<CallEvent>('call', this.buildEvent(next, 'connected'));
@@ -808,22 +834,27 @@ export class SipService {
    * Phase 6.3 — Hold & Accept (Pulse-style).
    *
    * Used when a second call rings while the user is already in an active
-   * call. Puts the current call on SIP hold (sendonly RE-INVITE), mutes its
-   * audio element so its voice/silence doesn't bleed into the new call's
-   * audio, then answers the incoming. After the incoming session reaches
-   * 'accepted' it auto-becomes activeCallId (handled in attachSessionListeners
-   * via session.on('accepted')). The previously-active call survives as the
-   * held leg — exactly the same shape as Add Call, so the existing held-strip
-   * UI in InCall picks it up via SipContext.hasSecondCall.
+   * call. Puts the current call on hold (with hold music if configured,
+   * silent SIP hold otherwise), then answers the incoming. After the
+   * incoming session reaches 'accepted' it auto-becomes activeCallId
+   * (handled in attachSessionListeners via session.on('accepted')). The
+   * previously-active call survives as the held leg — exactly the same
+   * shape as Add Call, so the existing held-strip UI in InCall picks it
+   * up via SipContext.hasSecondCall.
    *
    * Returns the held call's id (so SipContext can populate secondCallId)
    * or null if there's no active call to hold or no incoming to answer.
    *
-   * Why explicit SIP hold here (instead of music-hold like toggleHold does):
-   *   - This is a quick context switch, not a "park & make them wait" hold.
-   *   - The user can swap back via swapCalls anytime — no need to play music
-   *     to the held party for ~3 seconds while the user picks up.
-   *   - Keeps the audio path simple: no MediaStreamDestination to tear down.
+   * Hold-music path mirrors toggleHold():
+   *   - JsSIP's session.hold() sends RE-INVITE with `inactive` direction —
+   *     RTP pauses both ways, so a follow-up replaceTrack(music) would never
+   *     reach the remote party.
+   *   - So when music is configured we SKIP session.hold() and just swap
+   *     the outgoing audio sender's track to the music stream. The remote
+   *     hears music, RTP keeps flowing, and we mute the user's local audio
+   *     element so the held caller's voice doesn't bleed into the new call.
+   *   - If no music is configured we fall back to plain SIP hold (silence
+   *     to the remote — same as before).
    */
   holdActiveAndAccept(): string | null {
     const incomingId = this.incomingCallId;
@@ -839,20 +870,14 @@ export class SipService {
       return null;
     }
 
-    // 1. Hold the currently active call.
-    try {
-      active.session.hold();
-      active.heldLocal = true;
-    } catch (e) {
-      console.warn('[sip] hold-and-accept: hold threw', e);
-    }
-    if (active.audioEl) active.audioEl.muted = true;
-    // Clear primary so the held leg's old stream doesn't keep playing
-    // underneath the new call's audio.
+    // 1. Hold the currently active call (with hold music if configured).
+    void this.holdCallWithMusicIfConfigured(active);
+    // Clear the primary stream — the new call will replace it once accepted.
     this.primaryAudioEl.srcObject = null;
+    this.primaryAudioEl.muted = false;
 
     // 2. Answer the incoming. session.on('accepted') will promote it to
-    // activeCallId and emit the 'connected' event the UI listens for.
+    //    activeCallId and emit the 'connected' event the UI listens for.
     applySpeakerSelection(this.primaryAudioEl);
     try {
       incoming.session.answer({
@@ -868,8 +893,7 @@ export class SipService {
       console.warn('[sip] hold-and-accept: answer threw', e);
       // Best-effort: unhold the original so the user isn't stuck with both
       // calls in a broken state.
-      try { active.session.unhold(); active.heldLocal = false; } catch { /* noop */ }
-      if (active.audioEl) active.audioEl.muted = false;
+      void this.unholdCallWithMusicIfConfigured(active);
       return null;
     }
 
