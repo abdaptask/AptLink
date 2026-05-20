@@ -377,8 +377,23 @@ export async function uploadVoicemailGreeting(
     }),
   });
   if (!res.ok) {
-    const err = (await res.json().catch(() => ({}))) as { error?: string };
-    throw new Error(err.error || `HTTP ${res.status}`);
+    const err = (await res.json().catch(() => ({}))) as {
+      error?: string;
+      telnyxStatus?: number;
+      telnyxBody?: unknown;
+      details?: unknown;
+    };
+    // Surface Telnyx's own error verbatim. Helps diagnose which field
+    // they're rejecting (greeting_audio_url vs something else).
+    const detail =
+      err.telnyxBody
+        ? `: ${JSON.stringify(err.telnyxBody)}`
+        : err.details
+          ? `: ${typeof err.details === 'string' ? err.details : JSON.stringify(err.details)}`
+          : '';
+    // eslint-disable-next-line no-console
+    console.error('[vm-greeting] upload failed', err);
+    throw new Error((err.error || `HTTP ${res.status}`) + detail);
   }
   return res.json();
 }
