@@ -592,39 +592,34 @@ function xmlEscape(s: string): string {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const texmlHandler = (request: any): string => {
   const sipUser = process.env.PILOT_SIP_USERNAME ?? '';
-  const greeting =
-    process.env.PILOT_VOICEMAIL_GREETING ??
-    "You've reached ACE Dialer. Please leave a message after the tone, then press pound or hang up.";
-
   if (!sipUser) {
     app.log.warn('[texml] PILOT_SIP_USERNAME not set; returning hangup-only flow');
   }
 
-  // Build an ABSOLUTE URL for the Record action — Telnyx requires absolute
-  // URLs for callbacks. Prefer an explicit env var, fall back to the host
-  // header Telnyx hit us on (Render sets x-forwarded-proto correctly).
+  // Build an ABSOLUTE URL for the Dial action - Telnyx requires absolute URLs.
   const proto = (request?.headers?.['x-forwarded-proto'] as string) ?? 'https';
   const host = (request?.headers?.host as string) ?? 'ace-dialer-webhooks.onrender.com';
   const baseUrl = (process.env.WEBHOOKS_PUBLIC_URL ?? `${proto}://${host}`).replace(/\/+$/, '');
-  const recordAction = `${baseUrl}/webhooks/telnyx/voicemail`;
+  const dialStatusAction = `${baseUrl}/texml/dial-status`;
 
-  // Telnyx's TexML reference is a Twilio-compatible subset. Sticking to the
-  // safe core verbs/attributes to avoid parser errors:
-  //   <Dial><Sip>…</Sip></Dial>            → bridge to SIP target
-  //   timeout                              → seconds before no-answer fallthrough
-  //   <Say voice="alice">                  → standard TTS voice; Polly.* voices
-  //                                          aren't always accepted.
-  //   <Record action maxLength playBeep>   → record + POST to action URL
-  //   <Hangup/>                            → end the call
+  // Phase 6.5 - Hold & Accept friendly inbound flow.
+  //
+  // Old flow: <Dial><Sip/></Dial> immediately followed by <Say>+<Record>.
+  // When a second concurrent call came in, the SIP endpoint returned 486
+  // Busy on the new INVITE; TexML treated <Dial> as failed and fell
+  // straight through to <Record>. Result: caller hit voicemail with no
+  // ringing, and Hold & Accept never got a chance to show.
+  //
+  // New flow: <Dial> has an action URL so dialStatusHandler can branch on
+  // DialCallStatus - busy -> polite hangup, no-answer/failed -> voicemail,
+  // completed -> nothing. Timeout bumped to 45s so the user has room to
+  // see the IncomingCall UI and tap Hold & Accept.
   const xml = sipUser
     ? `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Dial timeout="25">
+  <Dial timeout="45" action="${xmlEscape(dialStatusAction)}" method="POST">
     <Sip>sip:${xmlEscape(sipUser)}@sip.telnyx.com</Sip>
   </Dial>
-  <Say voice="alice">${xmlEscape(greeting)}</Say>
-  <Record maxLength="120" playBeep="true" action="${xmlEscape(recordAction)}" method="POST" finishOnKey="#" />
-  <Hangup/>
 </Response>`
     : `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
@@ -635,6 +630,50 @@ const texmlHandler = (request: any): string => {
   return xml;
 };
 
+// Phase 6.5 - Dial action handler. Telnyx POSTs (or GETs) here when
+// <Dial> finishes. We branch on DialCallStatus:
+//   completed/answered -> empty Response (call already done)
+//   busy                -> polite hangup (don't dump caller into voicemail)
+//   no-answer / failed  -> fall through to voicemail Record
+//   canceled            -> fall through to voicemail Record
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const dialStatusHandler = (request: any): string => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const body = (request?.body ?? {}) as any;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const query = (request?.query ?? {}) as any;
+  const status: string = (body.DialCallStatus ?? query.DialCallStatus ?? '').toString().toLowerCase();
+
+  const proto = (request?.headers?.['x-forwarded-proto'] as string) ?? 'https';
+  const host = (request?.headers?.host as string) ?? 'ace-dialer-webhooks.onrender.com';
+  const baseUrl = (process.env.WEBHOOKS_PUBLIC_URL ?? `${proto}://${host}`).replace(/\/+$/, '');
+  const recordAction = `${baseUrl}/webhooks/telnyx/voicemail`;
+  const greeting =
+    process.env.PILOT_VOICEMAIL_GREETING ??
+    "You've reached ACE Dialer. Please leave a message after the tone, then press pound or hang up.";
+
+  app.log.info({ status }, '[texml] dial-status received');
+
+  if (status === 'completed' || status === 'answered') {
+    return `<?xml version="1.0" encoding="UTF-8"?>
+<Response/>`;
+  }
+  if (status === 'busy') {
+    return `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say voice="alice">The party you are trying to reach is on another call. Please try again in a moment.</Say>
+  <Hangup/>
+</Response>`;
+  }
+  // Default + no-answer / failed / canceled -> voicemail.
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say voice="alice">${xmlEscape(greeting)}</Say>
+  <Record maxLength="120" playBeep="true" action="${xmlEscape(recordAction)}" method="POST" finishOnKey="#" />
+  <Hangup/>
+</Response>`;
+};
+
 app.get('/texml/inbound', async (request, reply) => {
   const xml = texmlHandler(request);
   app.log.info({ length: xml.length, sipUser: Boolean(process.env.PILOT_SIP_USERNAME) }, '[texml] inbound served');
@@ -643,6 +682,19 @@ app.get('/texml/inbound', async (request, reply) => {
 app.post('/texml/inbound', async (request, reply) => {
   const xml = texmlHandler(request);
   app.log.info({ length: xml.length, sipUser: Boolean(process.env.PILOT_SIP_USERNAME) }, '[texml] inbound served');
+  reply.type('application/xml; charset=utf-8').send(xml);
+});
+
+// Phase 6.5 - TexML <Dial action="..."> callback. Telnyx POSTs DialCallStatus
+// here when the dial finishes; we branch to voicemail / hangup / no-op.
+app.get('/texml/dial-status', async (request, reply) => {
+  const xml = dialStatusHandler(request);
+  app.log.info({ length: xml.length }, '[texml] dial-status served (GET)');
+  reply.type('application/xml; charset=utf-8').send(xml);
+});
+app.post('/texml/dial-status', async (request, reply) => {
+  const xml = dialStatusHandler(request);
+  app.log.info({ length: xml.length }, '[texml] dial-status served (POST)');
   reply.type('application/xml; charset=utf-8').send(xml);
 });
 
