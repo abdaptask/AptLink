@@ -567,13 +567,19 @@ export class SipService {
       );
       if (next) {
         this.activeCallId = next.id;
-        try {
-          next.session.unhold();
-        } catch { /* noop */ }
-        next.heldLocal = false;
+        // Bug fix: previously this called next.session.unhold() directly,
+        // which is a no-op for music-hold (we never sent a SIP hold —
+        // just swapped the outgoing track to the music stream). Result:
+        // music kept playing on the outgoing sender after promotion, and
+        // the user had to tap Hold/Resume 2-3 times before the mic was
+        // back. unholdCallWithMusicIfConfigured handles both paths:
+        // music-hold -> stopHoldMusic (restores fresh mic track);
+        // SIP-hold -> session.unhold().
+        void this.unholdCallWithMusicIfConfigured(next);
         if (next.audioEl) {
           this.primaryAudioEl.srcObject = next.audioEl.srcObject;
         }
+        this.primaryAudioEl.muted = false;
         promotedEvent = this.buildEvent(next, 'connected');
         console.log('[sip] promoted held call to active:', next.id);
       }

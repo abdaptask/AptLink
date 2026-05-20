@@ -92,23 +92,31 @@ export default function IncomingCall() {
           {canHoldAndAccept ? 'You’re already on a call' : '…'}
         </div>
         <div className="incoming-actions">
-          <button className="incoming-btn decline" onClick={declineCall} aria-label="Decline">
-            <PhoneOff size={28} />
-          </button>
-          {canHoldAndAccept && (
-            <button
-              className="incoming-btn hold-accept"
-              onClick={handleHoldAndAccept}
-              aria-label="Hold current call and accept"
-              title="Hold current call and accept"
-            >
-              <PhoneForwarded size={26} />
-              <span className="incoming-btn-sublabel">Hold &amp; Accept</span>
+          <div className="incoming-action-stack">
+            <button className="incoming-btn decline" onClick={declineCall} aria-label="Decline">
+              <PhoneOff size={32} />
             </button>
+            <div className="incoming-action-label">Decline</div>
+          </div>
+          {canHoldAndAccept && (
+            <div className="incoming-action-stack">
+              <button
+                className="incoming-btn hold-accept"
+                onClick={handleHoldAndAccept}
+                aria-label="Hold current call and accept"
+                title="Hold current call and accept"
+              >
+                <PhoneForwarded size={30} />
+              </button>
+              <div className="incoming-action-label">Hold &amp; Accept</div>
+            </div>
           )}
-          <button className="incoming-btn accept" onClick={handleAccept} aria-label="Accept">
-            <Phone size={28} />
-          </button>
+          <div className="incoming-action-stack">
+            <button className="incoming-btn accept" onClick={handleAccept} aria-label="Accept">
+              <Phone size={32} />
+            </button>
+            <div className="incoming-action-label">Accept</div>
+          </div>
         </div>
       </div>
     </div>
