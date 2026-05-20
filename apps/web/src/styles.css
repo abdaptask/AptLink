@@ -3600,22 +3600,4 @@ button.call-pill-info:hover { background: rgba(255, 255, 255, 0.05); }
   flex: 1;
   white-space: nowrap;
   overflow: hidden;
-  text-overflow: ellipsis;
-}
-.audio-picker-empty {
-  font-size: 13px;
-  opacity: 0.7;
-  text-align: center;
-  padding: 16px 0;
-}
-.audio-picker-close {
-  background: transparent;
-  color: inherit;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 10px;
-  padding: 8px 14px;
-  font-size: 13px;
-  align-self: flex-end;
-  cursor: pointer;
-}
-.audio-picker-close:hover { background: rgba(255, 255, 255, 0.05); }
+  text-overflow: e

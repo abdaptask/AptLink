@@ -29,5 +29,3 @@ coverage/
 .cache/
 .turbo/
 .tsbuildinfo
-
-.env

@@ -560,25 +560,3 @@ function stateToStatus(state: CallEvent['state'], hangupCause?: string): string 
       return 'initiated';
   }
 }
-l-log] updateCall(ended) failed', e);
-      }
-    }
-  }
-}
-
-function stateToStatus(state: CallEvent['state'], hangupCause?: string): string {
-  switch (state) {
-    case 'calling':
-      return 'initiated';
-    case 'ringing':
-      return 'ringing';
-    case 'incoming':
-      return 'ringing';
-    case 'connected':
-      return 'answered';
-    case 'ended':
-      return hangupCause ? 'completed' : 'failed';
-    default:
-      return 'initiated';
-  }
-}
