@@ -2,6 +2,7 @@
 // Phase 5.1: persist call lifecycle events to the database.
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
+import formbody from '@fastify/formbody';
 import { prisma } from '@ace/db';
 
 const SERVICE_NAME = 'ace-dialer-webhooks';
@@ -142,6 +143,11 @@ const app = Fastify({
 });
 
 await app.register(cors, { origin: false });
+// Phase 6.6 - parse application/x-www-form-urlencoded bodies.
+// Required for Telnyx TexML callbacks (Telnyx sends form-encoded POSTs
+// to action URLs like /texml/dial-status). Without this, Fastify returns
+// 415 Unsupported Media Type and Telnyx plays the "application error" prompt.
+await app.register(formbody);
 
 // Log every non-health request so we can confirm whether Telnyx ever hits us.
 app.addHook('onRequest', async (request) => {
