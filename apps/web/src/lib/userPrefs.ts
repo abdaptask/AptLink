@@ -79,6 +79,29 @@ export function isFavorite(phone: string): boolean {
   if (!target) return false;
   return getFavorites().some((f) => normalizeFavoritePhone(f.phone) === target);
 }
+
+/**
+ * Phase 6.10 — return the friendly name saved for a phone number in
+ * Favorites, or null if the number isn't favorited. Used in Recents,
+ * IncomingCall, and InCall to show "Adam Smith" instead of the raw
+ * number when the caller is in the user's favorites list.
+ *
+ * Lookup order inside a favorite:
+ *   1. firstName + lastName  (most common — what the Add Favorite modal saves)
+ *   2. label                 (legacy back-compat)
+ *   3. null                  (favorite exists but no name attached)
+ */
+export function getFavoriteName(phone: string | null | undefined): string | null {
+  if (!phone) return null;
+  const target = normalizeFavoritePhone(phone);
+  if (!target) return null;
+  const match = getFavorites().find((f) => normalizeFavoritePhone(f.phone) === target);
+  if (!match) return null;
+  const full = [match.firstName, match.lastName].filter(Boolean).join(' ').trim();
+  if (full) return full;
+  if (match.label) return match.label;
+  return null;
+}
 export interface AddFavoriteOptions {
   /** Optional display label override. If not provided, we build one from
    *  firstName + lastName, or fall back to JobDiva / formatted phone. */

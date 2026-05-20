@@ -28,6 +28,7 @@ import {
   PauseCircle,
   PlayCircle,
   PhoneForwarded,
+  ShieldOff,
 } from 'lucide-react';
 import {
   getMe,
@@ -35,6 +36,10 @@ import {
   getCallForwarding,
   saveCallForwarding,
   type CallForwardingSettings,
+  getBlockedNumbers,
+  addBlockedNumber,
+  removeBlockedNumber,
+  type BlockedNumber,
 } from '../api';
 import {
   DEFAULT_QUICK_REPLIES,
@@ -80,6 +85,7 @@ const SECTIONS: SectionDef[] = [
   { key: 'hold-music', label: 'Hold music', icon: Music, blurb: 'Play music when on hold', Component: HoldMusicSection },
   { key: 'voicemail-greeting', label: 'Voicemail greeting', icon: Mic, blurb: 'Personal greeting (coming soon)', Component: VoicemailGreetingSection },
   { key: 'call-forwarding', label: 'Call forwarding', icon: PhoneForwarded, blurb: 'Forward calls to another number', Component: CallForwardingSection },
+  { key: 'blocked-numbers', label: 'Blocked numbers', icon: ShieldOff, blurb: 'Reject calls & SMS from specific numbers', Component: BlockedNumbersSection },
   { key: 'data', label: 'Data', icon: Database, blurb: 'Backup & restore', Component: DataSection },
 ];
 
@@ -1318,6 +1324,174 @@ function QuickRepliesSection() {
           <RotateCcw size={14} /> Reset to defaults
         </button>
       </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Blocked Numbers — per-user blocklist of inbound phone numbers.
+// Calls from blocked numbers are hung up at the Telnyx layer (the webhook
+// handler issues a hangup via Call Control); SMS is silently dropped before
+// being stored. Both behaviors are server-side — closing the dialer doesn't
+// affect them. The list is editable from this Settings section; entries can
+// also be added by hitting "Block" on a row in Recents or in a Messages
+// thread header.
+// ---------------------------------------------------------------------------
+function BlockedNumbersSection() {
+  const [items, setItems] = useState<BlockedNumber[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [adding, setAdding] = useState(false);
+  const [draftNumber, setDraftNumber] = useState('');
+  const [draftReason, setDraftReason] = useState('');
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const token = sessionStorage.getItem('ace_token');
+    if (!token) return;
+    let cancelled = false;
+    getBlockedNumbers(token)
+      .then((rows) => { if (!cancelled) setItems(rows); })
+      .catch((e) => { if (!cancelled) setError((e as Error).message); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, []);
+
+  async function handleAdd() {
+    const token = sessionStorage.getItem('ace_token');
+    if (!token) return;
+    const trimmed = draftNumber.replace(/[^\d+]/g, '');
+    if (trimmed.length < 10) {
+      setError('Enter at least 10 digits (or E.164 like +14155551234).');
+      return;
+    }
+    setError(null);
+    setAdding(true);
+    try {
+      const row = await addBlockedNumber(token, {
+        number: trimmed,
+        reason: draftReason.trim() || undefined,
+      });
+      // Upsert into the local list — if the same number was already there
+      // (the API upserts), we replace the existing row.
+      setItems((prev) => {
+        const filtered = prev.filter((r) => r.id !== row.id);
+        return [row, ...filtered];
+      });
+      setDraftNumber('');
+      setDraftReason('');
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setAdding(false);
+    }
+  }
+
+  async function handleRemove(id: number) {
+    const token = sessionStorage.getItem('ace_token');
+    if (!token) return;
+    if (!confirm('Unblock this number? Future calls and SMS from it will reach you again.')) return;
+    setError(null);
+    try {
+      await removeBlockedNumber(token, id);
+      setItems((prev) => prev.filter((r) => r.id !== id));
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+
+  if (loading) {
+    return <div className="settings-section"><p className="muted">Loading…</p></div>;
+  }
+
+  return (
+    <div className="settings-section">
+      <h2 className="settings-title">Blocked numbers</h2>
+      <p className="settings-blurb">
+        Calls from these numbers are rejected at the carrier and never ring
+        the dialer. Text messages from these numbers are silently dropped —
+        they never appear in your inbox and you get no notification.
+      </p>
+
+      {/* Add form */}
+      <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '1rem' }}>
+        <input
+          type="tel"
+          className="quick-reply-input"
+          style={{ flex: '1 1 180px', minWidth: 160 }}
+          placeholder="Number (e.g. +14155551234)"
+          value={draftNumber}
+          onChange={(e) => setDraftNumber(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') void handleAdd(); }}
+          maxLength={20}
+        />
+        <input
+          type="text"
+          className="quick-reply-input"
+          style={{ flex: '1 1 180px', minWidth: 160 }}
+          placeholder="Reason (optional: 'spam', 'ex', etc.)"
+          value={draftReason}
+          onChange={(e) => setDraftReason(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') void handleAdd(); }}
+          maxLength={200}
+        />
+        <button
+          type="button"
+          className="device-action primary"
+          onClick={() => void handleAdd()}
+          disabled={adding || !draftNumber.trim()}
+        >
+          {adding ? 'Blocking…' : (<><Plus size={14} /> Block</>)}
+        </button>
+      </div>
+
+      {error && <p className="error" style={{ marginBottom: '0.75rem' }}>{error}</p>}
+
+      {/* List */}
+      {items.length === 0 ? (
+        <p className="muted small">
+          No blocked numbers yet. Add one above, or hit "Block" on any call
+          in Recents / message thread.
+        </p>
+      ) : (
+        <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+          {items.map((row) => (
+            <li
+              key={row.id}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                padding: '0.6rem 0.75rem',
+                borderBottom: '1px solid rgba(0, 0, 0, 0.08)',
+                gap: 12,
+              }}
+            >
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div style={{ fontWeight: 600 }}>{row.number}</div>
+                {row.reason && (
+                  <div className="muted small" style={{ marginTop: 2 }}>
+                    {row.reason}
+                  </div>
+                )}
+              </div>
+              <button
+                type="button"
+                className="device-action danger"
+                onClick={() => void handleRemove(row.id)}
+                title="Unblock this number"
+              >
+                <Trash2 size={14} /> Unblock
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      <p className="muted small" style={{ marginTop: '1rem' }}>
+        Note: blocked status is enforced server-side, so it works even when
+        your dialer is closed. SMS senders won't see any error — the message
+        appears delivered to them but is dropped before reaching you.
+      </p>
     </div>
   );
 }

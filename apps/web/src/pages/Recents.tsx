@@ -5,7 +5,7 @@ import { getCalls, type CallRecord } from '../api';
 import { useSip } from '../contexts/SipContext';
 import { useJobDivaContact, getCachedJobDivaName } from '../hooks/useJobDivaContact';
 import { formatPhone, toE164 } from '../lib/phone';
-import { addFavorite, isFavorite, removeFavorite } from '../lib/userPrefs';
+import { addFavorite, isFavorite, removeFavorite, getFavoriteName } from '../lib/userPrefs';
 
 function formatDuration(seconds: number): string {
   if (!seconds) return '';
@@ -397,7 +397,7 @@ function RecentRow({
   // Calling this hook here warms the JobDiva cache as the rows render, so
   // the parent's name-based filter starts matching on subsequent keystrokes.
   const jd = useJobDivaContact(number);
-  const displayName = jd?.name ?? formatNumber(number);
+  const displayName = getFavoriteName(number) ?? jd?.name ?? formatNumber(number);
   return (
     <li className={`call-row${missed ? ' missed' : ''}${expanded ? ' expanded' : ''}`}>
       <div className="call-row-main" onClick={onCallBack}>

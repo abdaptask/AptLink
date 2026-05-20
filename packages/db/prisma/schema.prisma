@@ -59,8 +59,28 @@ model User {
   voicemails      Voicemail[]
   internalSent       InternalMessage[] @relation("InternalMessageSender")
   internalReceived   InternalMessage[] @relation("InternalMessageRecipient")
+  blockedNumbers     BlockedNumber[]
 
   @@map("users")
+}
+
+/// Phase 6.8 — Number blocking.
+/// Per-user list of phone numbers that should be silently dropped on
+/// inbound (calls hang up immediately; SMS is dropped without storing).
+/// Stored in E.164 form. The check in webhooks compares last-10 digits
+/// to be tolerant of carrier-formatting differences (matches the rest
+/// of the dialer's phone-matching convention).
+model BlockedNumber {
+  id        Int      @id @default(autoincrement())
+  userId    Int      @map("user_id")
+  user      User     @relation(fields: [userId], references: [id])
+  number    String   // E.164 normalized
+  reason    String?  // optional free-text label (e.g. "spam", "ex")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@unique([userId, number])
+  @@index([userId])
+  @@map("blocked_numbers")
 }
 
 model Call {

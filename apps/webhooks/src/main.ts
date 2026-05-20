@@ -81,6 +81,52 @@ function decodeClientState(s: string | undefined | null): ClientState | null {
 
 // Bridge two Telnyx legs together via the Voice API (legacy fallback for
 // the old Add Call flow — used only when client_state lacks joinConfId).
+// Phase 6.8 - number blocking: hang up an inbound call that the recipient
+// has blacklisted. Uses Telnyx Call Control hangup API. Fail-open: if the
+// API key isn't set or the request fails, we just log and let the call
+// continue to the SIP endpoint - better to ring a legit call than to
+// silently drop one due to a server-side hiccup.
+async function hangupCallByControlId(
+  callControlId: string,
+): Promise<{ ok: boolean; status?: number; error?: unknown }> {
+  if (!TELNYX_API_KEY) return { ok: false, error: 'TELNYX_API_KEY not set on webhooks service' };
+  const res = await fetch(
+    `https://api.telnyx.com/v2/calls/${encodeURIComponent(callControlId)}/actions/hangup`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${TELNYX_API_KEY}`,
+      },
+      body: JSON.stringify({}),
+    },
+  );
+  const body = await res.json().catch(() => ({}));
+  return { ok: res.ok, status: res.status, ...(res.ok ? {} : { error: body }) };
+}
+
+// Phase 6.8 - number blocking: check whether `fromNumber` is on `userId`'s
+// blocklist. Compares last-10 digits to tolerate carrier formatting
+// differences. Fail-open: any DB error returns false (allow the call).
+async function isFromNumberBlockedForUser(
+  userId: number,
+  fromNumber: string | null | undefined,
+): Promise<boolean> {
+  if (!fromNumber || !userId) return false;
+  const last10 = fromNumber.replace(/[^\d]/g, '').slice(-10);
+  if (!last10) return false;
+  try {
+    const rows = await prisma.blockedNumber.findMany({
+      where: { userId },
+      select: { number: true },
+    });
+    return rows.some((r) => r.number.replace(/[^\d]/g, '').slice(-10) === last10);
+  } catch (e) {
+    console.warn('[blocked] lookup failed; treating as not blocked', e);
+    return false;
+  }
+}
+
 async function bridgeLegs(legA: string, legB: string): Promise<{ ok: boolean; status?: number; error?: unknown }> {
   if (!TELNYX_API_KEY) return { ok: false, error: 'TELNYX_API_KEY not set on webhooks service' };
   const res = await fetch(
@@ -215,10 +261,30 @@ app.post('/webhooks/telnyx/calls', async (request) => {
           fromNumber,
           toNumber,
         });
+
+        // Phase 6.8 - number blocking: for INBOUND calls only, check if
+        // the recipient user has blocked the caller. If so, hang up at
+        // the Telnyx layer and store the row with status=blocked so the
+        // user sees it in Recents.
+        const blocked =
+          direction === 'inbound' &&
+          (await isFromNumberBlockedForUser(ownerUserId, fromNumber));
+        if (blocked) {
+          app.log.info(
+            { ownerUserId, fromNumber, callControlId },
+            '[blocked] inbound call from blocked number - hanging up',
+          );
+          if (callControlId) {
+            void hangupCallByControlId(callControlId).catch((e) =>
+              app.log.warn({ err: e }, '[blocked] hangup API failed'),
+            );
+          }
+        }
+
         await prisma.call.upsert({
           where: { telnyxCallId: callId },
           update: {
-            status: 'initiated',
+            status: blocked ? 'blocked' : 'initiated',
             ...(callControlId ? { callControlId } : {}),
           },
           create: {
@@ -229,7 +295,7 @@ app.post('/webhooks/telnyx/calls', async (request) => {
             direction,
             fromNumber,
             toNumber,
-            status: 'initiated',
+            status: blocked ? 'blocked' : 'initiated',
             startedAt: payload.start_time ? new Date(payload.start_time) : new Date(),
           },
         });
@@ -498,6 +564,18 @@ app.post('/webhooks/telnyx/sms', async (request) => {
         // user owns this DID (Phase 5.7 multi-user).
         const threadKey = fromNumber; // the other party
         const ownerUserId = await resolveUserId({ toNumber, fromNumber });
+
+        // Phase 6.8 - number blocking: silently drop SMS from blocked
+        // senders. We ack the webhook (Telnyx requires 200) but skip
+        // storing the message, so it never appears in the user's inbox.
+        if (await isFromNumberBlockedForUser(ownerUserId, fromNumber)) {
+          app.log.info(
+            { ownerUserId, fromNumber, telnyxMessageId },
+            '[blocked] inbound SMS from blocked number - dropping',
+          );
+          break;
+        }
+
         await prisma.message.upsert({
           where: { telnyxMessageId },
           update: { status: 'received' },

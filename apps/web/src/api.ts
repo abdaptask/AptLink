@@ -615,3 +615,55 @@ export async function lookupJobDivaContact(
   if (!json?.found || !json.contact) return null;
   return json.contact;
 }
+
+// ===========================================================================
+// Phase 6.8 — Number blocking
+//
+// Per-user blocklist of inbound phone numbers. Calls from blocked numbers
+// hang up at the carrier layer; SMS from blocked numbers is silently dropped
+// before reaching the user's inbox.
+// ===========================================================================
+
+export interface BlockedNumber {
+  id: number;
+  number: string;
+  reason: string | null;
+  createdAt: string;
+}
+
+export async function getBlockedNumbers(token: string): Promise<BlockedNumber[]> {
+  const res = await fetch(`${API_URL}/blocked-numbers`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const json = (await res.json()) as { items: BlockedNumber[] };
+  return json.items;
+}
+
+export async function addBlockedNumber(
+  token: string,
+  input: { number: string; reason?: string },
+): Promise<BlockedNumber> {
+  const res = await fetch(`${API_URL}/blocked-numbers`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify(input),
+  });
+  if (!res.ok) {
+    const err = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new Error(err.error || `HTTP ${res.status}`);
+  }
+  return (await res.json()) as BlockedNumber;
+}
+
+export async function removeBlockedNumber(token: string, id: number): Promise<void> {
+  const res = await fetch(`${API_URL}/blocked-numbers/${id}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+}
+

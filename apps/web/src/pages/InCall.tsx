@@ -21,6 +21,7 @@ import {
   Signal,
 } from 'lucide-react';
 import { useSip } from '../contexts/SipContext';
+import { getFavoriteName } from '../lib/userPrefs';
 import { ringtone } from '../services/ringtone';
 import { useJobDivaContact } from '../hooks/useJobDivaContact';
 import { formatPhone } from '../lib/phone';
@@ -152,7 +153,7 @@ export default function InCall() {
       ? callState.fromNumber ?? callState.number
       : callState.toNumber ?? callState.number;
   const jd = useJobDivaContact(otherNumber);
-  const callerLabel = jd?.name ?? (formatNumber(otherNumber) || 'Calling…');
+  const callerLabel = getFavoriteName(otherNumber) ?? jd?.name ?? (formatNumber(otherNumber) || 'Calling…');
 
   const subtitle =
     callState.state === 'calling' ? 'Calling…' :

@@ -15,6 +15,7 @@ import { ringtone } from '../services/ringtone';
 import { useJobDivaContact } from '../hooks/useJobDivaContact';
 import { notify } from '../lib/notify';
 import { formatPhone } from '../lib/phone';
+import { getFavoriteName } from '../lib/userPrefs';
 
 function formatNumber(n: string | undefined): string {
   return formatPhone(n) || 'Unknown';
@@ -86,7 +87,7 @@ export default function IncomingCall() {
     location.pathname === '/' ||
     location.pathname === '/login';
 
-  const callerLabel = jd?.name ?? formatNumber(callerNumber);
+  const callerLabel = getFavoriteName(callerNumber) ?? jd?.name ?? formatNumber(callerNumber);
 
   return fullScreen ? (
     <div className="incoming-fullscreen">

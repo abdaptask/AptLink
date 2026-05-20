@@ -199,13 +199,13 @@ export class SipService {
       password: config.password,
       // Identity for outgoing INVITEs — Telnyx uses this for the From header.
       display_name: 'ACE Dialer',
-      // Re-register every 60 seconds. Browsers throttle background-tab
-      // timers heavily after ~5 minutes, so a longer expiry means the
-      // refresh can be missed and Telnyx silently drops our registration.
-      // 60s is short enough to keep the registration alive across most
-      // throttling windows, and inexpensive (a single SIP REGISTER message).
+      // Phase 6.9 — registration resilience.
+      // 600s expiry gives a 10-minute buffer against background-tab timer
+      // throttling. We pair this with a 20s active heartbeat (see
+      // installRegistrationHeartbeat below) that calls ua.register()
+      // unconditionally so Telnyx never sees us as expired.
       register: true,
-      register_expires: 60,
+      register_expires: 600,
       // IMPORTANT: session_timers MUST be false for Telnyx. With it on,
       // JsSIP sends re-INVITE/UPDATE every ~90s and Telnyx 481s the call
       // (no matching dialog) which then teardown the call. Off = the call
@@ -249,16 +249,82 @@ export class SipService {
     this.emit<SipState>('state', 'connecting');
     this.ua.start();
 
-    // Recover from background-tab throttling.
-    // When the tab becomes visible again, check the SIP UA state and force
-    // a re-register if it's drifted offline. Without this, the dialer
-    // silently fails to receive inbound calls after sitting in a background
-    // tab for a few minutes — because the registration timer was throttled
-    // and Telnyx dropped the registration server-side.
+    // Recover from background-tab throttling + actively keep registration
+    // alive even when the tab is in the foreground. See block below.
     this.installVisibilityRecovery();
+    this.installRegistrationHeartbeat();
+    this.saveConfigForReconnect(config);
+  }
+
+  /** Saved connect() config, used by reconnect() to rebuild the UA. */
+  private lastConfig: SipConfig | null = null;
+  private saveConfigForReconnect(config: SipConfig): void {
+    this.lastConfig = config;
+  }
+
+  /**
+   * Phase 6.9 — Manual reconnect. Tears down the existing UA completely
+   * and starts a fresh one with the saved config. Exposed so the React
+   * status indicator can show a 'Reconnect' button as a one-tap recovery
+   * when the UA gets stuck. The user shouldn't need Ctrl+Shift+R anymore.
+   */
+  reconnect(): void {
+    console.log('[sip] manual reconnect — tearing down UA');
+    const cfg = this.lastConfig;
+    try { this.ua?.stop(); } catch { /* noop */ }
+    this.ua = null;
+    if (this.heartbeatTimer) {
+      clearInterval(this.heartbeatTimer);
+      this.heartbeatTimer = null;
+    }
+    if (!cfg) {
+      console.warn('[sip] reconnect: no saved config — refresh the page');
+      return;
+    }
+    // Tiny delay so JsSIP fully tears down its WebSocket before we
+    // start a new one. Without this, the new UA can race with the dying
+    // socket and end up in a bad state.
+    setTimeout(() => this.connect(cfg), 250);
   }
 
   private visibilityHandler: (() => void) | null = null;
+  private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+
+  /**
+   * Phase 6.9 — proactive registration heartbeat. Calls ua.register()
+   * every 20s so we refresh well within the 600s expiry, even when the
+   * browser is throttling background timers. Cheap (one SIP REGISTER per
+   * 20s) and the only reliable way to keep the WebRTC client's presence
+   * alive across tab switches.
+   */
+  private installRegistrationHeartbeat(): void {
+    if (this.heartbeatTimer) return;
+    this.heartbeatTimer = setInterval(() => {
+      if (!this.ua) return;
+      try {
+        const isConnected = this.ua.isConnected?.() ?? false;
+        const isRegistered = this.ua.isRegistered?.() ?? false;
+        if (!isConnected) {
+          // Socket died — full reconnect needed.
+          console.log('[sip] heartbeat: socket dead, triggering reconnect');
+          this.reconnect();
+          return;
+        }
+        // Send REGISTER refresh. JsSIP queues it through the same socket.
+        // Idempotent — Telnyx accepts repeated registrations from the
+        // same Contact and just refreshes the expiry.
+        try { this.ua.register(); } catch (e) {
+          console.warn('[sip] heartbeat register threw', e);
+        }
+        if (!isRegistered) {
+          console.log('[sip] heartbeat: was unregistered, forcing register');
+        }
+      } catch (e) {
+        console.warn('[sip] heartbeat error', e);
+      }
+    }, 20_000);
+  }
+
   private installVisibilityRecovery(): void {
     // Idempotent — don't double-attach if connect() is ever called twice.
     if (this.visibilityHandler) return;
@@ -270,9 +336,9 @@ export class SipService {
         const isConnected = this.ua.isConnected?.() ?? false;
         console.log('[sip] visibility=visible — connected:', isConnected, 'registered:', isRegistered);
         if (!isConnected) {
-          // WebSocket got torn down. JsSIP's auto-reconnect should kick in,
-          // but we nudge it just in case.
-          try { this.ua.start(); } catch (e) { console.warn('[sip] visibility ua.start threw', e); }
+          // WebSocket died while backgrounded. Full UA rebuild — calling
+          // start() on a dead UA often leaves it stuck.
+          this.reconnect();
         } else if (!isRegistered) {
           // Socket alive, but registration lapsed. Force a new REGISTER.
           try { this.ua.register(); } catch (e) { console.warn('[sip] visibility register threw', e); }
@@ -282,8 +348,6 @@ export class SipService {
       }
     };
     document.addEventListener('visibilitychange', this.visibilityHandler);
-    // Also fire on `focus` for good measure — some browsers don't always
-    // emit visibilitychange when alt-tabbing to the window.
     window.addEventListener('focus', this.visibilityHandler);
   }
 

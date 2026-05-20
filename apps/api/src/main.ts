@@ -6,6 +6,7 @@ import cors from '@fastify/cors';
 import jwt from '@fastify/jwt';
 import { config } from './config.js';
 import { authRoutes } from './auth/auth.routes.js';
+import { blockedRoutes } from './blocked/blocked.routes.js';
 import { callForwardingRoutes } from './callForwarding/callForwarding.routes.js';
 import { callsRoutes } from './calls/calls.routes.js';
 import { internalChatRoutes } from './internalChat/internalChat.routes.js';
@@ -67,6 +68,7 @@ app.get('/health', async () => ({
 }));
 
 await app.register(authRoutes);
+await app.register(blockedRoutes);
 await app.register(callForwardingRoutes);
 await app.register(callsRoutes);
 await app.register(internalChatRoutes);
