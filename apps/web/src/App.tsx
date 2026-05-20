@@ -13,6 +13,18 @@ import Settings from './pages/Settings';
 import type { User } from './api';
 import { getMe } from './api';
 
+// Stash the user's per-account SIP creds into sessionStorage so SipContext
+// can register Telnyx as THIS user instead of using build-time env vars.
+// Cleared on logout / token expiry.
+function persistSipCreds(u: User | null): void {
+  if (u?.sipUsername) sessionStorage.setItem('ace_sip_username', u.sipUsername);
+  else sessionStorage.removeItem('ace_sip_username');
+  if (u?.sipPassword) sessionStorage.setItem('ace_sip_password', u.sipPassword);
+  else sessionStorage.removeItem('ace_sip_password');
+  if (u?.didNumber) sessionStorage.setItem('ace_did', u.didNumber);
+  else sessionStorage.removeItem('ace_did');
+}
+
 export default function App() {
   const [token, setToken] = useState<string | null>(() => sessionStorage.getItem('ace_token'));
   const [user, setUser] = useState<User | null>(null);
@@ -22,9 +34,13 @@ export default function App() {
   useEffect(() => {
     if (!token) { setLoading(false); return; }
     getMe(token)
-      .then((u) => setUser(u))
+      .then((u) => {
+        setUser(u);
+        persistSipCreds(u);
+      })
       .catch(() => {
         sessionStorage.removeItem('ace_token');
+        persistSipCreds(null);
         setToken(null);
       })
       .finally(() => setLoading(false));
@@ -32,6 +48,7 @@ export default function App() {
 
   function handleLoginSuccess(newToken: string, newUser: User) {
     sessionStorage.setItem('ace_token', newToken);
+    persistSipCreds(newUser);
     setToken(newToken);
     setUser(newUser);
     navigate('/keypad');
@@ -39,6 +56,7 @@ export default function App() {
 
   function handleLogout() {
     sessionStorage.removeItem('ace_token');
+    persistSipCreds(null);
     setToken(null);
     setUser(null);
     navigate('/login');

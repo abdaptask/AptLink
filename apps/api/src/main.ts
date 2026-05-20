@@ -8,8 +8,10 @@ import { config } from './config.js';
 import { authRoutes } from './auth/auth.routes.js';
 import { callForwardingRoutes } from './callForwarding/callForwarding.routes.js';
 import { callsRoutes } from './calls/calls.routes.js';
+import { internalChatRoutes } from './internalChat/internalChat.routes.js';
 import { messagesRoutes } from './messages/messages.routes.js';
 import { voicemailsRoutes } from './voicemails/voicemails.routes.js';
+import { voicemailGreetingRoutes } from './voicemailGreeting/voicemailGreeting.routes.js';
 import { jobDivaRoutes } from './jobdiva/jobdiva.routes.js';
 import { contactsRoutes } from './contacts/contacts.routes.js';
 
@@ -67,8 +69,10 @@ app.get('/health', async () => ({
 await app.register(authRoutes);
 await app.register(callForwardingRoutes);
 await app.register(callsRoutes);
+await app.register(internalChatRoutes);
 await app.register(messagesRoutes);
 await app.register(voicemailsRoutes);
+await app.register(voicemailGreetingRoutes);
 await app.register(jobDivaRoutes);
 await app.register(contactsRoutes);
 

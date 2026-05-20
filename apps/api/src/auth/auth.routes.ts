@@ -55,6 +55,12 @@ export async function authRoutes(app: FastifyInstance) {
         firstName: user.firstName,
         lastName: user.lastName,
         isAdmin: user.isAdmin,
+        // Per-user SIP creds so the dialer can register as THIS user with
+        // Telnyx instead of using the build-time VITE_SIP_* env vars.
+        // sipPassword is sensitive — only flow it over HTTPS and never log it.
+        sipUsername: user.sipUsername,
+        sipPassword: user.sipPassword,
+        didNumber: user.didNumber,
       },
     });
   });
@@ -71,6 +77,7 @@ export async function authRoutes(app: FastifyInstance) {
       lastName: user.lastName,
       isAdmin: user.isAdmin,
       sipUsername: user.sipUsername,
+      sipPassword: user.sipPassword,
       didNumber: user.didNumber,
     };
   });
@@ -82,6 +89,7 @@ export async function authRoutes(app: FastifyInstance) {
     firstName: z.string().optional(),
     lastName: z.string().optional(),
     sipUsername: z.string().optional(),
+    sipPassword: z.string().optional(),
     didNumber: z.string().optional(),
   });
   app.patch('/auth/me', { onRequest: [app.authenticate] }, async (request: FastifyRequest, reply) => {
@@ -95,6 +103,7 @@ export async function authRoutes(app: FastifyInstance) {
     if (b.firstName !== undefined)   updates.firstName = b.firstName || null;
     if (b.lastName !== undefined)    updates.lastName = b.lastName || null;
     if (b.sipUsername !== undefined) updates.sipUsername = b.sipUsername || null;
+    if (b.sipPassword !== undefined) updates.sipPassword = b.sipPassword || null;
     if (b.didNumber !== undefined) {
       // Normalize to E.164 — strips whitespace/dashes, adds +1 if it looks like US.
       const cleaned = b.didNumber.replace(/[^\d+]/g, '');

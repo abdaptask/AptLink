@@ -32,7 +32,7 @@ interface SipContextValue {
   acceptCall: () => void;
   declineCall: () => void;
   toggleMute: () => boolean;
-  toggleHold: () => boolean;
+  toggleHold: () => Promise<boolean>;
   isOnHold: () => boolean;
   /** Server-side transfer via Telnyx Call Control. */
   transferCall: (destination: string) => Promise<ServerActionResult>;
@@ -99,16 +99,35 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => { callStateRef.current = callState; }, [callState]);
 
   useEffect(() => {
-    const username = import.meta.env.VITE_SIP_USERNAME as string | undefined;
-    const password = import.meta.env.VITE_SIP_PASSWORD as string | undefined;
-    const callerNumber = import.meta.env.VITE_SIP_FROM_NUMBER as string | undefined;
+    // Per-user SIP creds, written to sessionStorage by the login flow. This
+    // is the multi-user path. If the logged-in user has no SIP creds set in
+    // the database, we fall through to the legacy build-time VITE_SIP_* env
+    // vars so single-user dev/preview builds still work.
+    const sessionSipUsername = sessionStorage.getItem('ace_sip_username');
+    const sessionSipPassword = sessionStorage.getItem('ace_sip_password');
+    const sessionDid = sessionStorage.getItem('ace_did');
+
+    const username =
+      sessionSipUsername ||
+      (import.meta.env.VITE_SIP_USERNAME as string | undefined);
+    const password =
+      sessionSipPassword ||
+      (import.meta.env.VITE_SIP_PASSWORD as string | undefined);
+    const callerNumber =
+      sessionDid ||
+      (import.meta.env.VITE_SIP_FROM_NUMBER as string | undefined);
 
     if (!username || !password) {
-      console.warn('[sip] missing VITE_SIP_USERNAME or VITE_SIP_PASSWORD — calls disabled');
+      console.warn(
+        '[sip] no SIP credentials for this user — calls disabled. ' +
+        'Set sipUsername + sipPassword on the user (DB or PATCH /auth/me), ' +
+        'or set VITE_SIP_USERNAME + VITE_SIP_PASSWORD as build env vars.',
+      );
       setSipState('failed');
       return;
     }
 
+    console.log('[sip] connecting as', username, 'caller=', callerNumber);
     const wssUri = import.meta.env.VITE_SIP_WSS_URI as string | undefined;
     sipService.connect({ username, password, callerNumber, wssUri });
 

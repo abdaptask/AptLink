@@ -115,7 +115,10 @@ export default function InCall() {
   const showToast = useCallback((msg: string) => setToast(msg), []);
 
   const handleMute = () => setMuted(toggleMute());
-  const handleHold = () => setOnHold(toggleHold());
+  const handleHold = async () => {
+    const heldNow = await toggleHold();
+    setOnHold(heldNow);
+  };
   const handleDTMF = (digit: string) => {
     sendDTMF(digit);
   };

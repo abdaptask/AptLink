@@ -43,6 +43,11 @@ model User {
   forwardingEnabled Boolean   @default(false) @map("forwarding_enabled")
   forwardingNumber  String?   @map("forwarding_number")
   forwardingMode    String?   @map("forwarding_mode")
+  /// Public URL of the user's uploaded voicemail greeting audio file
+  /// (stored in Supabase `ace-media` bucket). Telnyx fetches this URL
+  /// when a call falls to voicemail. Null = use Telnyx's default greeting.
+  voicemailGreetingUrl      String? @map("voicemail_greeting_url")
+  voicemailGreetingFilename String? @map("voicemail_greeting_filename")
   isAdmin         Boolean   @default(false) @map("is_admin")
   isActive        Boolean   @default(true)  @map("is_active")
   lastLoginAt     DateTime? @map("last_login_at")
@@ -52,6 +57,8 @@ model User {
   calls           Call[]
   messages        Message[]
   voicemails      Voicemail[]
+  internalSent       InternalMessage[] @relation("InternalMessageSender")
+  internalReceived   InternalMessage[] @relation("InternalMessageRecipient")
 
   @@map("users")
 }
@@ -132,4 +139,32 @@ model Voicemail {
 
   @@index([userId, receivedAt])
   @@map("voicemails")
+}
+
+// ---------------------------------------------------------------------------
+// Internal Chat — dialer users messaging each other (NOT external SMS).
+// One row per message. Threads are grouped by the {sender, recipient} pair
+// (canonical key = sorted ids joined by '_' so it's the same regardless of
+// which side sent the latest message).
+// ---------------------------------------------------------------------------
+model InternalMessage {
+  id          Int       @id @default(autoincrement())
+  senderId    Int       @map("sender_id")
+  sender      User      @relation("InternalMessageSender", fields: [senderId], references: [id])
+  recipientId Int       @map("recipient_id")
+  recipient   User      @relation("InternalMessageRecipient", fields: [recipientId], references: [id])
+  /// Canonical conversation key — e.g. "3_7" where 3 < 7. Lets us index +
+  /// query a 1:1 thread cheaply regardless of which side sent last.
+  threadKey   String    @map("thread_key")
+  body        String    @default("")
+  /// Optional URL to a media attachment (e.g. uploaded image, audio note).
+  /// Reuses the Supabase Storage `ace-media` bucket the SMS/MMS flow uses.
+  mediaUrl    String?   @map("media_url")
+  /// When the recipient first opened the message. Drives the unread count.
+  readAt      DateTime? @map("read_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
+
+  @@index([threadKey, createdAt])
+  @@index([recipientId, readAt])
+  @@map("internal_messages")
 }

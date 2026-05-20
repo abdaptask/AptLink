@@ -858,26 +858,53 @@ export class SipService {
     }
   }
 
-  toggleHold(): boolean {
+  async toggleHold(): Promise<boolean> {
     const active = this.activeCallId ? this.calls.get(this.activeCallId) : null;
     if (!active) return false;
+    const musicWanted = getHoldMusicEnabled() && Boolean(getHoldMusicDataUrl());
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const wasMusicHold = !!(active as any).__holdMusic;
     try {
       if (active.heldLocal) {
-        active.session.unhold();
-        active.heldLocal = false;
-        // Swap hold music back to mic.
-        if (getHoldMusicEnabled()) void this.stopHoldMusic(active);
-      } else {
-        active.session.hold();
-        active.heldLocal = true;
-        // Replace outgoing mic track with hold music so the held party
-        // hears music instead of silence.
-        if (getHoldMusicEnabled() && getHoldMusicDataUrl()) {
-          void this.startHoldMusic(active);
+        // ---- Unhold ----
+        // Two paths because we hold differently depending on music:
+        //  (a) Music-hold: we swapped the outgoing track but skipped SIP hold,
+        //      so we just restore the mic track. Don't call session.unhold()
+        //      (there's nothing to unhold).
+        //  (b) Silent SIP hold: we did call session.hold(); reverse it.
+        if (wasMusicHold) {
+          await this.stopHoldMusic(active);
+        } else {
+          try { active.session.unhold(); } catch (e) { console.warn('[sip] unhold threw', e); }
         }
+        active.heldLocal = false;
+      } else {
+        // ---- Hold ----
+        // CRITICAL: JsSIP's session.hold() sends a RE-INVITE with
+        //   a=inactive (no audio either way) by default. If we then
+        //   replaceTrack(music) the remote NEVER hears it — RTP is paused.
+        // So when music is wanted we skip SIP hold entirely and just swap
+        // the outgoing track. The remote party hears music + we mute the
+        // local audio element so the caller's voice doesn't bleed into the
+        // user's headset. heldLocal flag still drives the UI.
+        if (musicWanted) {
+          if (active.audioEl) active.audioEl.muted = true;
+          this.primaryAudioEl.muted = true;
+          await this.startHoldMusic(active);
+        } else {
+          // No music configured — fall back to standard SIP hold (silence
+          // to the remote party).
+          try { active.session.hold(); } catch (e) { console.warn('[sip] hold threw', e); }
+        }
+        active.heldLocal = true;
       }
     } catch (e) {
       console.warn('[sip] hold/unhold failed', e);
+    }
+    // Make sure the primary audio element is unmuted again when we unhold.
+    if (!active.heldLocal) {
+      if (active.audioEl) active.audioEl.muted = false;
+      this.primaryAudioEl.muted = false;
     }
     return active.heldLocal;
   }
