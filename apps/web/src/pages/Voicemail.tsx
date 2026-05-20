@@ -20,6 +20,7 @@ import {
 import {
   getVoicemails,
   markVoicemailListened,
+  bulkMarkVoicemails,
   deleteVoicemail,
   type VoicemailRecord,
 } from '../api';
@@ -169,6 +170,23 @@ export default function Voicemail() {
     await Promise.allSettled(ids.map((id) => deleteVoicemail(token, id)));
   }
 
+  async function handleBulkMark(listened: boolean) {
+    const token = sessionStorage.getItem('ace_token');
+    if (!token || selected.size === 0) return;
+    const ids = Array.from(selected);
+    // Optimistic UI flip first.
+    const nowIso = listened ? new Date().toISOString() : null;
+    setItems((prev) =>
+      prev.map((p) => (selected.has(p.id) ? { ...p, listenedAt: nowIso } : p)),
+    );
+    setSelected(new Set());
+    try {
+      await bulkMarkVoicemails(token, ids, listened);
+    } catch {
+      /* ignore — list reloads on next poll */
+    }
+  }
+
   async function handleToggleUnread(vm: VoicemailRecord) {
     const token = sessionStorage.getItem('ace_token');
     if (!token) return;
@@ -307,6 +325,24 @@ export default function Voicemail() {
               disabled={selected.size === 0}
             >
               Clear
+            </button>
+            <button
+              type="button"
+              className="device-action"
+              onClick={() => handleBulkMark(true)}
+              disabled={selected.size === 0}
+              title="Mark selected as read"
+            >
+              <CheckCircle2 size={14} /> Mark read
+            </button>
+            <button
+              type="button"
+              className="device-action"
+              onClick={() => handleBulkMark(false)}
+              disabled={selected.size === 0}
+              title="Mark selected as unread"
+            >
+              <Circle size={14} /> Mark unread
             </button>
             <button
               type="button"

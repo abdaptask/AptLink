@@ -51,6 +51,25 @@ export async function voicemailsRoutes(app: FastifyInstance) {
     return updated;
   });
 
+  // PATCH /voicemails/bulk  { ids: number[], listened: boolean }
+  // Bulk mark multiple voicemails as listened/unlistened. Used by the
+  // select-mode toolbar.
+  app.patch('/voicemails/bulk', { onRequest: [app.authenticate] }, async (request, reply) => {
+    const user = request.user as JwtPayload;
+    const body = (request.body as { ids?: number[]; listened?: boolean }) ?? {};
+    if (!Array.isArray(body.ids) || body.ids.length === 0) {
+      return reply.code(400).send({ error: 'ids[] required' });
+    }
+    if (typeof body.listened !== 'boolean') {
+      return reply.code(400).send({ error: 'listened (boolean) required' });
+    }
+    const result = await prisma.voicemail.updateMany({
+      where: { id: { in: body.ids.map((i) => Number(i)) }, userId: user.sub },
+      data: { listenedAt: body.listened ? new Date() : null },
+    });
+    return { ok: true, count: result.count };
+  });
+
   // DELETE /voicemails/:id
   app.delete('/voicemails/:id', { onRequest: [app.authenticate] }, async (request, reply) => {
     const user = request.user as JwtPayload;

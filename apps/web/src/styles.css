@@ -2933,24 +2933,38 @@ body {
 .msg-stream {
   flex: 1;
   overflow-y: auto;
+  overflow-x: hidden; /* never show the bottom scrollbar */
   padding: 16px 16px 8px;
   display: flex;
   flex-direction: column;
   gap: 6px;
+  /* Hide the vertical scrollbar chrome but keep scrolling functional.
+     Native scrollbars look heavy on Windows in a chat UI; Messenger /
+     iMessage / Slack all hide them. Wheel/touch scroll still works. */
+  scrollbar-width: none;            /* Firefox */
+  -ms-overflow-style: none;          /* IE/legacy Edge */
 }
+.msg-stream::-webkit-scrollbar { display: none; } /* Chrome/Safari */
+
 .bubble {
   max-width: 75%;
   padding: 8px 12px;
   border-radius: 16px;
   word-wrap: break-word;
+  overflow-wrap: anywhere; /* prevent long URLs from forcing horizontal scroll */
 }
 .bubble.out { align-self: flex-end; background: #2563eb; color: #fff; border-bottom-right-radius: 4px; }
 .bubble.in  { align-self: flex-start; background: #374151; color: #fff; border-bottom-left-radius: 4px; }
 .bubble-text { font-size: 14px; line-height: 1.35; white-space: pre-wrap; }
 .bubble-media img {
   display: block;
-  max-width: 240px;
+  /* Cap to 100% so the image never forces the bubble (and thus the stream)
+     wider than its container. The 240px upper bound keeps it tasteful when
+     there's room. */
+  max-width: min(100%, 240px);
   max-height: 240px;
+  width: auto;
+  height: auto;
   border-radius: 12px;
   margin-top: 6px;
 }

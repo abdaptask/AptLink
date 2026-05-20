@@ -304,6 +304,24 @@ export async function getUnreadVoicemailCount(token: string): Promise<number> {
   return j.count ?? 0;
 }
 
+// Bulk mark voicemails as listened/unlistened — used by the select-mode toolbar.
+export async function bulkMarkVoicemails(
+  token: string,
+  ids: number[],
+  listened: boolean,
+): Promise<{ count: number }> {
+  const res = await fetch(`${API_URL}/voicemails/bulk`, {
+    method: 'PATCH',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ ids, listened }),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
 export async function markVoicemailListened(token: string, id: number, listened: boolean): Promise<void> {
   await fetch(`${API_URL}/voicemails/${id}`, {
     method: 'PATCH',
