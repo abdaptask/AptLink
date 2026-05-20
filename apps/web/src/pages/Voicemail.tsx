@@ -369,11 +369,57 @@ function VoicemailRow({
   const unread = !vm.listenedAt;
   const audioRef = useRef<HTMLAudioElement>(null);
   const [playbackRate, setPlaybackRate] = useState(1);
+  // Actual duration discovered from the audio file once it loads. The
+  // server-stored `durationSeconds` is sometimes 0/1 because Telnyx Hosted
+  // Voicemail's webhook payload doesn't always include duration; the audio
+  // element itself knows the right answer once metadata loads.
+  const [actualDuration, setActualDuration] = useState<number | null>(null);
 
   // Apply playback rate whenever it changes (and after the audio element mounts).
   useEffect(() => {
     if (audioRef.current) audioRef.current.playbackRate = playbackRate;
   }, [playbackRate, expanded]);
+
+  // When the row expands, start playback automatically and capture the
+  // real duration from the audio element's metadata.
+  useEffect(() => {
+    if (!expanded || !audioRef.current) return;
+    const el = audioRef.current;
+    const onLoaded = () => {
+      if (isFinite(el.duration) && el.duration > 0) {
+        setActualDuration(el.duration);
+      }
+    };
+    el.addEventListener('loadedmetadata', onLoaded);
+    // Auto-play on expand so a single click on the row's play button
+    // both opens the player AND starts playing.
+    el.play().catch(() => { /* autoplay may be blocked; user can press play */ });
+    return () => el.removeEventListener('loadedmetadata', onLoaded);
+  }, [expanded]);
+
+  // Lightweight pre-fetch of duration for the *collapsed* row too. We hide
+  // the audio element off-screen, ask for metadata only, and update state
+  // when the duration arrives. No data downloaded beyond the headers.
+  useEffect(() => {
+    if (!vm.recordingUrl || actualDuration !== null) return;
+    const probe = document.createElement('audio');
+    probe.preload = 'metadata';
+    probe.src = vm.recordingUrl;
+    const onLoaded = () => {
+      if (isFinite(probe.duration) && probe.duration > 0) {
+        setActualDuration(probe.duration);
+      }
+    };
+    probe.addEventListener('loadedmetadata', onLoaded);
+    // Cleanup so we don't leak audio elements.
+    return () => {
+      probe.removeEventListener('loadedmetadata', onLoaded);
+      probe.src = '';
+    };
+  }, [vm.recordingUrl, actualDuration]);
+
+  // Prefer the discovered duration over the (possibly bad) stored one.
+  const displaySeconds = actualDuration ?? vm.durationSeconds;
 
   return (
     <li className={`vm-row${unread ? ' unread' : ''}${expanded ? ' expanded' : ''}${selectMode ? ' select-mode' : ''}${checked ? ' selected' : ''}`}>
@@ -392,7 +438,7 @@ function VoicemailRow({
             <div className="vm-number">{label}</div>
             <div className="vm-meta">
               {formatTime(vm.receivedAt)}
-              {vm.durationSeconds > 0 && ` · ${formatDuration(vm.durationSeconds)}`}
+              {displaySeconds > 0 && ` · ${formatDuration(Math.round(displaySeconds))}`}
             </div>
           </div>
         </div>
