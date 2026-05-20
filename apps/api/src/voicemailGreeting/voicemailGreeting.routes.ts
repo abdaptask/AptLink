@@ -82,23 +82,37 @@ async function setTelnyxGreeting(
   if (!config.telnyxApiKey) {
     return { ok: false, status: 0, body: 'TELNYX_API_KEY not set' };
   }
-  const res = await fetch(
-    `https://api.telnyx.com/v2/phone_numbers/${encodeURIComponent(numberId)}/voicemail`,
-    {
-      method: 'PATCH',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${config.telnyxApiKey}`,
-      },
-      // Telnyx 422s the PATCH unless `enabled` is also present, even
-      // though we're only changing the greeting URL. Hosted voicemail
-      // stays enabled — we just slap the URL change on top.
-      body: JSON.stringify({
-        enabled: true,
-        greeting_audio_url: greetingUrl ?? '',
-      }),
+  const voicemailUrl = `https://api.telnyx.com/v2/phone_numbers/${encodeURIComponent(numberId)}/voicemail`;
+
+  // Telnyx's PATCH for voicemail validates the FULL document, not a partial.
+  // If we omit `pin` or `enabled` it 422s with "can't be blank". So first
+  // GET the current settings, then PATCH with all of them + the new
+  // greeting URL layered on top.
+  const getRes = await fetch(voicemailUrl, {
+    headers: { Authorization: `Bearer ${config.telnyxApiKey}` },
+  });
+  let currentPin = '1234'; // fallback if GET fails or pin missing
+  let currentEnabled = true;
+  if (getRes.ok) {
+    const j = (await getRes.json().catch(() => ({}))) as {
+      data?: { enabled?: boolean; pin?: string };
+    };
+    if (typeof j.data?.pin === 'string' && j.data.pin) currentPin = j.data.pin;
+    if (typeof j.data?.enabled === 'boolean') currentEnabled = j.data.enabled;
+  }
+
+  const res = await fetch(voicemailUrl, {
+    method: 'PATCH',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${config.telnyxApiKey}`,
     },
-  );
+    body: JSON.stringify({
+      enabled: currentEnabled,
+      pin: currentPin,
+      greeting_audio_url: greetingUrl ?? '',
+    }),
+  });
   const body = await res.json().catch(() => ({}));
   return { ok: res.ok, status: res.status, body };
 }
