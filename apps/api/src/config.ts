@@ -43,4 +43,13 @@ export const config = {
   jobDivaUsername: optional('JOBDIVA_USERNAME'),
   jobDivaPassword: optional('JOBDIVA_PASSWORD'),
   jobDivaClientId: optional('JOBDIVA_CLIENT_ID'),
+
+  // Microsoft Entra ID SSO (Phase 7 — replacing email/password login).
+  // - msClientId / msTenantId come from the App Registration in Azure Portal.
+  // - msClientSecret is the "Value" of the client secret (NOT the Secret ID).
+  // All three are required for /auth/microsoft/exchange to work; the route
+  // returns 501 if any are missing.
+  msClientId: optional('MS_CLIENT_ID'),
+  msTenantId: optional('MS_TENANT_ID'),
+  msClientSecret: optional('MS_CLIENT_SECRET'),
 };

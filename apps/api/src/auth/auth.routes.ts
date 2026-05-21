@@ -25,8 +25,12 @@ export async function authRoutes(app: FastifyInstance) {
     const { email, password } = parsed.data;
 
     const user = await prisma.user.findUnique({ where: { email: email.toLowerCase() } });
-    if (!user || !user.isActive) {
-      // Identical message for missing user vs disabled user vs wrong password (don't leak which).
+    // Same generic message for missing/disabled/wrong-password/SSO-only users
+    // so we don't leak which account state caused the rejection.
+    // `passwordHash` is nullable on the schema — SSO-only users have NULL,
+    // so local-password login must refuse rather than calling bcrypt.compare
+    // on a null hash (which would throw).
+    if (!user || !user.isActive || !user.passwordHash) {
       return reply.code(401).send({ error: 'Invalid credentials' });
     }
 

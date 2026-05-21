@@ -16,7 +16,10 @@ datasource db {
 model User {
   id              Int       @id @default(autoincrement())
   email           String    @unique
-  passwordHash    String    @map("password_hash")
+  /// Local-password hash (bcrypt). NULL for users who only sign in via
+  /// Microsoft SSO. Kept nullable so we can support a small set of break-glass
+  /// local accounts (admins) alongside SSO users.
+  passwordHash    String?   @map("password_hash")
   firstName       String?   @map("first_name")
   lastName        String?   @map("last_name")
   phoneExtension  String?   @map("phone_extension")
@@ -50,6 +53,12 @@ model User {
   voicemailGreetingFilename String? @map("voicemail_greeting_filename")
   isAdmin         Boolean   @default(false) @map("is_admin")
   isActive        Boolean   @default(true)  @map("is_active")
+  /// Microsoft Entra ID immutable user id ("oid" claim on the id_token).
+  /// Survives email renames. NULL for break-glass local-password accounts.
+  azureOid        String?   @unique @map("azure_oid")
+  /// Which auth provider the user signs in with. "microsoft" is the
+  /// default for new ApTask SSO users; "local" is the break-glass model.
+  provider        String    @default("microsoft")
   lastLoginAt     DateTime? @map("last_login_at")
   createdAt       DateTime  @default(now()) @map("created_at")
   updatedAt       DateTime  @updatedAt      @map("updated_at")
@@ -60,8 +69,34 @@ model User {
   internalSent       InternalMessage[] @relation("InternalMessageSender")
   internalReceived   InternalMessage[] @relation("InternalMessageRecipient")
   blockedNumbers     BlockedNumber[]
+  favorites          Favorite[]
+  auditLogsAuthored  AuditLog[]        @relation("AuditLogActor")
+  auditLogsTargeting AuditLog[]        @relation("AuditLogTarget")
 
   @@map("users")
+}
+
+/// Per-user starred contacts. Used to power the Favorites tab and to show
+/// friendly names in Recents / Incoming / InCall when the caller matches a
+/// favorite. Synced across all of the user's devices via the API — replaces
+/// the localStorage-only store that used to live in lib/userPrefs.ts.
+/// Phone is stored E.164 normalized. Matching is on the full E.164 string;
+/// callers should normalize before lookup (toE164 helper).
+model Favorite {
+  id        Int      @id @default(autoincrement())
+  userId    Int      @map("user_id")
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  phone     String   // E.164 normalized
+  firstName String?  @map("first_name")
+  lastName  String?  @map("last_name")
+  /// Optional pre-joined display label. Kept for back-compat with old clients
+  /// that wrote a plain label string; new clients write firstName+lastName.
+  label     String?
+  addedAt   DateTime @default(now()) @map("added_at")
+
+  @@unique([userId, phone])
+  @@index([userId])
+  @@map("favorites")
 }
 
 /// Phase 6.8 — Number blocking.
@@ -161,6 +196,7 @@ model Voicemail {
   @@map("voicemails")
 }
 
+
 // ---------------------------------------------------------------------------
 // Internal Chat — dialer users messaging each other (NOT external SMS).
 // One row per message. Threads are grouped by the {sender, recipient} pair
@@ -187,4 +223,34 @@ model InternalMessage {
   @@index([threadKey, createdAt])
   @@index([recipientId, readAt])
   @@map("internal_messages")
+}
+
+// ---------------------------------------------------------------------------
+// AuditLog — enterprise hygiene. Every admin action (invite/promote/demote/
+// deactivate/reset-password/role-change) writes a row here. Read-only for
+// non-admins; admins see the full feed at Settings → Audit Log.
+// ---------------------------------------------------------------------------
+model AuditLog {
+  id            Int       @id @default(autoincrement())
+  /// Who performed the action. NULL only for system-generated entries
+  /// (e.g. nightly cleanup jobs); admin actions always have an actor.
+  actorUserId   Int?      @map("actor_user_id")
+  actor         User?     @relation("AuditLogActor", fields: [actorUserId], references: [id])
+  /// Dot-namespaced action verb — e.g. "user.invited", "user.promoted",
+  /// "user.demoted", "user.deactivated", "user.password_reset",
+  /// "user.sso_first_signin". Keep it sortable + filterable.
+  action        String
+  /// Which user the action targeted (null for non-user-targeted entries
+  /// like "telnyx.webhook_replay_storm").
+  targetUserId  Int?      @map("target_user_id")
+  target        User?     @relation("AuditLogTarget", fields: [targetUserId], references: [id])
+  /// Free-form context — old/new values for diffs, IP address, etc.
+  metadata      Json?
+  createdAt     DateTime  @default(now()) @map("created_at")
+
+  @@index([createdAt])
+  @@index([actorUserId, createdAt])
+  @@index([targetUserId, createdAt])
+  @@index([action, createdAt])
+  @@map("audit_logs")
 }
