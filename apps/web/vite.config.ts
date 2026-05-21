@@ -10,6 +10,10 @@ const pkg = JSON.parse(readFileSync(resolve(here, 'package.json'), 'utf-8')) as 
 };
 
 export default defineConfig({
+  // Use relative asset paths in the production build so the bundle works
+  // when loaded via file:// inside Electron. Without this, index.html
+  // references /assets/... which resolves to filesystem root and 404s.
+  base: './',
   plugins: [react()],
   define: {
     // Bake the package version into the bundle so the UI can display it.
