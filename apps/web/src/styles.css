@@ -4047,3 +4047,117 @@ button.call-pill-info:hover { background: rgba(255, 255, 255, 0.05); }
   color: #94a3b8;
   border-top-color: rgba(0, 0, 0, 0.06);
 }
+
+/* ============ UPDATE-AVAILABLE BANNER (#197) ============ */
+/* Non-blocking pill at the very top of every page. Mounted from Layout.tsx.
+   Visible only when the API reports a newer version than the bundled one.
+   See apps/web/src/components/UpdateBanner.tsx. */
+.update-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px;
+  background: linear-gradient(90deg,
+    rgba(10, 132, 255, 0.16),
+    rgba(94, 92, 230, 0.16));
+  border-bottom: 1px solid rgba(10, 132, 255, 0.3);
+  color: var(--text);
+  font-size: 13px;
+}
+.update-banner-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: rgba(10, 132, 255, 0.22);
+  color: #0a84ff;
+}
+.update-banner-text {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+}
+.update-banner-text strong { font-weight: 600; }
+.update-banner-versions {
+  font-variant-numeric: tabular-nums;
+  opacity: 0.75;
+  font-size: 12px;
+}
+.update-banner-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.update-banner-cta,
+.update-banner-cta-secondary {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 10px;
+  border-radius: 8px;
+  border: none;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s ease, transform 0.05s ease;
+}
+.update-banner-cta {
+  background: #0a84ff;
+  color: #ffffff;
+}
+.update-banner-cta:hover { background: #0973e0; }
+.update-banner-cta:active { transform: translateY(1px); }
+.update-banner-cta-secondary {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+.update-banner-cta-secondary:hover { background: rgba(255, 255, 255, 0.12); }
+.update-banner-dismiss {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.update-banner-dismiss:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text);
+}
+
+/* Light theme overrides. */
+[data-theme="light"] .update-banner {
+  background: linear-gradient(90deg,
+    rgba(10, 132, 255, 0.10),
+    rgba(94, 92, 230, 0.10));
+  border-bottom-color: rgba(10, 132, 255, 0.25);
+}
+[data-theme="light"] .update-banner-icon {
+  background: rgba(10, 132, 255, 0.18);
+}
+[data-theme="light"] .update-banner-cta-secondary {
+  background: rgba(0, 0, 0, 0.04);
+  border-color: rgba(0, 0, 0, 0.08);
+}
+[data-theme="light"] .update-banner-cta-secondary:hover {
+  background: rgba(0, 0, 0, 0.08);
+}
+[data-theme="light"] .update-banner-dismiss:hover {
+  background: rgba(0, 0, 0, 0.06);
+}
+
+/* Narrow mobile: drop secondary label, stack the actions if needed. */
+@media (max-width: 640px) {
+  .update-banner { padding: 8px 10px; gap: 6px; }
+  .update-banner-versions { display: none; }
+  .update-banner-cta span { display: none; }
+}

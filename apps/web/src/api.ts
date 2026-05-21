@@ -892,3 +892,23 @@ export async function exchangeMicrosoftCode(
   }
   return res.json();
 }
+
+// ---------------------------------------------------------------------------
+// Phase 6.12 — Version check for in-app "Update available" banner.
+//
+// Hits the API's root endpoint and returns the published version string,
+// e.g. "0.6.0". UpdateBanner compares this to the bundled `__APP_VERSION__`
+// (Vite-injected from apps/web/package.json) and surfaces a pill at the top
+// of every page when the server is ahead. Returns null on any error so the
+// banner stays hidden when the API is unreachable.
+// ---------------------------------------------------------------------------
+export async function getApiVersion(): Promise<string | null> {
+  try {
+    const res = await fetch(`${API_URL}/`);
+    if (!res.ok) return null;
+    const json = (await res.json()) as { version?: string };
+    return typeof json?.version === 'string' ? json.version : null;
+  } catch {
+    return null;
+  }
+}

@@ -23,6 +23,7 @@ import {
 } from '../api';
 import IncomingCall from '../components/IncomingCall';
 import SmsNotifier from '../components/SmsNotifier';
+import UpdateBanner from '../components/UpdateBanner';
 import { useSip } from '../contexts/SipContext';
 import { ensureNotificationPermission } from '../lib/notify';
 import {
@@ -179,6 +180,10 @@ export default function Layout({ user, onLogout }: Props) {
     <div className="app-shell">
       <IncomingCall />
       <SmsNotifier />
+      {/* Polls the API every 15 min — when the server reports a higher
+          version than the bundled __APP_VERSION__, surfaces a pill at the
+          top of every page so users on stale installs know to update. (#197) */}
+      <UpdateBanner />
 
       {hasActiveCall && (
         <button

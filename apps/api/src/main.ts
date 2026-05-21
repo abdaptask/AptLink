@@ -65,7 +65,7 @@ app.decorate('authenticate', async function (request: FastifyRequest, reply: Fas
 app.get('/', async () => ({
   service: SERVICE_NAME,
   status: 'ok',
-  version: '0.6.0',
+  version: '0.6.1',
   // Feature flags — boolean only, no values leaked. Lets a developer verify
   // env vars are loaded without exposing secrets.
   features: {
