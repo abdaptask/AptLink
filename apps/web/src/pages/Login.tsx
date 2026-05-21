@@ -47,6 +47,28 @@ export default function Login({ onSuccess }: Props) {
   const [startingSso, setStartingSso] = useState(false);
   const [logoutNotice, setLogoutNotice] = useState<string | null>(null);
 
+  // Reset the "Redirecting…" state if the user comes back to the app
+  // without completing OAuth (e.g. they closed the browser tab or cancelled
+  // at Microsoft's login). Triggers on window focus + page visibility flip.
+  useEffect(() => {
+    if (!startingSso) return undefined;
+    const reset = () => {
+      // Small delay so we don't reset before the actual callback URL
+      // can route us away from /login.
+      window.setTimeout(() => {
+        if (window.location.pathname === '/login' || window.location.hash.startsWith('#/login')) {
+          setStartingSso(false);
+        }
+      }, 600);
+    };
+    window.addEventListener('focus', reset);
+    document.addEventListener('visibilitychange', reset);
+    return () => {
+      window.removeEventListener('focus', reset);
+      document.removeEventListener('visibilitychange', reset);
+    };
+  }, [startingSso]);
+
   useEffect(() => {
     const reason = consumeLogoutReason();
     if (reason === 'jwt_expired') {
