@@ -85,7 +85,10 @@ async function recordAudit(
         actorUserId,
         action,
         targetUserId,
-        metadata: metadata as object | null,
+        // Prisma's JSON column accepts `undefined` (leave NULL) or a value,
+        // but NOT a bare `null` literal — that needs Prisma.JsonNull. Easiest:
+        // coerce null → undefined so the column ends up NULL in DB.
+        metadata: (metadata ?? undefined) as object | undefined,
       },
     });
   } catch (err) {
