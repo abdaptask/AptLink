@@ -389,11 +389,21 @@ app.post('/webhooks/telnyx/calls', async (request) => {
           return 'completed';
         })();
 
-        // Try update first; if no record (we missed call.initiated), insert.
+        // Phase 6.12 - preserve blocked status. If the row was already
+        // marked 'blocked' by call.initiated (because the caller is on
+        // the recipient's blocklist), do NOT let the subsequent hangup
+        // event downgrade it to "rejected" or "completed". Only update
+        // the bookkeeping fields (endedAt / duration / cause), leave the
+        // status field alone.
+        const existing = await prisma.call.findUnique({
+          where: { telnyxCallId: callId },
+          select: { status: true },
+        });
+        const preserveStatus = existing?.status === 'blocked';
         const updated = await prisma.call.updateMany({
           where: { telnyxCallId: callId },
           data: {
-            status,
+            ...(preserveStatus ? {} : { status }),
             endedAt,
             durationSeconds: duration,
             hangupCause,
@@ -842,6 +852,19 @@ app.post('/webhooks/telnyx/voicemail', async (request) => {
 
     // Phase 5.7 — route the voicemail to the user that owns the called DID.
     const ownerUserId = await resolveUserId({ toNumber, fromNumber });
+
+    // Phase 6.12 - drop blocked voicemails. Telnyx Hosted Voicemail still
+    // triggers on USER_BUSY (Telnyx Support confirmed they can't disable
+    // that trigger), so a blocked caller's recording arrives here. Drop
+    // it silently — the user never sees it.
+    if (await isFromNumberBlockedForUser(ownerUserId, fromNumber)) {
+      app.log.info(
+        { ownerUserId, fromNumber, telnyxCallId },
+        '[blocked] voicemail from blocked number - dropping',
+      );
+      return { received: true };
+    }
+
     await prisma.voicemail.create({
       data: {
         userId: ownerUserId,
