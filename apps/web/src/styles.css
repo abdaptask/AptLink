@@ -4161,3 +4161,308 @@ button.call-pill-info:hover { background: rgba(255, 255, 255, 0.05); }
   .update-banner-versions { display: none; }
   .update-banner-cta span { display: none; }
 }
+
+/* ============ ADMIN USERS PANEL + AUDIT LOG (#168, #179, #180) ============ */
+.admin-empty {
+  padding: 2rem;
+  text-align: center;
+  color: var(--text-muted);
+  border: 1px dashed rgba(255, 255, 255, 0.12);
+  border-radius: 12px;
+}
+[data-theme="light"] .admin-empty { border-color: rgba(0, 0, 0, 0.10); }
+
+.users-admin-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  margin-bottom: 14px;
+}
+
+.users-admin-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.users-admin-table th {
+  text-align: left;
+  font-weight: 600;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  padding: 8px 10px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+.users-admin-table td {
+  padding: 12px 10px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  vertical-align: middle;
+}
+[data-theme="light"] .users-admin-table th { border-bottom-color: rgba(0, 0, 0, 0.08); }
+[data-theme="light"] .users-admin-table td { border-bottom-color: rgba(0, 0, 0, 0.04); }
+.users-admin-table tr.inactive { opacity: 0.55; }
+.users-admin-table tr:hover { background: rgba(255, 255, 255, 0.025); }
+[data-theme="light"] .users-admin-table tr:hover { background: rgba(0, 0, 0, 0.02); }
+
+.users-admin-name {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.users-admin-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #0a84ff, #5e5ce6);
+  color: #ffffff;
+  font-weight: 600;
+  font-size: 12px;
+  flex-shrink: 0;
+}
+.users-admin-email {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.role-pill, .status-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+}
+.role-pill.admin { background: rgba(255, 159, 10, 0.18); color: #ffa940; }
+.role-pill.user { background: rgba(118, 118, 128, 0.18); color: var(--text-muted); }
+.status-pill.active { background: rgba(52, 199, 89, 0.18); color: #34c759; }
+.status-pill.inactive { background: rgba(255, 59, 48, 0.18); color: #ff6b6b; }
+[data-theme="light"] .role-pill.admin { background: rgba(255, 149, 0, 0.14); color: #c66900; }
+[data-theme="light"] .status-pill.active { background: rgba(52, 199, 89, 0.14); color: #1e8a3e; }
+[data-theme="light"] .status-pill.inactive { background: rgba(215, 0, 21, 0.10); color: #d70015; }
+
+.users-admin-actions {
+  position: relative;
+  width: 44px;
+  text-align: right;
+}
+.users-admin-menu {
+  position: absolute;
+  top: 100%;
+  right: 6px;
+  z-index: 10;
+  min-width: 220px;
+  background: var(--bg-card, #1c1c1e);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  border-radius: 10px;
+  padding: 6px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+}
+[data-theme="light"] .users-admin-menu {
+  background: #ffffff;
+  border-color: rgba(0, 0, 0, 0.10);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.15);
+}
+.users-admin-menu button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 10px;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font-size: 13px;
+  text-align: left;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.users-admin-menu button:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.06);
+}
+.users-admin-menu button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+[data-theme="light"] .users-admin-menu button:hover:not(:disabled) {
+  background: rgba(0, 0, 0, 0.04);
+}
+
+.invite-advanced {
+  margin-top: 10px;
+  padding: 12px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px dashed rgba(255, 255, 255, 0.10);
+}
+[data-theme="light"] .invite-advanced {
+  background: rgba(0, 0, 0, 0.025);
+  border-color: rgba(0, 0, 0, 0.08);
+}
+
+/* ---- Audit log ---- */
+.audit-log-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+[data-theme="light"] .audit-log-list { border-top-color: rgba(0, 0, 0, 0.06); }
+
+.audit-log-row {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+}
+[data-theme="light"] .audit-log-row { border-bottom-color: rgba(0, 0, 0, 0.04); }
+
+.audit-log-row-main {
+  display: grid;
+  grid-template-columns: 140px 1fr 24px;
+  gap: 12px;
+  align-items: center;
+  padding: 10px 8px;
+  cursor: pointer;
+}
+.audit-log-row-main:hover { background: rgba(255, 255, 255, 0.025); }
+[data-theme="light"] .audit-log-row-main:hover { background: rgba(0, 0, 0, 0.02); }
+
+.audit-log-when {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.audit-log-summary { font-size: 13px; }
+.audit-log-chev { color: var(--text-muted); }
+
+.audit-log-meta {
+  margin: 0;
+  padding: 12px 16px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  background: rgba(0, 0, 0, 0.25);
+  color: var(--text);
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+[data-theme="light"] .audit-log-meta {
+  background: rgba(0, 0, 0, 0.04);
+  border-top-color: rgba(0, 0, 0, 0.06);
+}
+
+/* ============ DECLINE-WITH-MESSAGE (#201) ============ */
+/* Inline "Reply with message" affordance on the inbound full-screen UI.
+   iOS-style: hangs up the call AND sends an SMS from the user's DID. */
+.incoming-reply-row {
+  display: flex;
+  justify-content: center;
+  margin-top: 14px;
+}
+.incoming-reply-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+.incoming-reply-btn:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+[data-theme="light"] .incoming-reply-btn {
+  border-color: rgba(0, 0, 0, 0.10);
+  background: rgba(0, 0, 0, 0.04);
+}
+[data-theme="light"] .incoming-reply-btn:hover {
+  background: rgba(0, 0, 0, 0.08);
+}
+
+.incoming-reply-panel {
+  margin: 12px auto 0;
+  max-width: 440px;
+  width: 90%;
+  padding: 12px;
+  border-radius: 12px;
+  background: rgba(28, 28, 30, 0.95);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  text-align: left;
+}
+[data-theme="light"] .incoming-reply-panel {
+  background: #ffffff;
+  border-color: rgba(0, 0, 0, 0.10);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.15);
+}
+.incoming-reply-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+}
+.incoming-reply-list {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 8px;
+}
+.incoming-reply-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 8px 10px;
+  margin-bottom: 4px;
+  border: none;
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text);
+  border-radius: 8px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.incoming-reply-item:hover:not(:disabled) {
+  background: rgba(10, 132, 255, 0.18);
+}
+.incoming-reply-item:disabled { opacity: 0.5; cursor: not-allowed; }
+[data-theme="light"] .incoming-reply-item { background: rgba(0, 0, 0, 0.035); }
+[data-theme="light"] .incoming-reply-item:hover:not(:disabled) { background: rgba(10, 132, 255, 0.12); }
+
+.incoming-reply-custom {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+}
+.incoming-reply-custom input {
+  flex: 1;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text);
+  font-size: 13px;
+}
+[data-theme="light"] .incoming-reply-custom input {
+  background: #ffffff;
+  border-color: rgba(0, 0, 0, 0.12);
+}
+.incoming-reply-custom button {
+  padding: 8px 14px;
+  border: none;
+  border-radius: 8px;
+  background: #0a84ff;
+  color: #ffffff;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.incoming-reply-custom button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}

@@ -912,3 +912,133 @@ export async function getApiVersion(): Promise<string | null> {
     return null;
   }
 }
+
+// ===========================================================================
+// Phase 6.13 — Admin Users panel
+//
+// Server-side admin endpoints for the in-app Users panel. All guarded by
+// isAdmin server-side; the frontend just hides the nav entries for non-admins.
+// ===========================================================================
+
+export interface AdminUserRow {
+  id: number;
+  email: string;
+  firstName: string | null;
+  lastName: string | null;
+  isAdmin: boolean;
+  isActive: boolean;
+  provider: string;
+  sipUsername: string | null;
+  didNumber: string | null;
+  lastLoginAt: string | null;
+  createdAt: string;
+}
+
+export async function listAdminUsers(token: string): Promise<AdminUserRow[]> {
+  const res = await fetch(`${API_URL}/admin/users`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const json = (await res.json()) as { items: AdminUserRow[] };
+  return json.items;
+}
+
+export interface InviteAdminUserInput {
+  email: string;
+  firstName?: string | null;
+  lastName?: string | null;
+  sipUsername?: string | null;
+  sipPassword?: string | null;
+  didNumber?: string | null;
+  isAdmin?: boolean;
+  localPassword?: string | null;
+}
+
+export async function inviteAdminUser(
+  token: string,
+  input: InviteAdminUserInput,
+): Promise<AdminUserRow> {
+  const res = await fetch(`${API_URL}/admin/users`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify(input),
+  });
+  if (!res.ok) {
+    const err = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new Error(err.error || `HTTP ${res.status}`);
+  }
+  return (await res.json()) as AdminUserRow;
+}
+
+export interface UpdateAdminUserInput {
+  firstName?: string | null;
+  lastName?: string | null;
+  sipUsername?: string | null;
+  sipPassword?: string | null;
+  didNumber?: string | null;
+  isAdmin?: boolean;
+  isActive?: boolean;
+  localPassword?: string | null;
+}
+
+export async function updateAdminUser(
+  token: string,
+  id: number,
+  input: UpdateAdminUserInput,
+): Promise<AdminUserRow> {
+  const res = await fetch(`${API_URL}/admin/users/${id}`, {
+    method: 'PATCH',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify(input),
+  });
+  if (!res.ok) {
+    const err = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new Error(err.error || `HTTP ${res.status}`);
+  }
+  return (await res.json()) as AdminUserRow;
+}
+
+export interface AuditLogEntry {
+  id: number;
+  action: string;
+  actor: {
+    id: number;
+    email: string;
+    firstName: string | null;
+    lastName: string | null;
+  } | null;
+  target: {
+    id: number;
+    email: string;
+    firstName: string | null;
+    lastName: string | null;
+  } | null;
+  metadata: unknown;
+  createdAt: string;
+}
+
+export interface AuditLogPage {
+  items: AuditLogEntry[];
+  nextCursor: number | null;
+}
+
+export async function listAuditLogs(
+  token: string,
+  opts?: { limit?: number; cursor?: number },
+): Promise<AuditLogPage> {
+  const params = new URLSearchParams();
+  if (opts?.limit) params.set('limit', String(opts.limit));
+  if (opts?.cursor) params.set('cursor', String(opts.cursor));
+  const qs = params.toString();
+  const res = await fetch(`${API_URL}/admin/audit-logs${qs ? '?' + qs : ''}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return (await res.json()) as AuditLogPage;
+}

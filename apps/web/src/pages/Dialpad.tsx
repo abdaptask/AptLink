@@ -7,6 +7,7 @@ import { useSip } from '../contexts/SipContext';
 import { getCalls, type CallRecord } from '../api';
 import { formatPhone } from '../lib/phone';
 import { getCachedJobDivaName } from '../hooks/useJobDivaContact';
+import { getFavoriteName } from '../lib/userPrefs';
 
 interface DialpadLocationState {
   addCall?: boolean;
@@ -202,7 +203,14 @@ export default function Dialpad() {
           if (!other) continue;
           const key = other.replace(/[^\d]/g, '').slice(-10);
           if (seen.has(key)) continue;
-          const name = getCachedJobDivaName(other);
+          // Friendly-name resolution mirrors the rest of the dialer:
+          // user-saved favorite name beats JobDiva name beats formatted phone.
+          // Without the favorite lookup here, a starred contact would still
+          // show as the raw number in the contacts quick-pick. (#161 follow-up)
+          const name =
+            getFavoriteName(other) ??
+            getCachedJobDivaName(other) ??
+            null;
           seen.set(key, {
             phone: other,
             label: name ?? formatPhone(other) ?? other,

@@ -29,6 +29,13 @@ import {
   PlayCircle,
   PhoneForwarded,
   ShieldOff,
+  Users,
+  ScrollText,
+  ShieldCheck,
+  UserPlus,
+  MoreHorizontal,
+  Power,
+  KeyRound,
 } from 'lucide-react';
 import {
   getMe,
@@ -40,6 +47,12 @@ import {
   addBlockedNumber,
   removeBlockedNumber,
   type BlockedNumber,
+  listAdminUsers,
+  inviteAdminUser,
+  updateAdminUser,
+  listAuditLogs,
+  type AdminUserRow,
+  type AuditLogEntry,
 } from '../api';
 import {
   DEFAULT_QUICK_REPLIES,
@@ -87,6 +100,10 @@ const SECTIONS: SectionDef[] = [
   { key: 'call-forwarding', label: 'Call forwarding', icon: PhoneForwarded, blurb: 'Forward calls to another number', Component: CallForwardingSection },
   { key: 'blocked-numbers', label: 'Blocked numbers', icon: ShieldOff, blurb: 'Reject calls & SMS from specific numbers', Component: BlockedNumbersSection },
   { key: 'data', label: 'Data', icon: Database, blurb: 'Backup & restore', Component: DataSection },
+  // Admin-only. Components themselves show an "Admin access required"
+  // empty state for non-admins so the nav nav-items don't dead-link.
+  { key: 'users', label: 'Users', icon: Users, blurb: 'Invite, promote, deactivate (admin only)', Component: UsersAdminSection },
+  { key: 'audit-log', label: 'Audit log', icon: ScrollText, blurb: 'Recent admin actions (admin only)', Component: AuditLogSection },
 ];
 
 const DEFAULT_SECTION = SECTIONS[0].key;
@@ -1492,6 +1509,595 @@ function BlockedNumbersSection() {
         your dialer is closed. SMS senders won't see any error — the message
         appears delivered to them but is dropped before reaching you.
       </p>
+    </div>
+  );
+}
+
+
+// ---------------------------------------------------------------------------
+// Phase 6.13 — Admin Users panel
+//
+// Lists every user in the org, lets admins invite new users, and exposes
+// promote / demote / deactivate / reactivate / reset-password actions in a
+// per-row kebab menu. All mutations write an AuditLog entry on the server.
+// Safeguards (server-enforced too, but mirrored here for UX feedback):
+//   - Can't change YOUR OWN admin flag.
+//   - Can't deactivate yourself.
+//   - Can't demote the last remaining active admin.
+// ---------------------------------------------------------------------------
+function UsersAdminSection() {
+  const [me, setMe] = useState<{ id: number; isAdmin: boolean } | null>(null);
+  const [rows, setRows] = useState<AdminUserRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [showInvite, setShowInvite] = useState(false);
+  const [openMenuId, setOpenMenuId] = useState<number | null>(null);
+  const [search, setSearch] = useState('');
+
+  function load() {
+    const token = sessionStorage.getItem('ace_token');
+    if (!token) return;
+    setLoading(true);
+    setError(null);
+    Promise.all([
+      getMe(token).then((u) => ({ id: u.id, isAdmin: u.isAdmin })),
+      listAdminUsers(token),
+    ])
+      .then(([whoami, users]) => {
+        setMe(whoami);
+        setRows(users);
+      })
+      .catch((e) => setError((e as Error).message))
+      .finally(() => setLoading(false));
+  }
+  useEffect(() => { load(); }, []);
+
+  // Close the kebab menu when the user clicks elsewhere.
+  useEffect(() => {
+    if (openMenuId === null) return;
+    const handler = () => setOpenMenuId(null);
+    window.addEventListener('click', handler);
+    return () => window.removeEventListener('click', handler);
+  }, [openMenuId]);
+
+  if (loading && rows.length === 0) {
+    return <div className="muted">Loading users…</div>;
+  }
+  if (error && !me?.isAdmin) {
+    return (
+      <div className="admin-empty">
+        <ShieldCheck size={28} style={{ opacity: 0.5, marginBottom: 8 }} />
+        <p><strong>Admin access required</strong></p>
+        <p className="muted small">Ask an admin to grant you the role.</p>
+      </div>
+    );
+  }
+  if (me && !me.isAdmin) {
+    return (
+      <div className="admin-empty">
+        <ShieldCheck size={28} style={{ opacity: 0.5, marginBottom: 8 }} />
+        <p><strong>Admin access required</strong></p>
+        <p className="muted small">Ask an admin to grant you the role.</p>
+      </div>
+    );
+  }
+
+  const activeAdminCount = rows.filter((r) => r.isAdmin && r.isActive).length;
+
+  // Client-side search (matches name, email, DID).
+  const filtered = rows.filter((r) => {
+    const q = search.trim().toLowerCase();
+    if (!q) return true;
+    const name = [r.firstName, r.lastName].filter(Boolean).join(' ').toLowerCase();
+    if (name.includes(q)) return true;
+    if (r.email.toLowerCase().includes(q)) return true;
+    if ((r.didNumber ?? '').toLowerCase().includes(q)) return true;
+    return false;
+  });
+
+  async function handlePatch(id: number, input: Parameters<typeof updateAdminUser>[2]) {
+    const token = sessionStorage.getItem('ace_token');
+    if (!token) return;
+    try {
+      const updated = await updateAdminUser(token, id, input);
+      setRows((prev) => prev.map((r) => (r.id === id ? updated : r)));
+    } catch (e) {
+      alert(`Failed: ${(e as Error).message}`);
+    }
+  }
+
+  function rowName(r: AdminUserRow): string {
+    const name = [r.firstName, r.lastName].filter(Boolean).join(' ').trim();
+    return name || r.email;
+  }
+
+  return (
+    <div className="users-admin">
+      <div className="users-admin-header">
+        <div>
+          <h3 style={{ margin: 0 }}>Users ({rows.length})</h3>
+          <p className="muted small" style={{ margin: '2px 0 0' }}>
+            {activeAdminCount} admin{activeAdminCount === 1 ? '' : 's'} ·{' '}
+            {rows.filter((r) => r.isActive).length} active
+          </p>
+        </div>
+        <button
+          type="button"
+          className="device-action primary"
+          onClick={() => setShowInvite(true)}
+        >
+          <UserPlus size={14} /> Invite user
+        </button>
+      </div>
+
+      <div className="search-bar" style={{ marginBottom: 12 }}>
+        <input
+          type="search"
+          className="search-input"
+          placeholder="Search by name, email, or DID"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+        />
+      </div>
+
+      {error && <div className="error" style={{ marginBottom: 12 }}>{error}</div>}
+
+      <table className="users-admin-table">
+        <thead>
+          <tr>
+            <th>User</th>
+            <th>Email</th>
+            <th>Role</th>
+            <th>Status</th>
+            <th>DID</th>
+            <th>Last sign-in</th>
+            <th aria-label="actions" />
+          </tr>
+        </thead>
+        <tbody>
+          {filtered.map((r) => {
+            const isSelf = me?.id === r.id;
+            const lastDemoteWouldStrand =
+              r.isAdmin && r.isActive && activeAdminCount === 1;
+            const lastDeactivateWouldStrand =
+              r.isAdmin && r.isActive && activeAdminCount === 1;
+            return (
+              <tr key={r.id} className={r.isActive ? '' : 'inactive'}>
+                <td>
+                  <div className="users-admin-name">
+                    <span className="users-admin-avatar" aria-hidden="true">
+                      {(r.firstName?.[0] ?? r.email[0] ?? '?').toUpperCase()}
+                    </span>
+                    <div>
+                      <div>{rowName(r)}</div>
+                      <div className="muted small">{r.provider === 'local' ? 'Local password' : 'Microsoft SSO'}</div>
+                    </div>
+                  </div>
+                </td>
+                <td className="users-admin-email">{r.email}</td>
+                <td>
+                  <span className={`role-pill ${r.isAdmin ? 'admin' : 'user'}`}>
+                    {r.isAdmin ? 'Admin' : 'User'}
+                  </span>
+                </td>
+                <td>
+                  <span className={`status-pill ${r.isActive ? 'active' : 'inactive'}`}>
+                    {r.isActive ? 'Active' : 'Inactive'}
+                  </span>
+                </td>
+                <td className="muted small">{r.didNumber || '—'}</td>
+                <td className="muted small">
+                  {r.lastLoginAt
+                    ? new Date(r.lastLoginAt).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })
+                    : 'Never'}
+                </td>
+                <td className="users-admin-actions">
+                  <button
+                    type="button"
+                    className="icon-btn"
+                    aria-label="More actions"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setOpenMenuId(openMenuId === r.id ? null : r.id);
+                    }}
+                  >
+                    <MoreHorizontal size={16} />
+                  </button>
+                  {openMenuId === r.id && (
+                    <div
+                      className="users-admin-menu"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      {/* Promote / Demote */}
+                      <button
+                        type="button"
+                        disabled={isSelf || (r.isAdmin && lastDemoteWouldStrand)}
+                        title={
+                          isSelf
+                            ? "You can't change your own role"
+                            : r.isAdmin && lastDemoteWouldStrand
+                              ? "Promote someone else first — this is the only active admin"
+                              : ''
+                        }
+                        onClick={() => {
+                          setOpenMenuId(null);
+                          if (!confirm(`${r.isAdmin ? 'Demote' : 'Promote'} ${rowName(r)}?`)) return;
+                          void handlePatch(r.id, { isAdmin: !r.isAdmin });
+                        }}
+                      >
+                        <ShieldCheck size={14} />
+                        {r.isAdmin ? 'Demote to user' : 'Promote to admin'}
+                      </button>
+
+                      {/* Deactivate / Reactivate */}
+                      <button
+                        type="button"
+                        disabled={
+                          isSelf ||
+                          (r.isActive && r.isAdmin && lastDeactivateWouldStrand)
+                        }
+                        title={
+                          isSelf
+                            ? "You can't deactivate your own account"
+                            : r.isActive && lastDeactivateWouldStrand
+                              ? "Promote someone else first — this is the only active admin"
+                              : ''
+                        }
+                        onClick={() => {
+                          setOpenMenuId(null);
+                          const verb = r.isActive ? 'Deactivate' : 'Reactivate';
+                          if (!confirm(`${verb} ${rowName(r)}?`)) return;
+                          void handlePatch(r.id, { isActive: !r.isActive });
+                        }}
+                      >
+                        <Power size={14} />
+                        {r.isActive ? 'Deactivate' : 'Reactivate'}
+                      </button>
+
+                      {/* Reset password (for break-glass local accounts) */}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setOpenMenuId(null);
+                          const next = prompt(
+                            `Set a new local password for ${rowName(r)}. (Leave blank to clear and force SSO only.)`,
+                            '',
+                          );
+                          if (next === null) return; // cancelled
+                          void handlePatch(r.id, {
+                            localPassword: next.trim() ? next.trim() : null,
+                          });
+                        }}
+                      >
+                        <KeyRound size={14} />
+                        Set / reset local password
+                      </button>
+                    </div>
+                  )}
+                </td>
+              </tr>
+            );
+          })}
+          {filtered.length === 0 && (
+            <tr><td colSpan={7} className="muted small" style={{ padding: '1rem', textAlign: 'center' }}>No users match.</td></tr>
+          )}
+        </tbody>
+      </table>
+
+      {showInvite && (
+        <InviteUserModal
+          onClose={() => setShowInvite(false)}
+          onCreated={(row) => {
+            setRows((prev) => [row, ...prev]);
+            setShowInvite(false);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function InviteUserModal({
+  onClose,
+  onCreated,
+}: {
+  onClose: () => void;
+  onCreated: (u: AdminUserRow) => void;
+}) {
+  const [email, setEmail] = useState('');
+  const [firstName, setFirstName] = useState('');
+  const [lastName, setLastName] = useState('');
+  const [didNumber, setDidNumber] = useState('');
+  const [sipUsername, setSipUsername] = useState('');
+  const [sipPassword, setSipPassword] = useState('');
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [localPassword, setLocalPassword] = useState('');
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    const token = sessionStorage.getItem('ace_token');
+    if (!token) return;
+    if (!email.trim()) {
+      setError('Email is required.');
+      return;
+    }
+    setSubmitting(true);
+    setError(null);
+    try {
+      const row = await inviteAdminUser(token, {
+        email: email.trim(),
+        firstName: firstName.trim() || null,
+        lastName: lastName.trim() || null,
+        didNumber: didNumber.trim() || null,
+        sipUsername: sipUsername.trim() || null,
+        sipPassword: sipPassword || null,
+        isAdmin,
+        localPassword: localPassword || null,
+      });
+      onCreated(row);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div className="compose-modal" onClick={onClose}>
+      <div className="fav-modal" onClick={(e) => e.stopPropagation()} role="dialog" aria-labelledby="invite-title" style={{ maxWidth: 520 }}>
+        <div className="fav-modal-header">
+          <UserPlus size={18} className="fav-modal-icon" />
+          <h3 id="invite-title">Invite user</h3>
+        </div>
+
+        <p className="muted small" style={{ marginTop: 0 }}>
+          By default the user signs in with Microsoft and binds via their email on first sign-in. SIP credentials & DID are optional — paste them if you already provisioned in Telnyx.
+        </p>
+
+        <form onSubmit={handleSubmit} autoComplete="off">
+          <label className="fav-modal-field" style={{ marginBottom: 8 }}>
+            <span className="fav-modal-label">Work email *</span>
+            <input
+              type="email"
+              className="fav-modal-input"
+              placeholder="firstname@aptask.com"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              autoFocus
+              required
+            />
+          </label>
+
+          <div className="fav-modal-row">
+            <label className="fav-modal-field">
+              <span className="fav-modal-label">First name</span>
+              <input
+                type="text"
+                className="fav-modal-input"
+                placeholder="Optional"
+                value={firstName}
+                onChange={(e) => setFirstName(e.target.value)}
+              />
+            </label>
+            <label className="fav-modal-field">
+              <span className="fav-modal-label">Last name</span>
+              <input
+                type="text"
+                className="fav-modal-input"
+                placeholder="Optional"
+                value={lastName}
+                onChange={(e) => setLastName(e.target.value)}
+              />
+            </label>
+          </div>
+
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12, cursor: 'pointer' }}>
+            <input type="checkbox" checked={isAdmin} onChange={(e) => setIsAdmin(e.target.checked)} />
+            <span>Invite as admin</span>
+          </label>
+
+          <button
+            type="button"
+            className="device-action"
+            onClick={() => setShowAdvanced(!showAdvanced)}
+            style={{ marginTop: 12 }}
+          >
+            {showAdvanced ? '▼' : '▶'} Advanced (Telnyx creds, local password)
+          </button>
+
+          {showAdvanced && (
+            <div className="invite-advanced">
+              <label className="fav-modal-field" style={{ marginBottom: 8 }}>
+                <span className="fav-modal-label">DID (phone number)</span>
+                <input
+                  type="tel"
+                  className="fav-modal-input"
+                  placeholder="+17325551234"
+                  value={didNumber}
+                  onChange={(e) => setDidNumber(e.target.value)}
+                />
+              </label>
+              <div className="fav-modal-row">
+                <label className="fav-modal-field">
+                  <span className="fav-modal-label">SIP username</span>
+                  <input
+                    type="text"
+                    className="fav-modal-input"
+                    placeholder="user...something"
+                    value={sipUsername}
+                    onChange={(e) => setSipUsername(e.target.value)}
+                  />
+                </label>
+                <label className="fav-modal-field">
+                  <span className="fav-modal-label">SIP password</span>
+                  <input
+                    type="password"
+                    className="fav-modal-input"
+                    placeholder="From Telnyx Portal"
+                    value={sipPassword}
+                    onChange={(e) => setSipPassword(e.target.value)}
+                  />
+                </label>
+              </div>
+              <label className="fav-modal-field" style={{ marginTop: 8 }}>
+                <span className="fav-modal-label">
+                  Local password (break-glass, bypasses SSO)
+                </span>
+                <input
+                  type="password"
+                  className="fav-modal-input"
+                  placeholder="Leave empty for SSO-only"
+                  value={localPassword}
+                  onChange={(e) => setLocalPassword(e.target.value)}
+                />
+              </label>
+            </div>
+          )}
+
+          {error && <div className="error" style={{ marginTop: 12 }}>{error}</div>}
+
+          <div className="fav-modal-actions">
+            <button type="button" className="fav-modal-cancel" onClick={onClose}>Cancel</button>
+            <button type="submit" className="fav-modal-save" disabled={submitting}>
+              {submitting ? 'Inviting…' : 'Send invite'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Phase 6.13 — Audit log
+//
+// Read-only feed of recent admin actions. Cursor-paginated (500 max per
+// page; default 100). Renders a friendly summary per row plus the raw
+// metadata in an expanded panel for debugging.
+// ---------------------------------------------------------------------------
+function AuditLogSection() {
+  const [me, setMe] = useState<{ isAdmin: boolean } | null>(null);
+  const [entries, setEntries] = useState<AuditLogEntry[]>([]);
+  const [nextCursor, setNextCursor] = useState<number | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState<Set<number>>(new Set());
+
+  function loadPage(cursor?: number) {
+    const token = sessionStorage.getItem('ace_token');
+    if (!token) return;
+    setLoading(true);
+    setError(null);
+    listAuditLogs(token, { limit: 100, cursor })
+      .then((page) => {
+        setEntries((prev) => (cursor ? [...prev, ...page.items] : page.items));
+        setNextCursor(page.nextCursor);
+      })
+      .catch((e) => setError((e as Error).message))
+      .finally(() => setLoading(false));
+  }
+  useEffect(() => {
+    const token = sessionStorage.getItem('ace_token');
+    if (!token) return;
+    getMe(token).then((u) => setMe({ isAdmin: u.isAdmin })).catch(() => undefined);
+    loadPage();
+  }, []);
+
+  if (me && !me.isAdmin) {
+    return (
+      <div className="admin-empty">
+        <ShieldCheck size={28} style={{ opacity: 0.5, marginBottom: 8 }} />
+        <p><strong>Admin access required</strong></p>
+        <p className="muted small">Ask an admin to grant you the role.</p>
+      </div>
+    );
+  }
+
+  function actionLabel(action: string): string {
+    switch (action) {
+      case 'user.invited': return 'invited';
+      case 'user.promoted': return 'promoted';
+      case 'user.demoted': return 'demoted';
+      case 'user.activated': return 'reactivated';
+      case 'user.deactivated': return 'deactivated';
+      case 'user.password_reset': return 'reset password for';
+      case 'user.updated': return 'updated';
+      case 'user.sso_first_signin': return 'first SSO sign-in for';
+      default: return action;
+    }
+  }
+
+  function partyName(p: AuditLogEntry['actor'] | AuditLogEntry['target']): string {
+    if (!p) return 'system';
+    const name = [p.firstName, p.lastName].filter(Boolean).join(' ').trim();
+    return name || p.email;
+  }
+
+  function toggleExpand(id: number) {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  return (
+    <div className="audit-log">
+      {error && <div className="error" style={{ marginBottom: 12 }}>{error}</div>}
+
+      {entries.length === 0 && !loading && (
+        <div className="muted">No audit entries yet.</div>
+      )}
+
+      <ul className="audit-log-list">
+        {entries.map((e) => (
+          <li key={e.id} className="audit-log-row">
+            <div className="audit-log-row-main" onClick={() => toggleExpand(e.id)}>
+              <div className="audit-log-when">
+                {new Date(e.createdAt).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}
+              </div>
+              <div className="audit-log-summary">
+                <strong>{partyName(e.actor)}</strong>{' '}
+                <span className="muted">{actionLabel(e.action)}</span>
+                {e.target && (
+                  <>
+                    {' '}<strong>{partyName(e.target)}</strong>
+                  </>
+                )}
+              </div>
+              <ChevronRight
+                size={14}
+                className="audit-log-chev"
+                style={{
+                  transform: expanded.has(e.id) ? 'rotate(90deg)' : 'none',
+                  transition: 'transform 0.15s ease',
+                }}
+              />
+            </div>
+            {expanded.has(e.id) && (
+              <pre className="audit-log-meta">
+                {JSON.stringify(e.metadata, null, 2)}
+              </pre>
+            )}
+          </li>
+        ))}
+      </ul>
+
+      {nextCursor && (
+        <button
+          type="button"
+          className="device-action"
+          onClick={() => loadPage(nextCursor)}
+          disabled={loading}
+          style={{ marginTop: 12 }}
+        >
+          {loading ? 'Loading…' : 'Load more'}
+        </button>
+      )}
     </div>
   );
 }

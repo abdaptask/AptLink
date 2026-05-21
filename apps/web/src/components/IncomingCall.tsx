@@ -7,15 +7,16 @@
 // call, we show a third button between Decline and Accept. Tapping it holds
 // the current call and answers the new one; the held call shows up in the
 // InCall held-strip (same plumbing as Add Call).
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { Phone, PhoneOff, PhoneForwarded } from 'lucide-react';
+import { Phone, PhoneOff, PhoneForwarded, MessageSquare, X } from 'lucide-react';
 import { useSip } from '../contexts/SipContext';
 import { ringtone } from '../services/ringtone';
 import { useJobDivaContact } from '../hooks/useJobDivaContact';
 import { notify } from '../lib/notify';
 import { formatPhone } from '../lib/phone';
-import { getFavoriteName } from '../lib/userPrefs';
+import { getFavoriteName, getQuickReplies } from '../lib/userPrefs';
+import { sendMessage } from '../api';
 
 function formatNumber(n: string | undefined): string {
   return formatPhone(n) || 'Unknown';
@@ -42,6 +43,47 @@ export default function IncomingCall() {
     holdAndAcceptCall();
     navigate('/in-call');
   };
+
+  // Phase 7.2 — "Decline with message" (iOS-style quick-reply on inbound).
+  // When the user taps Reply, we show a popover of quick replies. Picking
+  // one (or sending a custom text) declines the call AND sends the chosen
+  // text to the caller via SMS. Caller sees a normal text from your DID.
+  const [showReply, setShowReply] = useState(false);
+  const [customReply, setCustomReply] = useState('');
+  const [sendingReply, setSendingReply] = useState(false);
+  const [replyError, setReplyError] = useState<string | null>(null);
+  const [quickReplies, setQuickRepliesState] = useState<string[]>(() => getQuickReplies());
+  useEffect(() => {
+    const refresh = () => setQuickRepliesState(getQuickReplies());
+    window.addEventListener('ace:quickRepliesChanged', refresh);
+    return () => window.removeEventListener('ace:quickRepliesChanged', refresh);
+  }, []);
+
+  async function handleSendReply(body: string) {
+    const text = body.trim();
+    if (!text) return;
+    const to = incoming?.fromNumber ?? incoming?.number;
+    if (!to) return;
+    const token = sessionStorage.getItem('ace_token');
+    if (!token) {
+      setReplyError('Not signed in.');
+      return;
+    }
+    setSendingReply(true);
+    setReplyError(null);
+    // Decline first so the caller stops ringing immediately. Even if the SMS
+    // send fails afterwards, the call still got handled cleanly.
+    try { declineCall(); } catch { /* noop */ }
+    try {
+      await sendMessage(token, { to, body: text });
+      setShowReply(false);
+      setCustomReply('');
+    } catch (err) {
+      setReplyError((err as Error).message);
+    } finally {
+      setSendingReply(false);
+    }
+  }
 
   useEffect(() => {
     if (incoming) {
@@ -89,6 +131,12 @@ export default function IncomingCall() {
 
   const callerLabel = getFavoriteName(callerNumber) ?? jd?.name ?? formatNumber(callerNumber);
 
+  // Only offer "Reply with message" when the caller is a real phone number
+  // we can SMS back. Internal/SIP-URI calls won't have a deliverable to-number.
+  const replyableNumber =
+    (incoming?.fromNumber || incoming?.number) ?? '';
+  const canReply = /^\+?\d/.test(replyableNumber.replace(/[\s()-]/g, ''));
+
   return fullScreen ? (
     <div className="incoming-fullscreen">
       <div className="incoming-fs-inner">
@@ -97,6 +145,74 @@ export default function IncomingCall() {
         <div className="incoming-subtle">
           {canHoldAndAccept ? 'You’re already on a call' : '…'}
         </div>
+
+        {canReply && (
+          <div className="incoming-reply-row">
+            <button
+              type="button"
+              className="incoming-reply-btn"
+              onClick={() => setShowReply((v) => !v)}
+              aria-label="Reply with a message"
+              title="Reply with a message"
+            >
+              <MessageSquare size={16} />
+              <span>Reply with message</span>
+            </button>
+          </div>
+        )}
+
+        {showReply && canReply && (
+          <div className="incoming-reply-panel" role="dialog" aria-label="Quick replies">
+            <div className="incoming-reply-header">
+              <span>Send a quick reply &amp; decline</span>
+              <button type="button" className="icon-btn" onClick={() => setShowReply(false)} aria-label="Close">
+                <X size={14} />
+              </button>
+            </div>
+            <ul className="incoming-reply-list">
+              {quickReplies.length === 0 && (
+                <li className="muted small" style={{ padding: '0.5rem 0.75rem' }}>
+                  No quick replies set. Add some in Settings &rarr; Quick replies.
+                </li>
+              )}
+              {quickReplies.map((r, i) => (
+                <li key={i}>
+                  <button
+                    type="button"
+                    className="incoming-reply-item"
+                    disabled={sendingReply}
+                    onClick={() => void handleSendReply(r)}
+                  >
+                    {r}
+                  </button>
+                </li>
+              ))}
+            </ul>
+            <div className="incoming-reply-custom">
+              <input
+                type="text"
+                placeholder="Or type a custom reply..."
+                value={customReply}
+                onChange={(e) => setCustomReply(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && customReply.trim()) {
+                    void handleSendReply(customReply);
+                  }
+                }}
+                disabled={sendingReply}
+              />
+              <button
+                type="button"
+                disabled={!customReply.trim() || sendingReply}
+                onClick={() => void handleSendReply(customReply)}
+              >
+                {sendingReply ? 'Sending…' : 'Send'}
+              </button>
+            </div>
+            {replyError && <div className="error" style={{ marginTop: 8 }}>{replyError}</div>}
+          </div>
+        )}
+
         <div className="incoming-actions">
           <div className="incoming-action-stack">
             <button className="incoming-btn decline" onClick={declineCall} aria-label="Decline">
