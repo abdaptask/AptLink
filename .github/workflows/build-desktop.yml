@@ -72,6 +72,13 @@ jobs:
   windows:
     name: Build Windows .exe
     runs-on: windows-latest
+    # Wait for mac to finish so it can create the GitHub Release first.
+    # Otherwise both jobs race to create the same release, and we end up
+    # with duplicate untagged drafts (which is what kept us stuck on
+    # v0.6.1 — see the 5+ drafts that piled up). Mac uploads its .dmg +
+    # latest-mac.yml first; windows then appends .exe + latest.yml to the
+    # same release by matching the version tag.
+    needs: mac
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
