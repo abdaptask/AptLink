@@ -36,6 +36,7 @@ import {
   MoreHorizontal,
   Power,
   KeyRound,
+  FileText,
 } from 'lucide-react';
 import {
   getMe,
@@ -51,8 +52,11 @@ import {
   inviteAdminUser,
   updateAdminUser,
   listAuditLogs,
+  bulkImportUsers,
   type AdminUserRow,
   type AuditLogEntry,
+  type BulkImportRow,
+  type BulkImportResult,
 } from '../api';
 import {
   DEFAULT_QUICK_REPLIES,
@@ -1531,6 +1535,7 @@ function UsersAdminSection() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showInvite, setShowInvite] = useState(false);
+  const [showImport, setShowImport] = useState(false);
   const [openMenuId, setOpenMenuId] = useState<number | null>(null);
   const [search, setSearch] = useState('');
 
@@ -1621,13 +1626,23 @@ function UsersAdminSection() {
             {rows.filter((r) => r.isActive).length} active
           </p>
         </div>
-        <button
-          type="button"
-          className="device-action primary"
-          onClick={() => setShowInvite(true)}
-        >
-          <UserPlus size={14} /> Invite user
-        </button>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button
+            type="button"
+            className="device-action"
+            onClick={() => setShowImport(true)}
+            title="Upload a CSV to bulk-create users"
+          >
+            <Upload size={14} /> Import CSV
+          </button>
+          <button
+            type="button"
+            className="device-action primary"
+            onClick={() => setShowInvite(true)}
+          >
+            <UserPlus size={14} /> Invite user
+          </button>
+        </div>
       </div>
 
       <div className="search-bar" style={{ marginBottom: 12 }}>
@@ -1754,7 +1769,25 @@ function UsersAdminSection() {
                         {r.isActive ? 'Deactivate' : 'Reactivate'}
                       </button>
 
-                      {/* Reset password (for break-glass local accounts) */}
+                      {/* Set SIP password — for users imported without a password */}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setOpenMenuId(null);
+                          const next = prompt(
+                            `Paste ${rowName(r)}'s SIP password from Telnyx Portal. (They can't make calls until this is set.)`,
+                            '',
+                          );
+                          if (next === null) return; // cancelled
+                          if (!next.trim()) return; // empty = no-op
+                          void handlePatch(r.id, { sipPassword: next.trim() });
+                        }}
+                      >
+                        <FileText size={14} />
+                        Set SIP password (Telnyx)
+                      </button>
+
+                      {/* Reset local password (for break-glass accounts) */}
                       <button
                         type="button"
                         onClick={() => {
@@ -1790,6 +1823,16 @@ function UsersAdminSection() {
           onCreated={(row) => {
             setRows((prev) => [row, ...prev]);
             setShowInvite(false);
+          }}
+        />
+      )}
+
+      {showImport && (
+        <BulkImportModal
+          onClose={() => setShowImport(false)}
+          onDone={() => {
+            setShowImport(false);
+            load(); // refresh the table
           }}
         />
       )}
@@ -2098,6 +2141,271 @@ function AuditLogSection() {
           {loading ? 'Loading…' : 'Load more'}
         </button>
       )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Phase 5 (#189) — BulkImportModal
+//
+// Two-step flow:
+//   1. User picks a CSV → we parse client-side + auto-run a dry-run on the
+//      server to validate every row. Result table shows green/yellow/red
+//      per row so the admin can spot problems BEFORE writing.
+//   2. If everything looks good, click "Confirm import" → real write.
+//
+// CSV format expected (case-sensitive header row):
+//   email, firstName, lastName, sipUsername, didNumber, sipPassword, isAdmin, phoneExtension
+// Only `email` is strictly required. sipPassword may be blank (user can't make
+// calls until later); we surface that as a yellow warning row.
+// ---------------------------------------------------------------------------
+function BulkImportModal({
+  onClose,
+  onDone,
+}: {
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const [csvText, setCsvText] = useState<string>('');
+  const [fileName, setFileName] = useState<string>('');
+  const [parseError, setParseError] = useState<string | null>(null);
+  const [parsedRows, setParsedRows] = useState<BulkImportRow[]>([]);
+  const [preview, setPreview] = useState<BulkImportResult | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [committed, setCommitted] = useState<BulkImportResult | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  function parseCsv(text: string): BulkImportRow[] {
+    // Minimal RFC 4180-ish parser. Handles quoted fields with commas + escaped
+    // double-quotes. Good enough for the well-formed CSVs Excel/Sheets emit.
+    const lines: string[][] = [];
+    let cur: string[] = [];
+    let field = '';
+    let inQuotes = false;
+    for (let i = 0; i < text.length; i += 1) {
+      const ch = text[i];
+      if (inQuotes) {
+        if (ch === '"') {
+          if (text[i + 1] === '"') {
+            field += '"';
+            i += 1;
+          } else {
+            inQuotes = false;
+          }
+        } else {
+          field += ch;
+        }
+        continue;
+      }
+      if (ch === '"') { inQuotes = true; continue; }
+      if (ch === ',') { cur.push(field); field = ''; continue; }
+      if (ch === '\n' || ch === '\r') {
+        if (field.length > 0 || cur.length > 0) { cur.push(field); lines.push(cur); cur = []; field = ''; }
+        if (ch === '\r' && text[i + 1] === '\n') i += 1;
+        continue;
+      }
+      field += ch;
+    }
+    if (field.length > 0 || cur.length > 0) { cur.push(field); lines.push(cur); }
+    if (lines.length === 0) throw new Error('Empty CSV');
+
+    const header = lines[0].map((h) => h.trim());
+    const required = ['email'];
+    for (const k of required) {
+      if (!header.includes(k)) {
+        throw new Error(`CSV missing required column "${k}". Expected header: email,firstName,lastName,sipUsername,didNumber,sipPassword,isAdmin,phoneExtension`);
+      }
+    }
+
+    const idx = (k: string) => header.indexOf(k);
+    const rows: BulkImportRow[] = [];
+    for (let i = 1; i < lines.length; i += 1) {
+      const r = lines[i];
+      // Skip wholly-empty lines
+      if (r.every((v) => !v || !v.trim())) continue;
+      const get = (k: string) => {
+        const j = idx(k);
+        if (j === -1) return undefined;
+        const v = (r[j] ?? '').trim();
+        return v.length > 0 ? v : undefined;
+      };
+      const isAdminRaw = get('isAdmin');
+      const row: BulkImportRow = {
+        email: (get('email') || '').toLowerCase(),
+        firstName: get('firstName') ?? null,
+        lastName: get('lastName') ?? null,
+        sipUsername: get('sipUsername') ?? null,
+        didNumber: get('didNumber') ?? null,
+        sipPassword: get('sipPassword') ?? null,
+        phoneExtension: get('phoneExtension') ?? null,
+        isAdmin:
+          isAdminRaw === undefined
+            ? null
+            : isAdminRaw.toLowerCase() === 'true' || isAdminRaw === '1',
+      };
+      if (!row.email) continue;
+      rows.push(row);
+    }
+    return rows;
+  }
+
+  async function handleFile(file: File) {
+    setFileName(file.name);
+    setParseError(null);
+    setPreview(null);
+    setCommitted(null);
+    try {
+      const text = await file.text();
+      setCsvText(text);
+      const rows = parseCsv(text);
+      setParsedRows(rows);
+      // Auto-trigger dry-run preview.
+      const token = sessionStorage.getItem('ace_token');
+      if (!token) {
+        setParseError('Not signed in.');
+        return;
+      }
+      setSubmitting(true);
+      const result = await bulkImportUsers(token, rows, true /* dryRun */);
+      setPreview(result);
+    } catch (e) {
+      setParseError((e as Error).message);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function handleCommit() {
+    const token = sessionStorage.getItem('ace_token');
+    if (!token || parsedRows.length === 0) return;
+    setSubmitting(true);
+    try {
+      const result = await bulkImportUsers(token, parsedRows, false /* commit */);
+      setCommitted(result);
+    } catch (e) {
+      setParseError((e as Error).message);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  const stats = committed?.summary ?? preview?.summary;
+  const items = committed?.items ?? preview?.items ?? [];
+
+  return (
+    <div className="compose-modal" onClick={onClose}>
+      <div
+        className="fav-modal"
+        onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-labelledby="bulk-import-title"
+        style={{ maxWidth: 760, width: '92%', maxHeight: '90vh', display: 'flex', flexDirection: 'column' }}
+      >
+        <div className="fav-modal-header">
+          <Upload size={18} className="fav-modal-icon" />
+          <h3 id="bulk-import-title">Import users from CSV</h3>
+        </div>
+
+        <p className="muted small" style={{ marginTop: 0 }}>
+          Expected header: <code>email,firstName,lastName,sipUsername,didNumber,sipPassword,isAdmin,phoneExtension</code>.
+          Rows without a SIP password will be created — set the password later from the kebab menu when each user is ready to migrate.
+        </p>
+
+        {!preview && !committed && (
+          <div className="bulk-drop">
+            <input
+              ref={fileRef}
+              type="file"
+              accept=".csv,text/csv"
+              style={{ display: 'none' }}
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f) void handleFile(f);
+                e.target.value = '';
+              }}
+            />
+            <button
+              type="button"
+              className="device-action primary"
+              onClick={() => fileRef.current?.click()}
+              disabled={submitting}
+            >
+              <Upload size={14} /> {submitting ? 'Parsing…' : 'Choose CSV file'}
+            </button>
+            {fileName && <div className="muted small" style={{ marginTop: 8 }}>{fileName}</div>}
+            {parseError && <div className="error" style={{ marginTop: 12 }}>{parseError}</div>}
+          </div>
+        )}
+
+        {stats && (
+          <div className="bulk-summary">
+            <div><strong>{stats.total}</strong> rows</div>
+            <div className="bulk-stat ok">{stats.created} <span>create</span></div>
+            <div className="bulk-stat update">{stats.updated} <span>update</span></div>
+            <div className="bulk-stat warn">{stats.missingPasswords} <span>no password</span></div>
+            <div className="bulk-stat err">{stats.errors} <span>errors</span></div>
+            <div className="muted small" style={{ marginLeft: 'auto' }}>
+              {stats.dryRun ? 'Preview — nothing written yet' : 'Imported ✓'}
+            </div>
+          </div>
+        )}
+
+        {items.length > 0 && (
+          <div className="bulk-results">
+            <table className="bulk-table">
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th>Email</th>
+                  <th>Action</th>
+                  <th>Notes</th>
+                </tr>
+              </thead>
+              <tbody>
+                {items.map((it) => (
+                  <tr key={`${it.row}-${it.email}`} className={`bulk-row ${it.status}`}>
+                    <td>{it.row}</td>
+                    <td>{it.email}</td>
+                    <td>
+                      <span className={`bulk-tag ${it.status}`}>{it.status}</span>
+                    </td>
+                    <td className="bulk-notes">
+                      {it.error && <span className="bulk-err-text">{it.error}</span>}
+                      {!it.error && it.missingPassword && (
+                        <span className="bulk-warn-text">No SIP password — set later</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        <div className="fav-modal-actions" style={{ marginTop: 'auto' }}>
+          {committed ? (
+            <button type="button" className="fav-modal-save" onClick={onDone}>
+              Done
+            </button>
+          ) : (
+            <>
+              <button type="button" className="fav-modal-cancel" onClick={onClose}>
+                Cancel
+              </button>
+              {preview && (
+                <button
+                  type="button"
+                  className="fav-modal-save"
+                  onClick={() => void handleCommit()}
+                  disabled={submitting || (preview.summary.errors > 0 && preview.summary.total === preview.summary.errors)}
+                >
+                  {submitting ? 'Importing…' : `Confirm import (${preview.summary.created + preview.summary.updated})`}
+                </button>
+              )}
+            </>
+          )}
+        </div>
+      </div>
     </div>
   );
 }

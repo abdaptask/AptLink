@@ -9,18 +9,12 @@
 //   POST   /admin/users              Invite a new user (creates DB row, awaits first SSO)
 //   PATCH  /admin/users/:id          Promote / demote / activate / deactivate / edit
 //   GET    /admin/audit-logs         Recent admin actions (paginated, default 100)
+//   POST   /admin/users/bulk-import  Phase 5 — CSV bulk-import (#189)
 //
 // Safeguards (Phase 6.13 spec):
 //   - Can't demote the LAST remaining active admin.
 //   - Can't deactivate yourself (would brick the panel for you).
-//   - Self-promote / self-demote of THIS user's own admin flag is blocked
-//     to keep the audit trail clean; ask another admin to do it.
-//
-// We do NOT provision Telnyx (DID purchase + SIP credential creation) here.
-// That's deferred to Phase 6b (#167) once we've nailed the Telnyx API.
-// Admin can paste existing creds (sipUsername / sipPassword / didNumber)
-// manually when inviting, which is enough to migrate the existing 150
-// already-provisioned users.
+//   - Can't change your own admin flag — ask another admin.
 
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { z } from 'zod';
@@ -33,7 +27,6 @@ interface JwtPayload {
   isAdmin: boolean;
 }
 
-// Inline guard. Runs after authenticate so request.user is populated.
 async function requireAdmin(request: FastifyRequest, reply: FastifyReply) {
   const u = request.user as JwtPayload | undefined;
   if (!u?.isAdmin) {
@@ -41,8 +34,6 @@ async function requireAdmin(request: FastifyRequest, reply: FastifyReply) {
   }
 }
 
-// Shape returned to the frontend table. Sensitive fields (sipPassword,
-// passwordHash) are NEVER serialized — admins can RESET them but not read.
 function publicUser(u: {
   id: number;
   email: string;
@@ -71,8 +62,8 @@ function publicUser(u: {
   };
 }
 
-// Audit helper. Best-effort — we never want an audit-log write to fail
-// the admin action itself, so we log + swallow.
+// Audit helper — best-effort. We never want an audit-log write to fail the
+// admin action itself, so log + swallow.
 async function recordAudit(
   actorUserId: number,
   action: string,
@@ -85,9 +76,8 @@ async function recordAudit(
         actorUserId,
         action,
         targetUserId,
-        // Prisma's JSON column accepts `undefined` (leave NULL) or a value,
-        // but NOT a bare `null` literal — that needs Prisma.JsonNull. Easiest:
-        // coerce null → undefined so the column ends up NULL in DB.
+        // Prisma's JSON column accepts undefined (NULL) or a value, NOT a
+        // bare null literal — that requires Prisma.JsonNull. Coerce.
         metadata: (metadata ?? undefined) as object | undefined,
       },
     });
@@ -100,15 +90,10 @@ const InviteSchema = z.object({
   email: z.string().email(),
   firstName: z.string().max(80).nullable().optional(),
   lastName: z.string().max(80).nullable().optional(),
-  // Manual provisioning fallback — admin can paste already-existing Telnyx
-  // creds. Optional because the standard flow is "invite by email only,
-  // user signs in with Microsoft and binds via azureOid".
   sipUsername: z.string().max(120).nullable().optional(),
   sipPassword: z.string().max(200).nullable().optional(),
   didNumber: z.string().max(20).nullable().optional(),
   isAdmin: z.boolean().optional(),
-  // If a local password is supplied, the user becomes a break-glass account
-  // that can sign in WITHOUT Microsoft SSO. Optional.
   localPassword: z.string().min(8).max(200).nullable().optional(),
 });
 
@@ -120,9 +105,25 @@ const UpdateSchema = z.object({
   didNumber: z.string().max(20).nullable().optional(),
   isAdmin: z.boolean().optional(),
   isActive: z.boolean().optional(),
-  // Optional password reset (break-glass accounts). Pass null/empty to
-  // clear (force SSO).
   localPassword: z.string().min(8).max(200).nullable().optional(),
+});
+
+// Phase 5 (#189) — bulk import schema. Each row mirrors the CSV column set.
+// Rows without sipPassword are accepted; user gets created but can't register
+// against Telnyx until an admin fills the password in later (staged rollout).
+const BulkRowSchema = z.object({
+  email: z.string().email(),
+  firstName: z.string().max(80).optional().nullable(),
+  lastName: z.string().max(80).optional().nullable(),
+  sipUsername: z.string().max(120).optional().nullable(),
+  sipPassword: z.string().max(200).optional().nullable(),
+  didNumber: z.string().max(20).optional().nullable(),
+  isAdmin: z.boolean().optional().nullable(),
+  phoneExtension: z.string().max(20).optional().nullable(),
+});
+const BulkImportSchema = z.object({
+  dryRun: z.boolean().optional().default(false),
+  rows: z.array(BulkRowSchema).min(1).max(500),
 });
 
 export async function adminRoutes(app: FastifyInstance) {
@@ -235,14 +236,12 @@ export async function adminRoutes(app: FastifyInstance) {
       set('firstName', target.firstName, parsed.data.firstName ?? undefined);
       set('lastName', target.lastName, parsed.data.lastName ?? undefined);
       set('sipUsername', target.sipUsername, parsed.data.sipUsername ?? undefined);
-      // Don't include sipPassword in the audit metadata (sensitive).
       if (parsed.data.sipPassword !== undefined) {
         data.sipPassword = parsed.data.sipPassword;
         auditMeta.sipPassword = { changed: true };
       }
       set('didNumber', target.didNumber, parsed.data.didNumber ?? undefined);
 
-      // ----- isActive: can't deactivate self ------------------------------
       if (parsed.data.isActive !== undefined && parsed.data.isActive !== target.isActive) {
         if (id === actor.sub && parsed.data.isActive === false) {
           return reply
@@ -253,7 +252,6 @@ export async function adminRoutes(app: FastifyInstance) {
         auditMeta.isActive = { from: target.isActive, to: parsed.data.isActive };
       }
 
-      // ----- isAdmin: last-admin safeguard + no self-toggle ---------------
       if (parsed.data.isAdmin !== undefined && parsed.data.isAdmin !== target.isAdmin) {
         if (id === actor.sub) {
           return reply.code(400).send({
@@ -261,7 +259,6 @@ export async function adminRoutes(app: FastifyInstance) {
           });
         }
         if (parsed.data.isAdmin === false) {
-          // Demoting an admin: make sure at least one other ACTIVE admin remains.
           const remaining = await prisma.user.count({
             where: { isAdmin: true, isActive: true, id: { not: id } },
           });
@@ -276,21 +273,16 @@ export async function adminRoutes(app: FastifyInstance) {
         auditMeta.isAdmin = { from: target.isAdmin, to: parsed.data.isAdmin };
       }
 
-      // ----- localPassword: reset/set/clear ------------------------------
       if (parsed.data.localPassword !== undefined) {
         const newHash = parsed.data.localPassword
           ? await bcrypt.hash(parsed.data.localPassword, 10)
           : null;
         data.passwordHash = newHash;
-        // If we just set a local password, flip provider to "local" so the
-        // user can sign in via the break-glass form. Clearing a password
-        // doesn't auto-flip back to microsoft.
         if (newHash) data.provider = 'local';
         auditMeta.passwordHash = newHash ? { reset: true } : { cleared: true };
       }
 
       if (Object.keys(data).length === 0) {
-        // No-op patch. Return the unchanged user without writing an audit.
         return publicUser(target);
       }
 
@@ -304,9 +296,6 @@ export async function adminRoutes(app: FastifyInstance) {
         },
       });
 
-      // Choose the most specific action verb based on what changed. We
-      // prefer named verbs ("user.promoted") over a generic "user.updated"
-      // so the audit-log viewer can render an icon + summary easily.
       let action = 'user.updated';
       if (auditMeta.isAdmin) {
         action = (auditMeta.isAdmin as { to: boolean }).to ? 'user.promoted' : 'user.demoted';
@@ -363,6 +352,157 @@ export async function adminRoutes(app: FastifyInstance) {
       }));
       const nextCursor = hasMore ? items[items.length - 1]?.id ?? null : null;
       return { items, nextCursor };
+    },
+  );
+
+  // ───────────────────── POST /admin/users/bulk-import (#189) ─────────
+  // Per-row upsert by email. dryRun=true validates + returns the preview
+  // without writing. Returns per-row { status, error?, missingPassword }
+  // so the frontend can show a result table.
+  app.post(
+    '/admin/users/bulk-import',
+    { onRequest: [app.authenticate, requireAdmin] },
+    async (request, reply) => {
+      const actor = request.user as JwtPayload;
+      const parsed = BulkImportSchema.safeParse(request.body);
+      if (!parsed.success) {
+        return reply
+          .code(400)
+          .send({ error: 'Invalid input', details: parsed.error.flatten() });
+      }
+      const { dryRun, rows } = parsed.data;
+
+      const inputEmails = rows.map((r) => r.email.trim().toLowerCase());
+      const existing = await prisma.user.findMany({
+        where: { email: { in: inputEmails } },
+        select: { id: true, email: true },
+      });
+      const existingByEmail = new Map(existing.map((u) => [u.email, u.id]));
+
+      type ItemResult = {
+        row: number;
+        email: string;
+        status: 'created' | 'updated' | 'error' | 'skipped';
+        missingPassword: boolean;
+        error?: string;
+        userId?: number;
+      };
+      const results: ItemResult[] = [];
+      const seenEmails = new Set<string>();
+
+      for (let i = 0; i < rows.length; i += 1) {
+        const row = rows[i];
+        const rowNum = i + 1;
+        const email = row.email.trim().toLowerCase();
+
+        if (seenEmails.has(email)) {
+          results.push({
+            row: rowNum,
+            email,
+            status: 'error',
+            missingPassword: false,
+            error: 'Duplicate email in CSV',
+          });
+          continue;
+        }
+        seenEmails.add(email);
+
+        const hasPassword = !!(row.sipPassword && row.sipPassword.trim());
+        const existingId = existingByEmail.get(email);
+
+        try {
+          if (dryRun) {
+            results.push({
+              row: rowNum,
+              email,
+              status: existingId ? 'updated' : 'created',
+              missingPassword: !hasPassword,
+              userId: existingId,
+            });
+            continue;
+          }
+
+          if (existingId) {
+            const data: Record<string, unknown> = {};
+            if (row.firstName !== undefined && row.firstName !== null) data.firstName = row.firstName;
+            if (row.lastName !== undefined && row.lastName !== null) data.lastName = row.lastName;
+            if (row.sipUsername !== undefined && row.sipUsername !== null && row.sipUsername.trim()) data.sipUsername = row.sipUsername.trim();
+            if (hasPassword) data.sipPassword = (row.sipPassword as string).trim();
+            if (row.didNumber !== undefined && row.didNumber !== null && row.didNumber.trim()) data.didNumber = row.didNumber.trim();
+            if (row.isAdmin === true || row.isAdmin === false) data.isAdmin = row.isAdmin;
+            if (row.phoneExtension !== undefined && row.phoneExtension !== null) data.phoneExtension = row.phoneExtension;
+
+            const updated = await prisma.user.update({
+              where: { id: existingId },
+              data,
+              select: { id: true },
+            });
+            results.push({
+              row: rowNum,
+              email,
+              status: 'updated',
+              missingPassword: !hasPassword,
+              userId: updated.id,
+            });
+          } else {
+            const created = await prisma.user.create({
+              data: {
+                email,
+                firstName: row.firstName ?? null,
+                lastName: row.lastName ?? null,
+                sipUsername: row.sipUsername?.trim() || null,
+                sipPassword: hasPassword ? (row.sipPassword as string).trim() : null,
+                didNumber: row.didNumber?.trim() || null,
+                phoneExtension: row.phoneExtension ?? null,
+                isAdmin: row.isAdmin === true,
+                isActive: true,
+                provider: 'microsoft',
+                passwordHash: null,
+              },
+              select: { id: true },
+            });
+            results.push({
+              row: rowNum,
+              email,
+              status: 'created',
+              missingPassword: !hasPassword,
+              userId: created.id,
+            });
+          }
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          results.push({
+            row: rowNum,
+            email,
+            status: 'error',
+            missingPassword: !hasPassword,
+            error: msg.includes('Unique constraint')
+              ? 'sipUsername or didNumber is already assigned to another user'
+              : msg.slice(0, 240),
+          });
+        }
+      }
+
+      const summary = {
+        total: rows.length,
+        created: results.filter((r) => r.status === 'created').length,
+        updated: results.filter((r) => r.status === 'updated').length,
+        errors: results.filter((r) => r.status === 'error').length,
+        missingPasswords: results.filter((r) => r.missingPassword && r.status !== 'error').length,
+        dryRun,
+      };
+
+      if (!dryRun) {
+        await recordAudit(actor.sub, 'users.bulk_imported', null, {
+          total: summary.total,
+          created: summary.created,
+          updated: summary.updated,
+          errors: summary.errors,
+          missingPasswords: summary.missingPasswords,
+        });
+      }
+
+      return { summary, items: results };
     },
   );
 }

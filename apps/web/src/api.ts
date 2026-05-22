@@ -1042,3 +1042,59 @@ export async function listAuditLogs(
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return (await res.json()) as AuditLogPage;
 }
+
+// ===========================================================================
+// Phase 5 (#189) — Bulk import users from CSV
+// ===========================================================================
+
+export interface BulkImportRow {
+  email: string;
+  firstName?: string | null;
+  lastName?: string | null;
+  sipUsername?: string | null;
+  sipPassword?: string | null;
+  didNumber?: string | null;
+  isAdmin?: boolean | null;
+  phoneExtension?: string | null;
+}
+
+export interface BulkImportItemResult {
+  row: number;
+  email: string;
+  status: 'created' | 'updated' | 'error' | 'skipped';
+  missingPassword: boolean;
+  error?: string;
+  userId?: number;
+}
+
+export interface BulkImportResult {
+  summary: {
+    total: number;
+    created: number;
+    updated: number;
+    errors: number;
+    missingPasswords: number;
+    dryRun: boolean;
+  };
+  items: BulkImportItemResult[];
+}
+
+export async function bulkImportUsers(
+  token: string,
+  rows: BulkImportRow[],
+  dryRun: boolean,
+): Promise<BulkImportResult> {
+  const res = await fetch(`${API_URL}/admin/users/bulk-import`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ rows, dryRun }),
+  });
+  if (!res.ok) {
+    const err = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new Error(err.error || `HTTP ${res.status}`);
+  }
+  return (await res.json()) as BulkImportResult;
+}
