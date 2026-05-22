@@ -180,8 +180,40 @@ export class SipService {
 
   // ---------- Connection ----------
   connect(config: SipConfig): void {
-    if (this.ua) this.disconnect();
+    if (this.ua) {
+      // An old UA exists. Evict its Contact at Telnyx via wildcard
+      // unregister BEFORE we tear down the WebSocket, then defer the new
+      // UA creation by ~350ms so the unregister REGISTER frame flushes
+      // and Telnyx processes it before our new REGISTER arrives. Without
+      // this delay, the new REGISTER can land at Telnyx FIRST and then
+      // get evicted by our own wildcard unregister — leaving us silently
+      // unregistered while the UI thinks we're online. This is exactly
+      // the failure mode behind the dual-Contact INVITE-fork bug.
+      this.scheduleCleanup(this.ua);
+      this.ua = null;
+      setTimeout(() => this._doConnect(config), 350);
+      return;
+    }
+    this._doConnect(config);
+  }
 
+  /**
+   * Internal: fire wildcard unregister on the given (old) UA, then close
+   * its socket ~250ms later so the REGISTER frame has time to flush over
+   * the WebSocket before close. Caller is expected to set this.ua = null
+   * immediately so subsequent operations don't touch the dying UA.
+   */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private scheduleCleanup(oldUa: any): void {
+    try { oldUa?.unregister?.({ all: true }); } catch (e) {
+      console.warn('[sip] cleanup unregister threw', e);
+    }
+    setTimeout(() => {
+      try { oldUa?.stop?.(); } catch { /* noop */ }
+    }, 250);
+  }
+
+  private _doConnect(config: SipConfig): void {
     this.callerNumber = config.callerNumber ?? '';
     this.realm = config.realm ?? 'sip.telnyx.com';
     // Telnyx SIP-over-WebSocket endpoint. Port 7443 is the conventional WSS
@@ -269,10 +301,17 @@ export class SipService {
    * when the UA gets stuck. The user shouldn't need Ctrl+Shift+R anymore.
    */
   reconnect(): void {
-    console.log('[sip] manual reconnect — tearing down UA');
+    console.log('[sip] manual reconnect — wildcard unregister + tear down UA');
     const cfg = this.lastConfig;
-    try { this.ua?.stop(); } catch { /* noop */ }
-    this.ua = null;
+    // Wildcard unregister BEFORE stop so Telnyx evicts our Contact
+    // immediately rather than waiting 600s for it to expire. Without this
+    // the old Contact lingers and Telnyx forks the next INVITE to both
+    // the dead Contact and the new one — that fork race is what was
+    // making inbound Accept fail with INVALID_STATE_ERROR.
+    if (this.ua) {
+      this.scheduleCleanup(this.ua);
+      this.ua = null;
+    }
     if (this.heartbeatTimer) {
       clearInterval(this.heartbeatTimer);
       this.heartbeatTimer = null;
@@ -281,10 +320,9 @@ export class SipService {
       console.warn('[sip] reconnect: no saved config — refresh the page');
       return;
     }
-    // Tiny delay so JsSIP fully tears down its WebSocket before we
-    // start a new one. Without this, the new UA can race with the dying
-    // socket and end up in a bad state.
-    setTimeout(() => this.connect(cfg), 250);
+    // 350ms gives the wildcard REGISTER frame time to flush and lets
+    // Telnyx process the eviction BEFORE the new UA's REGISTER arrives.
+    setTimeout(() => this.connect(cfg), 350);
   }
 
   private visibilityHandler: (() => void) | null = null;
@@ -1561,8 +1599,19 @@ export class SipService {
     this.incomingCallId = null;
     this.stopQualityPolling();
     this.stopConference();
+    // Tear down registration heartbeat — otherwise it can fire one last
+    // time after disconnect() and trigger a stray reconnect().
+    if (this.heartbeatTimer) {
+      clearInterval(this.heartbeatTimer);
+      this.heartbeatTimer = null;
+    }
     if (this.ua) {
-      try { this.ua.stop(); } catch { /* noop */ }
+      // Wildcard unregister BEFORE close so Telnyx evicts our Contact
+      // right now instead of leaving an orphan to linger for up to 600s
+      // (the REGISTER expiry). The 250ms socket-close delay inside
+      // scheduleCleanup lets the REGISTER frame flush over the WSS
+      // socket before stop() closes it.
+      this.scheduleCleanup(this.ua);
       this.ua = null;
     }
   }

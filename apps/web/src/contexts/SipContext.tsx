@@ -174,6 +174,24 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
       }, 500);
     }
 
+    // #214 — Wildcard unregister on window/app close. Without this, when
+    // the user force-quits or the app crashes, our Contact lingers in
+    // Telnyx's registrar for up to 600s. On next launch a fresh Contact
+    // is registered alongside the orphan; Telnyx then forks every inbound
+    // INVITE to BOTH Contacts, and the resulting race is exactly what
+    // broke inbound Accept (INVALID_STATE_ERROR / cause:Canceled).
+    //
+    // beforeunload fires on browser tab close + page reload.
+    // pagehide fires on actual page-going-away (more reliable on mobile/
+    // bfcache + Electron's renderer destruction).
+    // Both call disconnect() which now sends REGISTER Contact:* Expires:0
+    // before tearing down the WebSocket.
+    const onUnload = () => {
+      try { sipService.disconnect(); } catch { /* noop */ }
+    };
+    window.addEventListener('beforeunload', onUnload);
+    window.addEventListener('pagehide', onUnload);
+
     const offAccept = window.ace?.onAcceptRequest?.(() => {
       sipService.acceptCall();
     });
@@ -266,6 +284,8 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
       offQuality();
       if (offAccept) offAccept();
       if (offDecline) offDecline();
+      window.removeEventListener('beforeunload', onUnload);
+      window.removeEventListener('pagehide', onUnload);
       sipService.disconnect();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps

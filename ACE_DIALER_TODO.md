@@ -1,7 +1,7 @@
 # ACE Dialer — Working Checklist
 
 **Last updated:** 2026-05-22
-**Current version (deployed):** v0.7.4
+**Current version (committed):** v0.8.6
 **Owner:** Abdulla (abdulla@aptask.com)
 **Pilot target:** 150 total users, ~30–40 concurrent peak
 
@@ -15,6 +15,13 @@
 - [x] **v0.7.4** Live Ops Dashboard (admin-only Settings → Live ops)
 - [x] **v0.7.4 published to GitHub Releases** — silent auto-update validated end-to-end
 - [x] **CLAUDE.md** added at repo root — auto-loaded context for future sessions
+- [x] **v0.7.5–7.6** User DID shown next to Online status pill; fixed TS ||/?? error in admin reports
+- [x] **v0.8.0** Presence + Usage + Quality reporting dashboards
+- [x] **v0.8.2** Fixed SIP "Connection Failed" race on login; manual "Check for updates" in user dropdown; Cost + Recruiter + Alerts dashboards
+- [x] **v0.8.3** Friendly update-check error; Settings nav categorized into 4 collapsible groups (Personal · Calling · Reports · Admin)
+- [x] **v0.8.4** Robust Recents dedupe — fixed "declined call shown 3 times" via proximity fallback + ringing/incoming status ranks
+- [x] **v0.8.5** Hide scrollbars app-wide
+- [x] **v0.8.6** Releases now publish as **real** (not draft) + serialize mac→windows CI — unblocks auto-update for everyone stuck below 0.6.1
 
 ---
 
@@ -54,15 +61,16 @@
 
 ---
 
-## Phase 8 — Admin reporting (in progress)
+## Phase 8 — Admin reporting (mostly done)
 
-- [x] **#204** **Live Ops Dashboard P0** — at-a-glance cards, hourly chart, top callers, recent missed. Auto-refreshes 15s. *Built and live in v0.7.4.*
-- [ ] **#205** Usage & volume reports (P1) — leaderboards, line charts, per-user drill-down, response rates
-- [ ] **#206** Quality & health reports (P1) — missed-rate, sub-10s calls, hangup-cause pie, peak-hours heatmap
-- [ ] **#207** Telnyx cost reporting (P1) — per-DID minutes, per-user spend, SMS segments, monthly projection
-- [ ] **#208** Recruiter metrics (P2) — candidate reach, conversation rate, JobDiva coverage
+- [x] **#204** Live Ops Dashboard P0 — at-a-glance cards, hourly chart, top callers, recent missed. Auto-refreshes 15s. *v0.7.4*
+- [x] **#205** Usage & volume reports (P1) — leaderboards, line charts, per-user drill-down, response rates. *v0.8.0*
+- [x] **#206** Quality & health reports (P1) — missed-rate, sub-10s calls, hangup-cause pie, peak-hours heatmap. *v0.8.0*
+- [x] **#207** Telnyx cost reporting (P1) — per-DID minutes, per-user spend, SMS segments, monthly projection. *v0.8.2*
+- [x] **#208** Recruiter metrics (P2) — candidate reach, conversation rate, JobDiva coverage. *v0.8.2*
+- [x] **#210** Health alerts (P3) — idle users, offline-during-business-hours, missed-call spikes. *v0.8.2*
+- [x] **#211** Presence/Agent dashboard (who's on call now). *v0.8.0*
 - [ ] **#209** Export + scheduled digests (P2) — CSV/Excel export, weekly admin email, Slack webhook
-- [ ] **#210** Health alerts (P3) — idle users, offline-during-business-hours, missed-call spikes
 
 ---
 
@@ -74,16 +82,19 @@
 
 ---
 
-## ✅ Smoke-test results (v0.7.4)
+## ✅ Smoke-test results (v0.7.4 → v0.8.6)
 
 ### Header + version
-- [x] Header shows **v0.7.4 · Desktop** on Mac and Windows
-- [x] **v0.7.4 · Web** in browser
+- [x] Header shows current version + Desktop/Web tag
+- [x] v0.7.5+ also shows user's DID number next to Online status pill
 
 ### Auto-update (#199)
 - [x] v0.7.4 published to GH Releases successfully (after one transient Mac CDN retry)
 - [x] Installed v0.7.1+ apps detected v0.7.4 and prompted "Restart to install" via UpdateBanner
 - [x] Restart-to-install flow worked — app relaunched as v0.7.4
+- [x] **Manual "Check for updates" menu item** added to user dropdown (v0.8.2)
+- [x] **Friendly error** on update-check 404 instead of raw stack trace (v0.8.3)
+- [x] **v0.8.6 critical fix VERIFIED:** releases now publish as real (not draft). Old drafts (v0.7.5 – v0.8.5) cleaned up. v0.8.6 live on GitHub Releases as the Latest tag. Users on 0.6.1 → 0.8.5 will now auto-update on next poll.
 
 ### Favorites sync (#195)
 - [x] Star on Mac → appears on Windows after sign-in (server-side, not localStorage)
@@ -114,12 +125,19 @@
 - [ ] Run dry-run preview with sample CSV (10-row test set first) — pending Pulse CSV
 - [ ] Full 150-user import — pending Pulse CSV
 
-### Live Ops Dashboard (#204)
-- [ ] Open Settings → Live ops — see cards populated (will need real data to look meaningful)
+### Live Ops Dashboard (#204) + 6 reporting dashboards
+- [x] Live Ops, Presence, Usage, Quality, Cost, Recruiter, Alerts — all built and reachable from Settings (admin-only)
+- [ ] Dashboards need real call volume to show meaningful numbers — comes with #189 bulk import
 
 ### Voicemail transcription (#203)
 - [ ] Flip "Transcription" on in Telnyx Portal under Hosted Voicemail Profile
 - [ ] Get a voicemail → expand row → transcript appears
+
+### UX polish shipped
+- [x] **v0.8.3** Settings nav categorized into 4 collapsible groups (Personal · Calling · Reports · Admin) — no more giant scrolling list
+- [x] **v0.8.4** Recents dedupe no longer shows "declined" 3× for the same call (proximity fallback + ringing/incoming ranks)
+- [x] **v0.8.5** Scrollbars hidden app-wide for chat-app feel
+- [x] **v0.8.2** SIP "Connection Failed" race on login fixed — no more forced Ctrl+Shift+R workaround
 
 ---
 
@@ -142,6 +160,8 @@
 - [ ] **#151** DATABASE_URL on Render webhooks service (after Postgres provider switch)
 - [ ] **#202** Local presence — pick "calling from" DID per call (multi-DID picker)
 - [ ] **#172** Full pilot smoke test with a real 2nd user (after Pulse CSV import)
+- [ ] **#209** Reporting: Export + scheduled digests (CSV/Excel export, weekly admin email, Slack webhook)
+- [ ] **Postgres migration** — evaluate moving off Supabase to dedicated Postgres (analysis done, awaiting decision on target provider)
 - [ ] Migrate voicemail/MMS storage from Supabase Storage to Cloudflare R2
 - [ ] Settings → Profile picture upload
 - [ ] Per-user call recording opt-in (consent)
