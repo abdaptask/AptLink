@@ -109,8 +109,11 @@ interface AudioDevice {
   label: string;
 }
 
+type SectionCategory = 'Personal' | 'Calling' | 'Reports' | 'Admin';
+
 interface SectionDef {
   key: string;
+  category: SectionCategory;
   label: string;
   icon: typeof Mic;
   blurb: string;
@@ -118,32 +121,116 @@ interface SectionDef {
 }
 
 const SECTIONS: SectionDef[] = [
-  { key: 'account', label: 'Account', icon: UserCircle, blurb: 'Name, DID, SIP', Component: AccountSection },
-  { key: 'appearance', label: 'Appearance', icon: Palette, blurb: 'Light / dark / system', Component: AppearanceSection },
-  { key: 'telnyx', label: 'Telnyx', icon: Phone, blurb: 'SIP credentials', Component: TelnyxSection },
-  { key: 'microphone', label: 'Microphone', icon: Mic, blurb: 'Input device', Component: MicrophoneSection },
-  { key: 'speaker', label: 'Speaker', icon: Volume2, blurb: 'Output device', Component: SpeakerSection },
-  { key: 'notifications', label: 'Notifications', icon: Bell, blurb: 'Calls + SMS alerts', Component: NotificationsSection },
-  { key: 'quick-replies', label: 'Quick replies', icon: MessageSquare, blurb: 'SMS templates', Component: QuickRepliesSection },
-  { key: 'hold-music', label: 'Hold music', icon: Music, blurb: 'Play music when on hold', Component: HoldMusicSection },
-  { key: 'voicemail-greeting', label: 'Voicemail greeting', icon: Mic, blurb: 'Personal greeting (coming soon)', Component: VoicemailGreetingSection },
-  { key: 'call-forwarding', label: 'Call forwarding', icon: PhoneForwarded, blurb: 'Forward calls to another number', Component: CallForwardingSection },
-  { key: 'blocked-numbers', label: 'Blocked numbers', icon: ShieldOff, blurb: 'Reject calls & SMS from specific numbers', Component: BlockedNumbersSection },
-  { key: 'data', label: 'Data', icon: Database, blurb: 'Backup & restore', Component: DataSection },
+  { key: 'account', category: 'Personal', label: 'Account', icon: UserCircle, blurb: 'Name, DID, SIP', Component: AccountSection },
+  { key: 'appearance', category: 'Personal', label: 'Appearance', icon: Palette, blurb: 'Light / dark / system', Component: AppearanceSection },
+  { key: 'telnyx', category: 'Calling', label: 'Telnyx', icon: Phone, blurb: 'SIP credentials', Component: TelnyxSection },
+  { key: 'microphone', category: 'Calling', label: 'Microphone', icon: Mic, blurb: 'Input device', Component: MicrophoneSection },
+  { key: 'speaker', category: 'Calling', label: 'Speaker', icon: Volume2, blurb: 'Output device', Component: SpeakerSection },
+  { key: 'notifications', category: 'Personal', label: 'Notifications', icon: Bell, blurb: 'Calls + SMS alerts', Component: NotificationsSection },
+  { key: 'quick-replies', category: 'Personal', label: 'Quick replies', icon: MessageSquare, blurb: 'SMS templates', Component: QuickRepliesSection },
+  { key: 'hold-music', category: 'Calling', label: 'Hold music', icon: Music, blurb: 'Play music when on hold', Component: HoldMusicSection },
+  { key: 'voicemail-greeting', category: 'Calling', label: 'Voicemail greeting', icon: Mic, blurb: 'Personal greeting (coming soon)', Component: VoicemailGreetingSection },
+  { key: 'call-forwarding', category: 'Calling', label: 'Call forwarding', icon: PhoneForwarded, blurb: 'Forward calls to another number', Component: CallForwardingSection },
+  { key: 'blocked-numbers', category: 'Calling', label: 'Blocked numbers', icon: ShieldOff, blurb: 'Reject calls & SMS from specific numbers', Component: BlockedNumbersSection },
+  { key: 'data', category: 'Personal', label: 'Data', icon: Database, blurb: 'Backup & restore', Component: DataSection },
   // Admin-only. Components themselves show an "Admin access required"
   // empty state for non-admins so the nav nav-items don't dead-link.
-  { key: 'live-ops', label: 'Live ops', icon: Activity, blurb: 'Real-time dashboard (admin only)', Component: LiveOpsSection },
-  { key: 'presence', label: 'Presence', icon: Radio, blurb: 'Who is on call right now (admin only)', Component: PresenceSection },
-  { key: 'usage', label: 'Usage', icon: TrendingUp, blurb: 'Per-user volume + talk time (admin only)', Component: UsageSection },
-  { key: 'quality', label: 'Quality', icon: AlertTriangle, blurb: 'Missed rate + hangup causes (admin only)', Component: QualitySection },
-  { key: 'cost', label: 'Cost', icon: DollarSign, blurb: 'Telnyx spend per user + projection (admin only)', Component: CostSection },
-  { key: 'recruiter', label: 'Recruiter', icon: Target, blurb: 'Reach + conversation rate (admin only)', Component: RecruiterSection },
-  { key: 'alerts', label: 'Alerts', icon: Siren, blurb: 'Health & anomaly alerts (admin only)', Component: AlertsSection },
-  { key: 'users', label: 'Users', icon: Users, blurb: 'Invite, promote, deactivate (admin only)', Component: UsersAdminSection },
-  { key: 'audit-log', label: 'Audit log', icon: ScrollText, blurb: 'Recent admin actions (admin only)', Component: AuditLogSection },
+  { key: 'live-ops', category: 'Reports', label: 'Live ops', icon: Activity, blurb: 'Real-time dashboard (admin only)', Component: LiveOpsSection },
+  { key: 'presence', category: 'Reports', label: 'Presence', icon: Radio, blurb: 'Who is on call right now (admin only)', Component: PresenceSection },
+  { key: 'usage', category: 'Reports', label: 'Usage', icon: TrendingUp, blurb: 'Per-user volume + talk time (admin only)', Component: UsageSection },
+  { key: 'quality', category: 'Reports', label: 'Quality', icon: AlertTriangle, blurb: 'Missed rate + hangup causes (admin only)', Component: QualitySection },
+  { key: 'cost', category: 'Reports', label: 'Cost', icon: DollarSign, blurb: 'Telnyx spend per user + projection (admin only)', Component: CostSection },
+  { key: 'recruiter', category: 'Reports', label: 'Recruiter', icon: Target, blurb: 'Reach + conversation rate (admin only)', Component: RecruiterSection },
+  { key: 'alerts', category: 'Reports', label: 'Alerts', icon: Siren, blurb: 'Health & anomaly alerts (admin only)', Component: AlertsSection },
+  { key: 'users', category: 'Admin', label: 'Users', icon: Users, blurb: 'Invite, promote, deactivate (admin only)', Component: UsersAdminSection },
+  { key: 'audit-log', category: 'Admin', label: 'Audit log', icon: ScrollText, blurb: 'Recent admin actions (admin only)', Component: AuditLogSection },
 ];
 
+const SECTION_CATEGORIES: SectionCategory[] = ['Personal', 'Calling', 'Reports', 'Admin'];
+
 const DEFAULT_SECTION = SECTIONS[0].key;
+
+
+// Sidebar nav with collapsible category groups. Whatever category contains
+// the currently-active section always stays expanded; user's open/closed
+// choices for OTHER categories persist via localStorage.
+function SettingsNav({ activeCategory }: { activeCategory: SectionCategory }) {
+  const STORE_KEY = 'ace_settings_nav_open';
+  const [openCats, setOpenCats] = useState<Set<SectionCategory>>(() => {
+    try {
+      const raw = localStorage.getItem(STORE_KEY);
+      if (raw) {
+        const arr = JSON.parse(raw);
+        if (Array.isArray(arr)) return new Set(arr as SectionCategory[]);
+      }
+    } catch { /* ignore */ }
+    return new Set<SectionCategory>(['Personal', activeCategory]);
+  });
+
+  useEffect(() => {
+    setOpenCats((prev) => {
+      if (prev.has(activeCategory)) return prev;
+      const next = new Set(prev);
+      next.add(activeCategory);
+      try { localStorage.setItem(STORE_KEY, JSON.stringify(Array.from(next))); } catch { /* noop */ }
+      return next;
+    });
+  }, [activeCategory]);
+
+  function toggle(cat: SectionCategory) {
+    setOpenCats((prev) => {
+      const next = new Set(prev);
+      if (next.has(cat)) next.delete(cat);
+      else next.add(cat);
+      try { localStorage.setItem(STORE_KEY, JSON.stringify(Array.from(next))); } catch { /* noop */ }
+      return next;
+    });
+  }
+
+  return (
+    <nav className="settings-nav-list grouped">
+      {SECTION_CATEGORIES.map((cat) => {
+        const items = SECTIONS.filter((sec) => sec.category === cat);
+        if (items.length === 0) return null;
+        const open = openCats.has(cat);
+        return (
+          <div key={cat} className={`settings-nav-group ${open ? 'open' : 'closed'}`}>
+            <button
+              type="button"
+              className="settings-nav-group-header"
+              onClick={() => toggle(cat)}
+              aria-expanded={open}
+            >
+              <span className="settings-nav-group-title">{cat}</span>
+              <span className="settings-nav-group-count">{items.length}</span>
+              <ChevronRight size={14} className={`settings-nav-group-chev ${open ? 'open' : ''}`} />
+            </button>
+            {open && (
+              <div className="settings-nav-group-items">
+                {items.map((sec) => (
+                  <NavLink
+                    key={sec.key}
+                    to={`/settings/${sec.key}`}
+                    className={({ isActive }) =>
+                      `settings-nav-item ${isActive ? 'active' : ''}`
+                    }
+                  >
+                    <span className="settings-nav-icon"><sec.icon size={18} /></span>
+                    <span className="settings-nav-label">
+                      <span className="settings-nav-title">{sec.label}</span>
+                      <span className="settings-nav-blurb">{sec.blurb}</span>
+                    </span>
+                    <ChevronRight size={14} className="settings-nav-chev" />
+                  </NavLink>
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </nav>
+  );
+}
 
 export default function Settings() {
   const { section } = useParams<{ section?: string }>();
@@ -168,24 +255,7 @@ export default function Settings() {
           </button>
           <h1>Settings</h1>
         </div>
-        <nav className="settings-nav-list">
-          {SECTIONS.map((s) => (
-            <NavLink
-              key={s.key}
-              to={`/settings/${s.key}`}
-              className={({ isActive }) =>
-                `settings-nav-item ${isActive ? 'active' : ''}`
-              }
-            >
-              <span className="settings-nav-icon"><s.icon size={18} /></span>
-              <span className="settings-nav-label">
-                <span className="settings-nav-title">{s.label}</span>
-                <span className="settings-nav-blurb">{s.blurb}</span>
-              </span>
-              <ChevronRight size={14} className="settings-nav-chev" />
-            </NavLink>
-          ))}
-        </nav>
+        <SettingsNav activeCategory={active.category} />
       </aside>
 
       <main className="settings-pane">

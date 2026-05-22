@@ -5142,3 +5142,50 @@ button.call-pill-info:hover { background: rgba(255, 255, 255, 0.05); }
 .user-menu-status.no_update { color: #34c759; }
 .user-menu-status.update_found { color: #0a84ff; }
 .user-menu-status.error { color: #ff6b6b; }
+
+/* ============ Settings nav — collapsible categories (v0.8.3) ============ */
+.settings-nav-list.grouped {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.settings-nav-group { display: flex; flex-direction: column; }
+.settings-nav-group-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  border-radius: 6px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.settings-nav-group-header:hover { background: rgba(255,255,255,0.04); color: var(--text); }
+[data-theme="light"] .settings-nav-group-header:hover { background: rgba(0,0,0,0.04); }
+.settings-nav-group-title { flex: 1; }
+.settings-nav-group-count {
+  font-size: 10px;
+  background: rgba(255,255,255,0.08);
+  color: var(--text-muted);
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+[data-theme="light"] .settings-nav-group-count { background: rgba(0,0,0,0.06); }
+.settings-nav-group-chev {
+  transition: transform 0.15s ease;
+}
+.settings-nav-group-chev.open { transform: rotate(90deg); }
+.settings-nav-group-items {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 2px 0 6px;
+}

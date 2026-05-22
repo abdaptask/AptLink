@@ -584,8 +584,22 @@ ipcMain.handle('ace:check-for-updates', async () => {
       message: remote ? `v${remote} is downloading…` : 'Update found — downloading…',
     };
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    return { state: 'error', message: msg };
+    // electron-updater dumps the raw HTTP response on failure, which is
+    // ugly + leaks GitHub server internals. Map the common cases to a
+    // human-friendly message so users don't see HTML cookies + headers.
+    const raw = err instanceof Error ? err.message : String(err);
+    let friendly = 'Could not reach the update server. Please try again later.';
+    if (/404|not[\s-]?found/i.test(raw)) {
+      friendly = "Update server unreachable. The release feed may be private or temporarily down. Try again in a few minutes.";
+    } else if (/ENOTFOUND|ETIMEDOUT|network|getaddrinfo/i.test(raw)) {
+      friendly = 'No internet connection. Check your network and try again.';
+    } else if (/403|forbidden/i.test(raw)) {
+      friendly = 'Update server denied the request (auth). Contact your administrator.';
+    }
+    // Log the full error to main-process console so we can diagnose later
+    // if the user pastes their `~/Library/Logs/ACE Dialer/main.log`.
+    console.warn('[auto-update] manual check failed:', raw);
+    return { state: 'error', message: friendly };
   }
 });
 
