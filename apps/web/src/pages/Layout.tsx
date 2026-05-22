@@ -224,9 +224,20 @@ export default function Layout({ user, onLogout }: Props) {
           </div>
         </div>
 
-        <div className={`sip-status-pill ${sipPresentation.dot}`} role="status" title={`SIP: ${sipPresentation.label}`}>
+        <div className={`sip-status-pill ${sipPresentation.dot}`} role="status" title={`SIP: ${sipPresentation.label}${user.didNumber ? ' · ' + user.didNumber : ''}`}>
           <span className={`sip-status-dot ${sipPresentation.dot}`} />
           <span className="sip-status-label">{sipPresentation.label}</span>
+          {/* The user's own DID, shown right next to the status pill so
+              they always know what number is calling out / what's ringing
+              in. Falls back to nothing when no DID is provisioned yet. */}
+          {user.didNumber && (
+            <>
+              <span className="sip-status-sep" aria-hidden="true">·</span>
+              <span className="sip-status-did" title="Your phone number">
+                {formatPhone(user.didNumber)}
+              </span>
+            </>
+          )}
         </div>
 
         <div className="header-user" ref={menuRef}>

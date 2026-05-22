@@ -4927,3 +4927,22 @@ button.call-pill-info:hover { background: rgba(255, 255, 255, 0.05); }
   border-radius: 50%;
 }
 .liveops-missed-text { flex: 1; min-width: 0; }
+
+/* ============ DID NEXT TO ONLINE STATUS (v0.7.5) ============ */
+/* User's own phone number, surfaced inline with the SIP status pill in the
+   top header. So the user always knows what number is calling out. */
+.sip-status-pill .sip-status-sep {
+  margin: 0 6px;
+  opacity: 0.45;
+}
+.sip-status-pill .sip-status-did {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+/* On narrow screens hide the DID to keep the header from wrapping. */
+@media (max-width: 640px) {
+  .sip-status-pill .sip-status-sep,
+  .sip-status-pill .sip-status-did { display: none; }
+}
