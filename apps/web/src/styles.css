@@ -5189,3 +5189,73 @@ button.call-pill-info:hover { background: rgba(255, 255, 255, 0.05); }
   gap: 2px;
   padding: 2px 0 6px;
 }
+
+/* ============ HIDE SCROLLBARS GLOBALLY (v0.8.4) ============ */
+/* Same pattern Messages already uses for .msg-stream — chat apps universally
+   hide their scrollbars (Slack/iMessage/Messenger). The wheel + touch still
+   work, the chrome is just gone. Applied here to every common scroll surface
+   so the whole app feels consistent.
+   We intentionally use both the element selector + a star fallback because
+   the dialer has lots of components that set overflow:auto inline. */
+html, body {
+  scrollbar-width: none;      /* Firefox */
+  -ms-overflow-style: none;   /* IE / legacy Edge */
+}
+html::-webkit-scrollbar,
+body::-webkit-scrollbar { display: none; }
+
+/* Any scrollable container in the app — list views, tables, modals, panes. */
+.recents, .call-list, .messages, .thread-list, .voicemail, .vm-list,
+.favorites-list, .contacts, .settings, .settings-pane, .settings-pane-body,
+.settings-nav, .settings-nav-list, .chat, .chat-messages, .chat-threads,
+.liveops, .presence, .usage, .quality, .cost, .recruiter, .alerts,
+.users-admin, .users-admin-table, .audit-log, .audit-log-list,
+.bulk-results, .post-decline-sheet, .compose-box, .fav-modal,
+.history-modal, .history-timeline, .modal, .modal-body,
+.app-shell, .app-shell main {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.recents::-webkit-scrollbar,
+.call-list::-webkit-scrollbar,
+.messages::-webkit-scrollbar,
+.thread-list::-webkit-scrollbar,
+.voicemail::-webkit-scrollbar,
+.vm-list::-webkit-scrollbar,
+.favorites-list::-webkit-scrollbar,
+.contacts::-webkit-scrollbar,
+.settings::-webkit-scrollbar,
+.settings-pane::-webkit-scrollbar,
+.settings-pane-body::-webkit-scrollbar,
+.settings-nav::-webkit-scrollbar,
+.settings-nav-list::-webkit-scrollbar,
+.chat::-webkit-scrollbar,
+.chat-messages::-webkit-scrollbar,
+.chat-threads::-webkit-scrollbar,
+.liveops::-webkit-scrollbar,
+.presence::-webkit-scrollbar,
+.usage::-webkit-scrollbar,
+.quality::-webkit-scrollbar,
+.cost::-webkit-scrollbar,
+.recruiter::-webkit-scrollbar,
+.alerts::-webkit-scrollbar,
+.users-admin::-webkit-scrollbar,
+.users-admin-table::-webkit-scrollbar,
+.audit-log::-webkit-scrollbar,
+.audit-log-list::-webkit-scrollbar,
+.bulk-results::-webkit-scrollbar,
+.post-decline-sheet::-webkit-scrollbar,
+.compose-box::-webkit-scrollbar,
+.fav-modal::-webkit-scrollbar,
+.history-modal::-webkit-scrollbar,
+.history-timeline::-webkit-scrollbar,
+.modal::-webkit-scrollbar,
+.modal-body::-webkit-scrollbar,
+.app-shell::-webkit-scrollbar,
+.app-shell main::-webkit-scrollbar { display: none; }
+
+/* Belt-and-suspenders: anything with overflow auto/scroll set inline still
+   gets the chrome hidden. Lower specificity than the element selectors above
+   but catches everything we don't have a class for (textareas, generic divs). */
+*::-webkit-scrollbar { width: 0; height: 0; display: none; }
+* { scrollbar-width: none; }
