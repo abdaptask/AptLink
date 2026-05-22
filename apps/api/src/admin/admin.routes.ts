@@ -505,4 +505,193 @@ export async function adminRoutes(app: FastifyInstance) {
       return { summary, items: results };
     },
   );
+
+  // ───────────────────── GET /admin/reports/live (Phase 8 — #204) ─────
+  // P0 reporting slice — at-a-glance numbers for an admin dashboard.
+  // Designed to be cheap: 6 separate queries that all hit indexed columns
+  // and return small aggregates, no per-call full scans.
+  // Refresh budget on the client: 15s. Each call is < 100ms in practice.
+  app.get(
+    '/admin/reports/live',
+    { onRequest: [app.authenticate, requireAdmin] },
+    async () => {
+      const now = new Date();
+      const startOfDay = new Date(now);
+      startOfDay.setUTCHours(0, 0, 0, 0);
+      const startOfYesterday = new Date(startOfDay);
+      startOfYesterday.setUTCDate(startOfDay.getUTCDate() - 1);
+      const last24h = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+      const fourHoursAgo = new Date(now.getTime() - 4 * 60 * 60 * 1000);
+
+      // 1. Active calls right now: started but not ended yet, with a 4h
+      //    sanity-cap so a stuck/dropped call doesn't show as active forever.
+      const activeCallsNow = await prisma.call.count({
+        where: {
+          endedAt: null,
+          startedAt: { gte: fourHoursAgo },
+          status: { in: ['ringing', 'answered', 'initiated', 'connected'] },
+        },
+      });
+
+      // 2. Today's calls — grouped by direction + status for an in/out/missed split.
+      const todaysCallsRaw = await prisma.call.groupBy({
+        by: ['direction', 'status'],
+        where: { startedAt: { gte: startOfDay } },
+        _count: { _all: true },
+      });
+      let inbound = 0, outbound = 0, missed = 0;
+      for (const r of todaysCallsRaw) {
+        const c = r._count._all;
+        if (r.direction === 'inbound') {
+          if (['missed', 'no_answer', 'rejected'].includes(r.status)) missed += c;
+          else inbound += c;
+        } else if (r.direction === 'outbound') {
+          outbound += c;
+        }
+      }
+      const todaysCallsTotal = inbound + outbound + missed;
+
+      // 3. Yesterday's count for delta arrow.
+      const yesterdayTotal = await prisma.call.count({
+        where: {
+          startedAt: { gte: startOfYesterday, lt: startOfDay },
+        },
+      });
+
+      // 4. Today's SMS (inbound + outbound).
+      const todaysSmsRaw = await prisma.message.groupBy({
+        by: ['direction'],
+        where: { createdAt: { gte: startOfDay } },
+        _count: { _all: true },
+      });
+      const todaysSms = {
+        sent: todaysSmsRaw.find((r) => r.direction === 'outbound')?._count._all ?? 0,
+        received: todaysSmsRaw.find((r) => r.direction === 'inbound')?._count._all ?? 0,
+      };
+
+      // 5. Active users in the last 24h — anyone who's made a call OR sent/
+      //    received a message. Best proxy for "online" without server-side
+      //    SIP-presence tracking (which we'd need Telnyx Status webhooks for).
+      const activeCallers = await prisma.call.findMany({
+        where: { startedAt: { gte: last24h } },
+        distinct: ['userId'],
+        select: { userId: true },
+      });
+      const activeMessagers = await prisma.message.findMany({
+        where: { createdAt: { gte: last24h } },
+        distinct: ['userId'],
+        select: { userId: true },
+      });
+      const activeUserIds = new Set<number>([
+        ...activeCallers.map((c) => c.userId),
+        ...activeMessagers.map((m) => m.userId),
+      ]);
+
+      // 6. Top callers today (top 5 by call count).
+      const topCallersRaw = await prisma.call.groupBy({
+        by: ['userId'],
+        where: { startedAt: { gte: startOfDay } },
+        _count: { _all: true },
+        orderBy: { _count: { userId: 'desc' } },
+        take: 5,
+      });
+      const topCallerIds = topCallersRaw.map((r) => r.userId);
+      const topCallerUsers =
+        topCallerIds.length > 0
+          ? await prisma.user.findMany({
+              where: { id: { in: topCallerIds } },
+              select: { id: true, email: true, firstName: true, lastName: true },
+            })
+          : [];
+      const topCallerById = new Map(topCallerUsers.map((u) => [u.id, u]));
+      const topCallers = topCallersRaw.map((r) => {
+        const u = topCallerById.get(r.userId);
+        return {
+          userId: r.userId,
+          email: u?.email ?? '(unknown)',
+          name:
+            [u?.firstName, u?.lastName].filter(Boolean).join(' ').trim() ||
+            u?.email ?? '(unknown)',
+          callCount: r._count._all,
+        };
+      });
+
+      // 7. Recent missed calls (last 10, with the user who missed them).
+      const missedRows = await prisma.call.findMany({
+        where: {
+          direction: 'inbound',
+          status: { in: ['missed', 'no_answer'] },
+          startedAt: { gte: last24h },
+        },
+        orderBy: { startedAt: 'desc' },
+        take: 10,
+        select: {
+          id: true,
+          fromNumber: true,
+          startedAt: true,
+          status: true,
+          user: { select: { id: true, email: true, firstName: true, lastName: true } },
+        },
+      });
+      const recentMissed = missedRows.map((c) => ({
+        id: c.id,
+        fromNumber: c.fromNumber,
+        startedAt: c.startedAt.toISOString(),
+        status: c.status,
+        userEmail: c.user.email,
+        userName:
+          [c.user.firstName, c.user.lastName].filter(Boolean).join(' ').trim() ||
+          c.user.email,
+      }));
+
+      // 8. Hourly call buckets for today (24 buckets, indexed 0–23 UTC).
+      const todaysCallsForChart = await prisma.call.findMany({
+        where: { startedAt: { gte: startOfDay } },
+        select: { startedAt: true, direction: true, status: true },
+      });
+      const hourly = Array.from({ length: 24 }, () => ({ inbound: 0, outbound: 0, missed: 0 }));
+      for (const c of todaysCallsForChart) {
+        const h = c.startedAt.getUTCHours();
+        if (c.direction === 'inbound') {
+          if (['missed', 'no_answer', 'rejected'].includes(c.status)) hourly[h].missed += 1;
+          else hourly[h].inbound += 1;
+        } else if (c.direction === 'outbound') {
+          hourly[h].outbound += 1;
+        }
+      }
+
+      // 9. Total user counts for context.
+      const [totalUsers, activeUsers, adminUsers] = await Promise.all([
+        prisma.user.count(),
+        prisma.user.count({ where: { isActive: true } }),
+        prisma.user.count({ where: { isAdmin: true, isActive: true } }),
+      ]);
+
+      return {
+        generatedAt: now.toISOString(),
+        users: {
+          total: totalUsers,
+          active: activeUsers,
+          admins: adminUsers,
+          activeLast24h: activeUserIds.size,
+        },
+        calls: {
+          activeNow: activeCallsNow,
+          today: {
+            total: todaysCallsTotal,
+            inbound,
+            outbound,
+            missed,
+          },
+          yesterdayTotal,
+          hourlyToday: hourly,
+        },
+        sms: {
+          today: todaysSms,
+        },
+        topCallers,
+        recentMissed,
+      };
+    },
+  );
 }

@@ -1098,3 +1098,53 @@ export async function bulkImportUsers(
   }
   return (await res.json()) as BulkImportResult;
 }
+
+// ===========================================================================
+// Phase 8 (#204) — Live Ops Dashboard
+// ===========================================================================
+
+export interface LiveOpsReport {
+  generatedAt: string;
+  users: {
+    total: number;
+    active: number;
+    admins: number;
+    activeLast24h: number;
+  };
+  calls: {
+    activeNow: number;
+    today: {
+      total: number;
+      inbound: number;
+      outbound: number;
+      missed: number;
+    };
+    yesterdayTotal: number;
+    hourlyToday: Array<{ inbound: number; outbound: number; missed: number }>;
+  };
+  sms: {
+    today: { sent: number; received: number };
+  };
+  topCallers: Array<{
+    userId: number;
+    email: string;
+    name: string;
+    callCount: number;
+  }>;
+  recentMissed: Array<{
+    id: number;
+    fromNumber: string;
+    startedAt: string;
+    status: string;
+    userEmail: string;
+    userName: string;
+  }>;
+}
+
+export async function getLiveOpsReport(token: string): Promise<LiveOpsReport> {
+  const res = await fetch(`${API_URL}/admin/reports/live`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return (await res.json()) as LiveOpsReport;
+}

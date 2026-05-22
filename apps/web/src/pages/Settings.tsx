@@ -37,6 +37,11 @@ import {
   Power,
   KeyRound,
   FileText,
+  Activity,
+  PhoneCall,
+  PhoneIncoming,
+  PhoneOutgoing,
+  PhoneMissed as PhoneMissedIcon,
 } from 'lucide-react';
 import {
   getMe,
@@ -53,10 +58,12 @@ import {
   updateAdminUser,
   listAuditLogs,
   bulkImportUsers,
+  getLiveOpsReport,
   type AdminUserRow,
   type AuditLogEntry,
   type BulkImportRow,
   type BulkImportResult,
+  type LiveOpsReport,
 } from '../api';
 import {
   DEFAULT_QUICK_REPLIES,
@@ -106,6 +113,7 @@ const SECTIONS: SectionDef[] = [
   { key: 'data', label: 'Data', icon: Database, blurb: 'Backup & restore', Component: DataSection },
   // Admin-only. Components themselves show an "Admin access required"
   // empty state for non-admins so the nav nav-items don't dead-link.
+  { key: 'live-ops', label: 'Live ops', icon: Activity, blurb: 'Real-time dashboard (admin only)', Component: LiveOpsSection },
   { key: 'users', label: 'Users', icon: Users, blurb: 'Invite, promote, deactivate (admin only)', Component: UsersAdminSection },
   { key: 'audit-log', label: 'Audit log', icon: ScrollText, blurb: 'Recent admin actions (admin only)', Component: AuditLogSection },
 ];
@@ -2403,6 +2411,194 @@ function BulkImportModal({
                 </button>
               )}
             </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Phase 8 (#204) — Live Ops Dashboard
+// Auto-refreshes every 15s. Admin-only.
+// ---------------------------------------------------------------------------
+function LiveOpsSection() {
+  const [me, setMe] = useState<{ isAdmin: boolean } | null>(null);
+  const [data, setData] = useState<LiveOpsReport | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [lastFetched, setLastFetched] = useState<Date | null>(null);
+
+  useEffect(() => {
+    const token = sessionStorage.getItem('ace_token');
+    if (!token) return;
+    void getMe(token).then((u) => setMe({ isAdmin: u.isAdmin })).catch(() => undefined);
+    let cancelled = false;
+    async function fetchData() {
+      const tok = sessionStorage.getItem('ace_token');
+      if (!tok) return;
+      try {
+        const report = await getLiveOpsReport(tok);
+        if (cancelled) return;
+        setData(report);
+        setLastFetched(new Date());
+        setError(null);
+      } catch (e) {
+        if (!cancelled) setError((e as Error).message);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+    void fetchData();
+    const id = window.setInterval(fetchData, 15_000);
+    return () => { cancelled = true; window.clearInterval(id); };
+  }, []);
+
+  if (me && !me.isAdmin) {
+    return (
+      <div className="admin-empty">
+        <ShieldCheck size={28} style={{ opacity: 0.5, marginBottom: 8 }} />
+        <p><strong>Admin access required</strong></p>
+        <p className="muted small">Ask an admin to grant you the role.</p>
+      </div>
+    );
+  }
+  if (loading && !data) return <div className="muted">Loading…</div>;
+  if (error && !data) return <div className="error">{error}</div>;
+  if (!data) return null;
+
+  const delta = data.calls.today.total - data.calls.yesterdayTotal;
+  const deltaPct = data.calls.yesterdayTotal > 0
+    ? Math.round((delta / data.calls.yesterdayTotal) * 100)
+    : null;
+  const peakHour = Math.max(1, ...data.calls.hourlyToday.map((h) => h.inbound + h.outbound + h.missed));
+
+  function fmtAgo(iso: string): string {
+    const ms = Date.now() - new Date(iso).getTime();
+    const mins = Math.floor(ms / 60000);
+    if (mins < 1) return 'just now';
+    if (mins < 60) return mins + 'm ago';
+    const hrs = Math.floor(mins / 60);
+    if (hrs < 24) return hrs + 'h ago';
+    return Math.floor(hrs / 24) + 'd ago';
+  }
+
+  function fmtPhoneLocal(n: string): string {
+    if (!n) return '';
+    const d = n.replace(/[^\d]/g, '');
+    if (d.length === 11 && d.startsWith('1')) return '(' + d.slice(1, 4) + ') ' + d.slice(4, 7) + '-' + d.slice(7);
+    if (d.length === 10) return '(' + d.slice(0, 3) + ') ' + d.slice(3, 6) + '-' + d.slice(6);
+    return n;
+  }
+
+  return (
+    <div className="liveops">
+      <div className="liveops-header">
+        <div>
+          <h3 style={{ margin: 0 }}>Live ops</h3>
+          <p className="muted small" style={{ margin: '2px 0 0' }}>
+            Auto-refreshes every 15s
+            {lastFetched && ' · last updated ' + fmtAgo(lastFetched.toISOString())}
+          </p>
+        </div>
+      </div>
+
+      <div className="liveops-stats">
+        <div className="liveops-card active">
+          <div className="liveops-card-icon"><PhoneCall size={18} /></div>
+          <div className="liveops-card-num">{data.calls.activeNow}</div>
+          <div className="liveops-card-label">Active calls now</div>
+        </div>
+        <div className="liveops-card">
+          <div className="liveops-card-icon"><Activity size={18} /></div>
+          <div className="liveops-card-num">{data.calls.today.total}</div>
+          <div className="liveops-card-label">
+            Calls today
+            {deltaPct !== null && (
+              <span className={'liveops-delta ' + (delta >= 0 ? 'up' : 'down')}>
+                {delta >= 0 ? '↑' : '↓'} {Math.abs(deltaPct)}%
+              </span>
+            )}
+          </div>
+        </div>
+        <div className="liveops-card">
+          <div className="liveops-card-icon"><MessageSquare size={18} /></div>
+          <div className="liveops-card-num">{data.sms.today.sent + data.sms.today.received}</div>
+          <div className="liveops-card-label">
+            SMS today
+            <span className="muted small"> · {data.sms.today.sent} sent / {data.sms.today.received} received</span>
+          </div>
+        </div>
+        <div className="liveops-card">
+          <div className="liveops-card-icon"><Users size={18} /></div>
+          <div className="liveops-card-num">{data.users.activeLast24h}</div>
+          <div className="liveops-card-label">
+            Active 24h
+            <span className="muted small"> · of {data.users.active} total</span>
+          </div>
+        </div>
+      </div>
+
+      <div className="liveops-breakdown">
+        <div className="liveops-pill in"><PhoneIncoming size={14} /> {data.calls.today.inbound} inbound</div>
+        <div className="liveops-pill out"><PhoneOutgoing size={14} /> {data.calls.today.outbound} outbound</div>
+        <div className="liveops-pill missed"><PhoneMissedIcon size={14} /> {data.calls.today.missed} missed</div>
+      </div>
+
+      <div className="liveops-section-title">Calls today by hour (UTC)</div>
+      <div className="liveops-chart">
+        {data.calls.hourlyToday.map((h, i) => {
+          const total = h.inbound + h.outbound + h.missed;
+          const pct = total > 0 ? (total / peakHour) * 100 : 0;
+          return (
+            <div key={i} className="liveops-bar-wrap" title={i + ':00 — ' + h.inbound + ' in / ' + h.outbound + ' out / ' + h.missed + ' missed'}>
+              <div className="liveops-bar-stack" style={{ height: pct + '%' }}>
+                {h.outbound > 0 && <div className="liveops-bar-seg out" style={{ flex: h.outbound }} />}
+                {h.inbound > 0 && <div className="liveops-bar-seg in" style={{ flex: h.inbound }} />}
+                {h.missed > 0 && <div className="liveops-bar-seg missed" style={{ flex: h.missed }} />}
+              </div>
+              <div className="liveops-bar-label">{i % 3 === 0 ? i : ''}</div>
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="liveops-cols">
+        <div className="liveops-col">
+          <div className="liveops-section-title">Top callers today</div>
+          {data.topCallers.length === 0 ? (
+            <div className="muted small">No calls yet today.</div>
+          ) : (
+            <ol className="liveops-leaderboard">
+              {data.topCallers.map((c, i) => (
+                <li key={c.userId}>
+                  <span className="liveops-rank">{i + 1}</span>
+                  <span className="liveops-leader-name">
+                    <div>{c.name}</div>
+                    <div className="muted small">{c.email}</div>
+                  </span>
+                  <span className="liveops-leader-count">{c.callCount}</span>
+                </li>
+              ))}
+            </ol>
+          )}
+        </div>
+        <div className="liveops-col">
+          <div className="liveops-section-title">Recent missed calls</div>
+          {data.recentMissed.length === 0 ? (
+            <div className="muted small">No missed calls in the last 24h.</div>
+          ) : (
+            <ul className="liveops-missed">
+              {data.recentMissed.map((m) => (
+                <li key={m.id}>
+                  <span className="liveops-missed-icon"><PhoneMissedIcon size={14} /></span>
+                  <span className="liveops-missed-text">
+                    <div>{fmtPhoneLocal(m.fromNumber)}</div>
+                    <div className="muted small">to {m.userName} · {fmtAgo(m.startedAt)}</div>
+                  </span>
+                </li>
+              ))}
+            </ul>
           )}
         </div>
       </div>
