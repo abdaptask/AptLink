@@ -40,6 +40,12 @@ interface UpdateCallBody {
 // Solution: group by `sessionId` (Telnyx's call_session_id is shared across
 // legs of the same call) and keep the row with the most meaningful status.
 // Ties on rank fall back to the most recent `startedAt`.
+// STATUS_RANK ranks call statuses by how meaningful they are for display in
+// Recents. When multiple Call rows refer to the same physical call (Telnyx
+// fires events on both legs + the renderer SDK may also log a row), we keep
+// the highest-rank one. Lower numbers = less meaningful (filler/intermediate
+// states). 'ringing' / 'incoming' explicitly bottom of the pile so they
+// never win over a real terminal state like 'completed' or 'rejected'.
 const STATUS_RANK: Record<string, number> = {
   blocked: 100,
   answered: 90,
@@ -50,11 +56,60 @@ const STATUS_RANK: Record<string, number> = {
   missed: 40,
   failed: 30,
   initiated: 20,
+  ringing: 10,
+  incoming: 10,
 };
 
-function dedupeCallLegs<T extends { sessionId?: string | null; status?: string | null; startedAt?: Date | string | null }>(
-  rows: T[],
-): T[] {
+function rankOf(status: string | null | undefined): number {
+  return STATUS_RANK[status ?? ''] ?? 0;
+}
+
+function tsOf(v: Date | string | null | undefined): number {
+  return v ? new Date(v as string | Date).getTime() : 0;
+}
+
+function last10(n: string | null | undefined): string {
+  return (n ?? '').replace(/[^\d]/g, '').slice(-10);
+}
+
+// Pick the more meaningful row of a pair (higher rank wins; tie-break: longer
+// duration, then later startedAt). Used by both dedupe passes.
+function pickBetter<T extends {
+  status?: string | null;
+  durationSeconds?: number | null;
+  startedAt?: Date | string | null;
+}>(a: T, b: T): T {
+  const ra = rankOf(a.status);
+  const rb = rankOf(b.status);
+  if (rb > ra) return b;
+  if (ra > rb) return a;
+  // Same rank — prefer the one with longer duration, then the later one.
+  const da = a.durationSeconds ?? 0;
+  const db = b.durationSeconds ?? 0;
+  if (db > da) return b;
+  if (da > db) return a;
+  return tsOf(b.startedAt) > tsOf(a.startedAt) ? b : a;
+}
+
+// Dedupe call legs for Recents display. Two-pass strategy because we can't
+// rely on sessionId alone:
+//   1. Group by sessionId — Telnyx call_session_id IS shared across legs of
+//      the same physical call when present.
+//   2. Among the survivors + sessionId-less standalone rows, do a second
+//      proximity merge keyed on (last-10 of the OTHER party's number) AND
+//      startedAt within 60s of each other. This catches the SDK-side
+//      renderer ghost row that has no sessionId yet AND any Telnyx leg that
+//      got assigned a different sessionId.
+function dedupeCallLegs<T extends {
+  sessionId?: string | null;
+  status?: string | null;
+  startedAt?: Date | string | null;
+  durationSeconds?: number | null;
+  direction?: string | null;
+  fromNumber?: string | null;
+  toNumber?: string | null;
+}>(rows: T[]): T[] {
+  // ---- Pass 1: collapse rows that share sessionId ----
   const bySession = new Map<string, T>();
   const standalone: T[] = [];
   for (const row of rows) {
@@ -64,27 +119,52 @@ function dedupeCallLegs<T extends { sessionId?: string | null; status?: string |
       continue;
     }
     const existing = bySession.get(sid);
-    if (!existing) {
-      bySession.set(sid, row);
-      continue;
+    bySession.set(sid, existing ? pickBetter(existing, row) : row);
+  }
+  const pass1: T[] = [...bySession.values(), ...standalone];
+
+  // ---- Pass 2: proximity merge on (other-party + 60s window) ----
+  // Sort by startedAt asc so we scan in chronological order — keeps the
+  // proximity-window check straightforward.
+  pass1.sort((a, b) => tsOf(a.startedAt) - tsOf(b.startedAt));
+
+  const PROXIMITY_MS = 60 * 1000;
+  const kept: T[] = [];
+  for (const candidate of pass1) {
+    // The "other" party for this row: for inbound, the caller (from); for
+    // outbound, the callee (to). That's the stable join key — the same
+    // physical call has the same other-party regardless of which leg.
+    const other =
+      candidate.direction === 'inbound'
+        ? last10(candidate.fromNumber)
+        : last10(candidate.toNumber);
+    const candTs = tsOf(candidate.startedAt);
+
+    let mergedIntoIdx = -1;
+    for (let i = kept.length - 1; i >= 0; i -= 1) {
+      const k = kept[i];
+      const keptTs = tsOf(k.startedAt);
+      // Time-ordered: once we're outside the proximity window going
+      // backward, none of the earlier rows could match either.
+      if (candTs - keptTs > PROXIMITY_MS) break;
+      if (k.direction !== candidate.direction) continue;
+      const keptOther =
+        k.direction === 'inbound' ? last10(k.fromNumber) : last10(k.toNumber);
+      if (other && keptOther && other === keptOther) {
+        mergedIntoIdx = i;
+        break;
+      }
     }
-    const existingRank = STATUS_RANK[existing.status ?? ''] ?? 0;
-    const candidateRank = STATUS_RANK[row.status ?? ''] ?? 0;
-    if (candidateRank > existingRank) {
-      bySession.set(sid, row);
-    } else if (candidateRank === existingRank) {
-      const existingTs = existing.startedAt ? new Date(existing.startedAt as string | Date).getTime() : 0;
-      const candidateTs = row.startedAt ? new Date(row.startedAt as string | Date).getTime() : 0;
-      if (candidateTs > existingTs) bySession.set(sid, row);
+    if (mergedIntoIdx >= 0) {
+      kept[mergedIntoIdx] = pickBetter(kept[mergedIntoIdx], candidate);
+    } else {
+      kept.push(candidate);
     }
   }
-  const merged = [...bySession.values(), ...standalone];
-  merged.sort((a, b) => {
-    const ta = a.startedAt ? new Date(a.startedAt as string | Date).getTime() : 0;
-    const tb = b.startedAt ? new Date(b.startedAt as string | Date).getTime() : 0;
-    return tb - ta;
-  });
-  return merged;
+
+  // Final sort: newest first, like the original.
+  kept.sort((a, b) => tsOf(b.startedAt) - tsOf(a.startedAt));
+  return kept;
 }
 
 export async function callsRoutes(app: FastifyInstance) {
