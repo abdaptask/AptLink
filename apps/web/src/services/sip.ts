@@ -547,9 +547,56 @@ export class SipService {
       this.cleanupCall(callId, data?.cause ?? 'failed');
     });
 
-    // ICE / peerconnection diagnostics
-    session.on('icecandidate', (data: { candidate?: { candidate?: string } }) => {
-      console.debug('[sip] icecandidate', data?.candidate?.candidate?.slice(0, 60));
+    // ICE candidate trickle — v0.8.10
+    //
+    // JsSIP's _createLocalDescription waits for one of two signals before
+    // sending the SIP request/response:
+    //   (a) RTCPeerConnection.iceGatheringState === 'complete', OR
+    //   (b) an 'icecandidate' event with candidate === null (end-of-candidates)
+    //
+    // On Chromium-Electron-Windows neither reliably fires within Telnyx's
+    // 5-second progress-timeout window. Result: createLocalDescription hangs
+    // forever, the 200 OK is never sent, and Telnyx CANCELs the call with
+    // Q.850 cause=807 PROGRESS_TIMEOUT.
+    //
+    // JsSIP exposes an escape hatch: every 'icecandidate' event includes a
+    // ready() callback. Calling it tells JsSIP \"stop waiting -- send the
+    // SIP message NOW with whatever candidates we already collected.\"
+    // host + srflx covers nearly every real-world NAT scenario.
+    //
+    // Strategy: on the first server-reflexive (srflx) candidate fire
+    // ready() immediately. Safety net: 1500ms hard timeout from the first
+    // candidate, so even if srflx never arrives we don't hang past Telnyx's
+    // progress timer.
+    let iceReadyCalled = false;
+    let iceReadyTimer: number | null = null;
+    const fireReady = (ready: () => void, reason: string): void => {
+      if (iceReadyCalled) return;
+      iceReadyCalled = true;
+      if (iceReadyTimer !== null) {
+        window.clearTimeout(iceReadyTimer);
+        iceReadyTimer = null;
+      }
+      console.log('[sip] forcing JsSIP iceReady -', reason);
+      try { ready(); } catch (e) { console.warn('[sip] ready() threw', e); }
+    };
+    session.on('icecandidate', (data: {
+      candidate?: { candidate?: string; type?: string; protocol?: string; address?: string };
+      ready?: () => void;
+    }) => {
+      const cand = data?.candidate;
+      const ready = data?.ready;
+      console.log('[sip] icecandidate', cand?.type, cand?.protocol, cand?.address);
+      if (!ready) return;
+      if (!iceReadyCalled && cand?.type === 'srflx') {
+        fireReady(ready, 'srflx ' + (cand.address ?? ''));
+        return;
+      }
+      if (!iceReadyCalled && iceReadyTimer === null) {
+        iceReadyTimer = window.setTimeout(() => {
+          fireReady(ready, 'timeout-1500ms');
+        }, 1500);
+      }
     });
     session.on('sdp', (data: { type?: string; sdp?: string; originator?: string }) => {
       console.log('[sip] SDP', data?.originator, data?.type);
@@ -949,13 +996,13 @@ export class SipService {
       });
       return;
     }
-    // v0.8.9 — fire-and-forget the async answer path so the click handler
-    // stays synchronous. Inside _answerIncoming we preflight gUM, then call
-    // session.answer() with a pre-acquired MediaStream + the full pcConfig
-    // mirror of outbound. This closes the Windows-only inbound hang where
-    // JsSIP's internal createLocalDescription() never resolved.
+    // v0.8.9 -- fire-and-forget the async answer path so click handlers
+    // stay synchronous. Inside _answerIncoming we preflight gUM (with a
+    // 3-second timeout), then call session.answer() with a pre-acquired
+    // MediaStream + the full pcConfig mirror of outbound.
     void this._answerIncoming(entry);
   }
+
 
   /**
    * v0.8.9 — Centralised inbound answer path used by both `acceptCall()`
