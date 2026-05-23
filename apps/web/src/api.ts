@@ -1317,3 +1317,143 @@ export async function getAlertsReport(token: string): Promise<AlertsReport> {
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return (await res.json()) as AlertsReport;
 }
+
+// ─── Phase 8 (#216-220): Pulse-to-ACE migration via PendingUser staging ────
+
+export interface PendingUserRow {
+  email: string;
+  firstName?: string | null;
+  lastName?: string | null;
+  pulseVoipExt: string;
+  pulseVoipNumber: string;
+  pulseExtPassword: string;
+  pulseConnectionName?: string | null;
+  pulseUserStatus?: string | null;
+}
+
+export interface PendingUser {
+  id: number;
+  email: string;
+  firstName: string | null;
+  lastName: string | null;
+  pulseVoipExt: string;
+  pulseVoipNumber: string;
+  pulseConnectionName: string | null;
+  pulseUserStatus: string | null;
+  status: 'pending' | 'invited' | 'skipped';
+  hasPassword: boolean;
+  invitedAt: string | null;
+  invitedUserId: number | null;
+  importBatchId: string | null;
+  importedAt: string;
+}
+
+export interface PendingUserList {
+  items: PendingUser[];
+  counts: { pending: number; invited: number; skipped: number };
+}
+
+export interface PendingUserImportResult {
+  batchId: string;
+  inserted: number;
+  updated: number;
+  errors: Array<{ row: number; email: string; error: string }>;
+}
+
+export interface InvitePendingInput {
+  didMode: 'existing' | 'new';
+  credsMode: 'existing' | 'new';
+  repointWebhook: boolean;
+  sendEmail: boolean;
+  newDidAreaCode?: string;
+}
+
+export interface InvitePendingResult {
+  ok: boolean;
+  userId?: number;
+  didNumber?: string;
+  sipUsername?: string;
+  credsCreated?: boolean;
+  didPurchased?: boolean;
+  webhookRepointed?: boolean;
+  emailSent?: boolean;
+  steps?: Array<{ step: string; ok: boolean; error?: string }>;
+  error?: string;
+}
+
+export async function listPendingUsers(
+  token: string,
+  status: 'pending' | 'invited' | 'skipped' | 'all' = 'pending',
+): Promise<PendingUserList> {
+  const params = status === 'all' ? '' : `?status=${status}`;
+  const res = await fetch(`${API_URL}/admin/pending-users${params}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return (await res.json()) as PendingUserList;
+}
+
+export async function importPendingUsers(
+  token: string,
+  rows: PendingUserRow[],
+): Promise<PendingUserImportResult> {
+  const res = await fetch(`${API_URL}/admin/pending-users/import`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ rows }),
+  });
+  if (!res.ok) {
+    const errBody = await res.json().catch(() => ({}));
+    throw new Error(
+      typeof errBody === 'object' && errBody !== null && 'error' in errBody
+        ? String((errBody as { error: unknown }).error)
+        : `HTTP ${res.status}`,
+    );
+  }
+  return (await res.json()) as PendingUserImportResult;
+}
+
+export async function invitePendingUser(
+  token: string,
+  id: number,
+  input: InvitePendingInput,
+): Promise<InvitePendingResult> {
+  const res = await fetch(`${API_URL}/admin/pending-users/${id}/invite`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify(input),
+  });
+  const body = (await res.json().catch(() => ({}))) as InvitePendingResult;
+  if (!res.ok) {
+    return {
+      ok: false,
+      error:
+        typeof body === 'object' && 'error' in body
+          ? String((body as { error: unknown }).error)
+          : `HTTP ${res.status}`,
+      steps: 'steps' in body ? (body as { steps?: InvitePendingResult['steps'] }).steps : undefined,
+    };
+  }
+  return body;
+}
+
+export async function deletePendingUser(token: string, id: number): Promise<void> {
+  const res = await fetch(`${API_URL}/admin/pending-users/${id}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    const errBody = await res.json().catch(() => ({}));
+    throw new Error(
+      typeof errBody === 'object' && errBody !== null && 'error' in errBody
+        ? String((errBody as { error: unknown }).error)
+        : `HTTP ${res.status}`,
+    );
+  }
+}
