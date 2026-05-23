@@ -5259,3 +5259,299 @@ body::-webkit-scrollbar { display: none; }
    but catches everything we don't have a class for (textareas, generic divs). */
 *::-webkit-scrollbar { width: 0; height: 0; display: none; }
 * { scrollbar-width: none; }
+
+/* ===========================================================================
+   Pending Users tab — clean CSS v2 (matches CURRENT React component, no checkbox)
+   Replace any prior pending-users CSS in apps/web/src/styles.css with THIS.
+   =========================================================================== */
+
+/* Current React component renders 8 columns in this order:
+     1: Name | 2: Email | 3: Pulse ext | 4: Pulse DID
+     5: Connection | 6: Status | 7: Imported | 8: Actions
+   We hide 3, 5, 7 — leaves 5 visible: Name | Email | Pulse DID | Status | Actions. */
+
+/* -------- Header -------- */
+.settings-section > header.settings-section-header {
+  display: flex; align-items: flex-start; justify-content: space-between;
+  gap: 1rem; flex-wrap: wrap; margin-bottom: 1.25rem;
+}
+.settings-section > header.settings-section-header > div:first-child {
+  flex: 1 1 auto; min-width: 240px;
+}
+.settings-section-actions { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
+.settings-section-actions .settings-btn,
+.settings-section-actions .settings-btn-secondary {
+  display: inline-flex; align-items: center; gap: 0.45rem;
+  padding: 0.55rem 1rem; border-radius: 8px;
+  font-size: 0.86rem; font-weight: 600; cursor: pointer; line-height: 1;
+  transition: background 0.12s, border-color 0.12s;
+}
+.settings-section-actions .settings-btn { background: #0a84ff; color: #fff; border: 1px solid #0a84ff; }
+.settings-section-actions .settings-btn:hover { background: #0c6fd6; border-color: #0c6fd6; }
+.settings-section-actions .settings-btn-secondary {
+  background: transparent; color: var(--text, #1a1a1a); border: 1px solid rgba(0,0,0,0.18);
+}
+.settings-section-actions .settings-btn-secondary:hover { background: rgba(0,0,0,0.04); }
+[data-theme="dark"] .settings-section-actions .settings-btn-secondary { color: #fff; border-color: rgba(255,255,255,0.18); }
+[data-theme="dark"] .settings-section-actions .settings-btn-secondary:hover { background: rgba(255,255,255,0.06); }
+.settings-section-actions button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* -------- Filter chips -------- */
+.pending-filter-row { display: flex; gap: 0.5rem; flex-wrap: wrap; margin: 0 0 1rem; }
+.pending-filter-chip {
+  display: inline-flex; align-items: center; gap: 0.5rem;
+  padding: 0.4rem 0.85rem; border-radius: 999px;
+  border: 1px solid rgba(0,0,0,0.10); background: rgba(0,0,0,0.03);
+  color: #6b7280; font-size: 0.85rem; font-weight: 500; cursor: pointer;
+}
+.pending-filter-chip:hover { background: rgba(0,0,0,0.06); }
+.pending-filter-chip.active { background: rgba(10,132,255,0.12); color: #0a84ff; border-color: rgba(10,132,255,0.30); }
+.pending-filter-count {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 1.3rem; height: 1.3rem; padding: 0 0.4rem;
+  border-radius: 999px; background: rgba(0,0,0,0.08);
+  font-size: 0.72rem; font-weight: 600;
+}
+.pending-filter-chip.active .pending-filter-count { background: rgba(10,132,255,0.25); color: #0a84ff; }
+[data-theme="dark"] .pending-filter-chip { border-color: rgba(255,255,255,0.10); background: rgba(255,255,255,0.04); color: #8e8e93; }
+[data-theme="dark"] .pending-filter-chip.active { background: rgba(10,132,255,0.18); }
+[data-theme="dark"] .pending-filter-count { background: rgba(255,255,255,0.10); }
+
+/* -------- Bulk-select toolbar (when ≥1 row checked — for upcoming feature) -------- */
+.pending-bulk-bar {
+  display: flex; align-items: center; gap: 0.85rem;
+  padding: 0.7rem 1rem; margin: 0 0 0.75rem;
+  border-radius: 10px;
+  background: rgba(10,132,255,0.10); border: 1px solid rgba(10,132,255,0.25);
+  font-size: 0.88rem; color: #0a84ff; font-weight: 500;
+}
+.pending-bulk-bar .bulk-count { font-weight: 700; }
+.pending-bulk-bar .bulk-spacer { flex: 1 1 auto; }
+.pending-bulk-bar button {
+  display: inline-flex; align-items: center; gap: 0.4rem;
+  padding: 0.4rem 0.85rem; border-radius: 6px; border: 1px solid transparent;
+  font-size: 0.82rem; font-weight: 600; cursor: pointer;
+}
+.pending-bulk-bar .bulk-invite { background: #0a84ff; color: #fff; }
+.pending-bulk-bar .bulk-invite:hover { background: #0c6fd6; }
+.pending-bulk-bar .bulk-delete { background: transparent; color: #d70015; border-color: rgba(215,0,21,0.25); }
+.pending-bulk-bar .bulk-delete:hover { background: rgba(215,0,21,0.08); }
+.pending-bulk-bar .bulk-clear { background: transparent; color: #6b7280; border-color: rgba(0,0,0,0.15); }
+
+/* -------- Table -------- */
+.pending-table-wrap {
+  border: 1px solid rgba(0,0,0,0.08); border-radius: 12px;
+  overflow: hidden; background: #fff;
+}
+[data-theme="dark"] .pending-table-wrap { border-color: rgba(255,255,255,0.08); background: rgba(255,255,255,0.02); }
+
+.pending-table { width: 100%; border-collapse: collapse; font-size: 0.86rem; table-layout: fixed; }
+.pending-table th {
+  text-align: left; padding: 0.7rem 0.85rem;
+  font-weight: 600; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.04em;
+  color: #6b7280; background: rgba(0,0,0,0.025);
+  border-bottom: 1px solid rgba(0,0,0,0.08);
+}
+.pending-table td {
+  padding: 0.7rem 0.85rem;
+  border-bottom: 1px solid rgba(0,0,0,0.04); vertical-align: middle;
+}
+.pending-table tr:last-child td { border-bottom: none; }
+.pending-table tr:hover td { background: rgba(0,0,0,0.02); }
+[data-theme="dark"] .pending-table th { color: #8e8e93; background: rgba(255,255,255,0.02); border-bottom-color: rgba(255,255,255,0.08); }
+[data-theme="dark"] .pending-table td { border-bottom-color: rgba(255,255,255,0.04); }
+[data-theme="dark"] .pending-table tr:hover td { background: rgba(255,255,255,0.025); }
+
+/* Hide Pulse ext (col 3), Connection (col 5), Imported (col 7) */
+.pending-table th:nth-child(3), .pending-table td:nth-child(3),
+.pending-table th:nth-child(5), .pending-table td:nth-child(5),
+.pending-table th:nth-child(7), .pending-table td:nth-child(7) { display: none; }
+
+/* Column widths for the 5 VISIBLE columns:
+   1: Name | 2: Email | 4: Pulse DID | 6: Status | 8: Actions */
+.pending-table th:nth-child(1), .pending-table td:nth-child(1) { width: 22%; font-weight: 600; }
+.pending-table th:nth-child(2), .pending-table td:nth-child(2) { width: 32%; }
+.pending-table th:nth-child(4), .pending-table td:nth-child(4) {
+  width: 22%; white-space: nowrap;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.84rem; color: #6b7280;
+}
+.pending-table th:nth-child(6), .pending-table td:nth-child(6) { width: 110px; }
+.pending-table th:last-child, .pending-table td:last-child { width: 130px; text-align: right; white-space: nowrap; }
+
+/* Status pill */
+.pending-status-pill {
+  display: inline-flex; align-items: center;
+  padding: 0.18rem 0.55rem; border-radius: 999px;
+  font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em;
+}
+.pending-status-pill.pending-pending { background: rgba(255,204,0,0.22); color: #8a6500; }
+.pending-status-pill.pending-invited { background: rgba(52,199,89,0.18); color: #1e8a3e; }
+.pending-status-pill.pending-skipped { background: rgba(0,0,0,0.06); color: #6b7280; }
+[data-theme="dark"] .pending-status-pill.pending-pending { background: rgba(255,204,0,0.18); color: #f5c419; }
+[data-theme="dark"] .pending-status-pill.pending-invited { background: rgba(52,199,89,0.18); color: #34c759; }
+
+/* Row actions */
+.pending-action-primary {
+  padding: 0.4rem 0.85rem; border-radius: 6px; border: none;
+  background: #0a84ff; color: #fff;
+  font-size: 0.8rem; font-weight: 600; cursor: pointer; margin-right: 0.4rem;
+}
+.pending-action-primary:hover { background: #0c6fd6; }
+.pending-action-icon {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px; border-radius: 6px;
+  border: 1px solid rgba(0,0,0,0.12); background: transparent; color: #6b7280; cursor: pointer;
+}
+.pending-action-icon:hover { background: rgba(215,0,21,0.08); color: #d70015; border-color: rgba(215,0,21,0.25); }
+[data-theme="dark"] .pending-action-icon { border-color: rgba(255,255,255,0.10); color: #8e8e93; }
+.pending-invited-note { font-size: 0.78rem; color: #6b7280; }
+
+/* Empty / loading / error */
+.pending-empty, .pending-loading {
+  padding: 2.5rem 1.5rem; border: 1px dashed rgba(0,0,0,0.10); border-radius: 12px;
+  text-align: center; color: #6b7280; font-size: 0.92rem;
+  display: flex; align-items: center; justify-content: center; gap: 0.6rem;
+}
+[data-theme="dark"] .pending-empty, [data-theme="dark"] .pending-loading { border-color: rgba(255,255,255,0.10); color: #8e8e93; }
+.pending-error {
+  display: inline-flex; align-items: center; gap: 0.5rem;
+  padding: 0.7rem 0.9rem; border-radius: 10px;
+  background: rgba(215,0,21,0.06); color: #c01a10; border: 1px solid rgba(215,0,21,0.20);
+  font-size: 0.85rem; margin-bottom: 0.75rem;
+}
+
+/* -------- Modals -------- */
+.pending-upload-modal { max-width: 720px; }
+.pending-invite-modal { max-width: 640px; }
+.pending-result-modal { max-width: 600px; }
+.pending-upload-instructions { font-size: 0.85rem; color: #6b7280; margin: 0 0 1rem; }
+.pending-upload-instructions code {
+  display: block; background: rgba(0,0,0,0.04); padding: 0.5rem 0.7rem;
+  border-radius: 6px; margin-top: 0.4rem; font-size: 0.78rem; word-break: break-word;
+}
+.pending-upload-fileinput { margin-bottom: 1rem; }
+.pending-preview-summary { font-size: 0.88rem; margin: 0.8rem 0 0.4rem; }
+.pending-result-box { margin-top: 1rem; padding: 0.9rem 1rem; border-radius: 10px; font-size: 0.88rem; }
+.pending-result-box.ok { background: rgba(52,199,89,0.12); color: #1e8a3e; border: 1px solid rgba(52,199,89,0.25); }
+.pending-result-box.warn { background: rgba(255,204,0,0.18); color: #8a6500; border: 1px solid rgba(255,204,0,0.30); }
+.pending-invite-summary {
+  font-size: 0.85rem; color: #6b7280; line-height: 1.7;
+  background: rgba(0,0,0,0.025); padding: 0.7rem 0.9rem; border-radius: 8px; margin: 0 0 0.75rem;
+}
+.pending-divider { border: none; border-top: 1px solid rgba(0,0,0,0.08); margin: 1rem 0; }
+.pending-toggle-group {
+  border: 1px solid rgba(0,0,0,0.10); border-radius: 10px; padding: 0.85rem 1rem; margin-bottom: 0.85rem;
+}
+.pending-toggle-group legend {
+  font-size: 0.74rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em;
+  color: #6b7280; padding: 0 0.4rem;
+}
+.pending-toggle, .pending-checkbox {
+  display: flex; align-items: flex-start; gap: 0.7rem; padding: 0.55rem 0; cursor: pointer; font-size: 0.88rem;
+}
+.pending-toggle input, .pending-checkbox input { margin-top: 0.15rem; flex-shrink: 0; accent-color: #0a84ff; }
+.pending-toggle span, .pending-checkbox span { display: flex; flex-direction: column; gap: 0.2rem; }
+.pending-toggle-help { font-size: 0.78rem; font-weight: 400; color: #6b7280; line-height: 1.4; }
+.pending-toggle-extra { padding: 0.5rem 0 0 1.5rem; font-size: 0.82rem; color: #6b7280; display: flex; flex-direction: column; gap: 0.3rem; }
+.pending-areacode-input {
+  width: 5rem; padding: 0.3rem 0.5rem;
+  border: 1px solid rgba(0,0,0,0.15); background: #fff; border-radius: 6px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.9rem;
+}
+.pending-confirm-btn { background: #34c759; border-color: #34c759; }
+.pending-confirm-btn:hover { background: #2eb551; border-color: #2eb551; }
+.pending-icon-ok { color: #1e8a3e; vertical-align: middle; margin-right: 0.4rem; }
+.pending-icon-err { color: #d70015; vertical-align: middle; margin-right: 0.4rem; }
+.pending-result-summary p { margin: 0 0 0.6rem; font-size: 0.92rem; }
+.pending-result-bullets { margin: 0; padding-left: 1.2rem; font-size: 0.88rem; }
+.pending-steps-heading {
+  margin: 1rem 0 0.5rem; font-size: 0.74rem; font-weight: 700;
+  text-transform: uppercase; letter-spacing: 0.04em; color: #6b7280;
+}
+.pending-steps-list { list-style: none; margin: 0; padding: 0; font-size: 0.85rem; }
+.pending-steps-list li {
+  display: flex; align-items: flex-start; gap: 0.5rem;
+  padding: 0.45rem 0; border-bottom: 1px solid rgba(0,0,0,0.04); flex-wrap: wrap;
+}
+.pending-steps-list li:last-child { border-bottom: none; }
+.pending-step-error {
+  flex-basis: 100%; margin-left: 1.4rem; font-size: 0.78rem;
+  color: #d70015; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; word-break: break-word;
+}
+
+/* Spinner */
+@keyframes pending-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+.spin { animation: pending-spin 1s linear infinite; }
+
+/* Fix Pulse DID overlapping Status — give Pulse DID overflow:hidden so it
+   stays within its column instead of bleeding into Status. Also widen Status
+   slightly so the pill has more breathing room. */
+.pending-table th:nth-child(4),
+.pending-table td:nth-child(4) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  width: 18%;
+}
+.pending-table th:nth-child(6),
+.pending-table td:nth-child(6) {
+  width: 14%;
+  text-align: center;
+}
+.pending-table th:last-child,
+.pending-table td:last-child {
+  width: 18%;
+}
+
+/* ===========================================================================
+   THE ACTUAL ROOT CAUSE — Settings container is constraining width.
+   Override it specifically for Pending Users + force everything single-line.
+   =========================================================================== */
+
+/* 1. Force the Pending Users section to ignore parent max-width and use the
+   full available width of the Settings layout. */
+.settings-section:has(.pending-table-wrap),
+.settings-section:has(.pending-filter-row) {
+  max-width: none !important;
+  width: 100% !important;
+}
+
+/* 2. Drop fixed table-layout so columns auto-size to content. */
+.pending-table {
+  table-layout: auto !important;
+  width: 100% !important;
+}
+
+/* 3. EVERYTHING on one line — no wrapping anywhere in the row. */
+.pending-table th,
+.pending-table td {
+  white-space: nowrap !important;
+  overflow: visible !important;
+  text-overflow: clip !important;
+}
+
+/* 4. Reset all the column widths I forced earlier — let the browser size them
+   based on content. */
+.pending-table th:nth-child(1), .pending-table td:nth-child(1),
+.pending-table th:nth-child(2), .pending-table td:nth-child(2),
+.pending-table th:nth-child(4), .pending-table td:nth-child(4),
+.pending-table th:nth-child(6), .pending-table td:nth-child(6),
+.pending-table th:last-child, .pending-table td:last-child {
+  width: auto !important;
+  min-width: 0 !important;
+}
+
+/* 5. Email column gets a tiny bit more breathing room so it doesn't crowd
+   the Pulse DID. */
+.pending-table td:nth-child(2) { padding-right: 1.5rem !important; }
+
+/* 6. Actions column: keep it right-aligned and snug to the right edge */
+.pending-table th:last-child, .pending-table td:last-child {
+  text-align: right !important;
+  padding-right: 0.85rem !important;
+}
+
+/* 7. If the table STILL exceeds available width (very narrow viewport), let
+   the wrap scroll horizontally instead of clipping the trash icon. */
+.pending-table-wrap {
+  overflow-x: auto !important;
+}
