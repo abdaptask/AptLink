@@ -383,7 +383,7 @@ export async function adminRoutes(app: FastifyInstance) {
           emailSent = true;
           step('send welcome email', true);
         } else {
-          step('send welcome email', false, mail.error ?? `HTTP ${mail.status}`);
+          step('send welcome email', false, typeof mail.error === 'string' ? mail.error : `HTTP ${mail.status}`);
         }
       } else {
         step('send welcome email', true);   // skipped per request
