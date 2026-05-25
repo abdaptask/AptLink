@@ -32,6 +32,16 @@ export const config = {
   // Voice → Call Control Apps → <your app> → API ID.
   telnyxCcConnectionId: optional('TELNYX_CC_CONNECTION_ID'),
   pilotFromNumber: optional('PILOT_TELNYX_NUMBER', '+17322001305'),
+  // ACE's call-event webhook endpoint. Used by:
+  //   • createCredentialConnection (new connections route events here)
+  //   • patchConnectionWebhook (the "repoint webhook" toggle in the invite
+  //     modal flips Pulse user connections from pulse.aptask.com → here)
+  // Default matches the URL on the existing `ace-dialer` Credential
+  // Connection in Telnyx. Override in Render env vars for staging.
+  telnyxWebhookUrl: optional(
+    'TELNYX_WEBHOOK_URL',
+    'https://ace-dialer-webhooks.onrender.com/webhooks/telnyx/calls',
+  ),
 
   // Supabase Storage (for MMS uploads)
   supabaseUrl: optional('SUPABASE_URL'),
@@ -52,4 +62,18 @@ export const config = {
   msClientId: optional('MS_CLIENT_ID'),
   msTenantId: optional('MS_TENANT_ID'),
   msClientSecret: optional('MS_CLIENT_SECRET'),
+
+  // SendGrid — welcome emails for newly-invited users (Phase 8, Pulse→ACE).
+  // - sendGridApiKey: "SG.xxxxxxxx..." from app.sendgrid.com → Settings → API Keys.
+  //   Scope just "Mail Send" (don't grant broader perms).
+  // - sendGridFromEmail: the verified sender. Must already be authenticated in
+  //   SendGrid (Settings → Sender Authentication) or SendGrid will reject the
+  //   send with a 403.
+  // - sendGridFromName: display name shown in the recipient's inbox.
+  // - aceSupportEmail: shown in the welcome email body ("Reply or contact <X>
+  //   for help"). Defaults to the same as FROM but can be a real human inbox.
+  sendGridApiKey: optional('SENDGRID_API_KEY'),
+  sendGridFromEmail: optional('SENDGRID_FROM_EMAIL', 'noreply@aptask.com'),
+  sendGridFromName: optional('SENDGRID_FROM_NAME', 'ACE Dialer'),
+  aceSupportEmail: optional('ACE_SUPPORT_EMAIL', 'it@aptask.com'),
 };

@@ -5259,3 +5259,554 @@ body::-webkit-scrollbar { display: none; }
    but catches everything we don't have a class for (textareas, generic divs). */
 *::-webkit-scrollbar { width: 0; height: 0; display: none; }
 * { scrollbar-width: none; }
+
+/* ===========================================================================
+   Pending Users tab — clean CSS v2 (matches CURRENT React component, no checkbox)
+   Replace any prior pending-users CSS in apps/web/src/styles.css with THIS.
+   =========================================================================== */
+
+/* Current React component renders 8 columns in this order:
+     1: Name | 2: Email | 3: Pulse ext | 4: Pulse DID
+     5: Connection | 6: Status | 7: Imported | 8: Actions
+   We hide 3, 5, 7 — leaves 5 visible: Name | Email | Pulse DID | Status | Actions. */
+
+/* -------- Header -------- */
+.settings-section > header.settings-section-header {
+  display: flex; align-items: flex-start; justify-content: space-between;
+  gap: 1rem; flex-wrap: wrap; margin-bottom: 1.25rem;
+}
+.settings-section > header.settings-section-header > div:first-child {
+  flex: 1 1 auto; min-width: 240px;
+}
+.settings-section-actions { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
+.settings-section-actions .settings-btn,
+.settings-section-actions .settings-btn-secondary {
+  display: inline-flex; align-items: center; gap: 0.45rem;
+  padding: 0.55rem 1rem; border-radius: 8px;
+  font-size: 0.86rem; font-weight: 600; cursor: pointer; line-height: 1;
+  transition: background 0.12s, border-color 0.12s;
+}
+.settings-section-actions .settings-btn { background: #0a84ff; color: #fff; border: 1px solid #0a84ff; }
+.settings-section-actions .settings-btn:hover { background: #0c6fd6; border-color: #0c6fd6; }
+.settings-section-actions .settings-btn-secondary {
+  background: transparent; color: var(--text, #1a1a1a); border: 1px solid rgba(0,0,0,0.18);
+}
+.settings-section-actions .settings-btn-secondary:hover { background: rgba(0,0,0,0.04); }
+[data-theme="dark"] .settings-section-actions .settings-btn-secondary { color: #fff; border-color: rgba(255,255,255,0.18); }
+[data-theme="dark"] .settings-section-actions .settings-btn-secondary:hover { background: rgba(255,255,255,0.06); }
+.settings-section-actions button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* -------- Filter chips -------- */
+.pending-filter-row { display: flex; gap: 0.5rem; flex-wrap: wrap; margin: 0 0 1rem; }
+.pending-filter-chip {
+  display: inline-flex; align-items: center; gap: 0.5rem;
+  padding: 0.4rem 0.85rem; border-radius: 999px;
+  border: 1px solid rgba(0,0,0,0.10); background: rgba(0,0,0,0.03);
+  color: #6b7280; font-size: 0.85rem; font-weight: 500; cursor: pointer;
+}
+.pending-filter-chip:hover { background: rgba(0,0,0,0.06); }
+.pending-filter-chip.active { background: rgba(10,132,255,0.12); color: #0a84ff; border-color: rgba(10,132,255,0.30); }
+.pending-filter-count {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 1.3rem; height: 1.3rem; padding: 0 0.4rem;
+  border-radius: 999px; background: rgba(0,0,0,0.08);
+  font-size: 0.72rem; font-weight: 600;
+}
+.pending-filter-chip.active .pending-filter-count { background: rgba(10,132,255,0.25); color: #0a84ff; }
+[data-theme="dark"] .pending-filter-chip { border-color: rgba(255,255,255,0.10); background: rgba(255,255,255,0.04); color: #8e8e93; }
+[data-theme="dark"] .pending-filter-chip.active { background: rgba(10,132,255,0.18); }
+[data-theme="dark"] .pending-filter-count { background: rgba(255,255,255,0.10); }
+
+/* -------- Bulk-select toolbar (when ≥1 row checked — for upcoming feature) -------- */
+.pending-bulk-bar {
+  display: flex; align-items: center; gap: 0.85rem;
+  padding: 0.7rem 1rem; margin: 0 0 0.75rem;
+  border-radius: 10px;
+  background: rgba(10,132,255,0.10); border: 1px solid rgba(10,132,255,0.25);
+  font-size: 0.88rem; color: #0a84ff; font-weight: 500;
+}
+.pending-bulk-bar .bulk-count { font-weight: 700; }
+.pending-bulk-bar .bulk-spacer { flex: 1 1 auto; }
+.pending-bulk-bar button {
+  display: inline-flex; align-items: center; gap: 0.4rem;
+  padding: 0.4rem 0.85rem; border-radius: 6px; border: 1px solid transparent;
+  font-size: 0.82rem; font-weight: 600; cursor: pointer;
+}
+.pending-bulk-bar .bulk-invite { background: #0a84ff; color: #fff; }
+.pending-bulk-bar .bulk-invite:hover { background: #0c6fd6; }
+.pending-bulk-bar .bulk-delete { background: transparent; color: #d70015; border-color: rgba(215,0,21,0.25); }
+.pending-bulk-bar .bulk-delete:hover { background: rgba(215,0,21,0.08); }
+.pending-bulk-bar .bulk-clear { background: transparent; color: #6b7280; border-color: rgba(0,0,0,0.15); }
+
+/* -------- Table -------- */
+.pending-table-wrap {
+  border: 1px solid rgba(0,0,0,0.08); border-radius: 12px;
+  overflow: hidden; background: #fff;
+}
+[data-theme="dark"] .pending-table-wrap { border-color: rgba(255,255,255,0.08); background: rgba(255,255,255,0.02); }
+
+.pending-table { width: 100%; border-collapse: collapse; font-size: 0.86rem; table-layout: fixed; }
+.pending-table th {
+  text-align: left; padding: 0.7rem 0.85rem;
+  font-weight: 600; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.04em;
+  color: #6b7280; background: rgba(0,0,0,0.025);
+  border-bottom: 1px solid rgba(0,0,0,0.08);
+}
+.pending-table td {
+  padding: 0.7rem 0.85rem;
+  border-bottom: 1px solid rgba(0,0,0,0.04); vertical-align: middle;
+}
+.pending-table tr:last-child td { border-bottom: none; }
+.pending-table tr:hover td { background: rgba(0,0,0,0.02); }
+[data-theme="dark"] .pending-table th { color: #8e8e93; background: rgba(255,255,255,0.02); border-bottom-color: rgba(255,255,255,0.08); }
+[data-theme="dark"] .pending-table td { border-bottom-color: rgba(255,255,255,0.04); }
+[data-theme="dark"] .pending-table tr:hover td { background: rgba(255,255,255,0.025); }
+
+/* Hide Pulse ext (col 3), Connection (col 5), Imported (col 7) */
+.pending-table th:nth-child(3), .pending-table td:nth-child(3),
+.pending-table th:nth-child(5), .pending-table td:nth-child(5),
+.pending-table th:nth-child(7), .pending-table td:nth-child(7) { display: none; }
+
+/* Column widths for the 5 VISIBLE columns:
+   1: Name | 2: Email | 4: Pulse DID | 6: Status | 8: Actions */
+.pending-table th:nth-child(1), .pending-table td:nth-child(1) { width: 22%; font-weight: 600; }
+.pending-table th:nth-child(2), .pending-table td:nth-child(2) { width: 32%; }
+.pending-table th:nth-child(4), .pending-table td:nth-child(4) {
+  width: 22%; white-space: nowrap;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.84rem; color: #6b7280;
+}
+.pending-table th:nth-child(6), .pending-table td:nth-child(6) { width: 110px; }
+.pending-table th:last-child, .pending-table td:last-child { width: 130px; text-align: right; white-space: nowrap; }
+
+/* Status pill */
+.pending-status-pill {
+  display: inline-flex; align-items: center;
+  padding: 0.18rem 0.55rem; border-radius: 999px;
+  font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em;
+}
+.pending-status-pill.pending-pending { background: rgba(255,204,0,0.22); color: #8a6500; }
+.pending-status-pill.pending-invited { background: rgba(52,199,89,0.18); color: #1e8a3e; }
+.pending-status-pill.pending-skipped { background: rgba(0,0,0,0.06); color: #6b7280; }
+[data-theme="dark"] .pending-status-pill.pending-pending { background: rgba(255,204,0,0.18); color: #f5c419; }
+[data-theme="dark"] .pending-status-pill.pending-invited { background: rgba(52,199,89,0.18); color: #34c759; }
+
+/* Row actions */
+.pending-action-primary {
+  padding: 0.4rem 0.85rem; border-radius: 6px; border: none;
+  background: #0a84ff; color: #fff;
+  font-size: 0.8rem; font-weight: 600; cursor: pointer; margin-right: 0.4rem;
+}
+.pending-action-primary:hover { background: #0c6fd6; }
+.pending-action-icon {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px; border-radius: 6px;
+  border: 1px solid rgba(0,0,0,0.12); background: transparent; color: #6b7280; cursor: pointer;
+}
+.pending-action-icon:hover { background: rgba(215,0,21,0.08); color: #d70015; border-color: rgba(215,0,21,0.25); }
+[data-theme="dark"] .pending-action-icon { border-color: rgba(255,255,255,0.10); color: #8e8e93; }
+.pending-invited-note { font-size: 0.78rem; color: #6b7280; }
+
+/* Empty / loading / error */
+.pending-empty, .pending-loading {
+  padding: 2.5rem 1.5rem; border: 1px dashed rgba(0,0,0,0.10); border-radius: 12px;
+  text-align: center; color: #6b7280; font-size: 0.92rem;
+  display: flex; align-items: center; justify-content: center; gap: 0.6rem;
+}
+[data-theme="dark"] .pending-empty, [data-theme="dark"] .pending-loading { border-color: rgba(255,255,255,0.10); color: #8e8e93; }
+.pending-error {
+  display: inline-flex; align-items: center; gap: 0.5rem;
+  padding: 0.7rem 0.9rem; border-radius: 10px;
+  background: rgba(215,0,21,0.06); color: #c01a10; border: 1px solid rgba(215,0,21,0.20);
+  font-size: 0.85rem; margin-bottom: 0.75rem;
+}
+
+/* -------- Modals -------- */
+.pending-upload-modal { max-width: 720px; }
+.pending-invite-modal { max-width: 640px; }
+.pending-result-modal { max-width: 600px; }
+.pending-upload-instructions { font-size: 0.85rem; color: #6b7280; margin: 0 0 1rem; }
+.pending-upload-instructions code {
+  display: block; background: rgba(0,0,0,0.04); padding: 0.5rem 0.7rem;
+  border-radius: 6px; margin-top: 0.4rem; font-size: 0.78rem; word-break: break-word;
+}
+.pending-upload-fileinput { margin-bottom: 1rem; }
+.pending-preview-summary { font-size: 0.88rem; margin: 0.8rem 0 0.4rem; }
+.pending-result-box { margin-top: 1rem; padding: 0.9rem 1rem; border-radius: 10px; font-size: 0.88rem; }
+.pending-result-box.ok { background: rgba(52,199,89,0.12); color: #1e8a3e; border: 1px solid rgba(52,199,89,0.25); }
+.pending-result-box.warn { background: rgba(255,204,0,0.18); color: #8a6500; border: 1px solid rgba(255,204,0,0.30); }
+.pending-invite-summary {
+  font-size: 0.85rem; color: #6b7280; line-height: 1.7;
+  background: rgba(0,0,0,0.025); padding: 0.7rem 0.9rem; border-radius: 8px; margin: 0 0 0.75rem;
+}
+.pending-divider { border: none; border-top: 1px solid rgba(0,0,0,0.08); margin: 1rem 0; }
+.pending-toggle-group {
+  border: 1px solid rgba(0,0,0,0.10); border-radius: 10px; padding: 0.85rem 1rem; margin-bottom: 0.85rem;
+}
+.pending-toggle-group legend {
+  font-size: 0.74rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em;
+  color: #6b7280; padding: 0 0.4rem;
+}
+.pending-toggle, .pending-checkbox {
+  display: flex; align-items: flex-start; gap: 0.7rem; padding: 0.55rem 0; cursor: pointer; font-size: 0.88rem;
+}
+.pending-toggle input, .pending-checkbox input { margin-top: 0.15rem; flex-shrink: 0; accent-color: #0a84ff; }
+.pending-toggle span, .pending-checkbox span { display: flex; flex-direction: column; gap: 0.2rem; }
+.pending-toggle-help { font-size: 0.78rem; font-weight: 400; color: #6b7280; line-height: 1.4; }
+.pending-toggle-extra { padding: 0.5rem 0 0 1.5rem; font-size: 0.82rem; color: #6b7280; display: flex; flex-direction: column; gap: 0.3rem; }
+.pending-areacode-input {
+  width: 5rem; padding: 0.3rem 0.5rem;
+  border: 1px solid rgba(0,0,0,0.15); background: #fff; border-radius: 6px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.9rem;
+}
+/* Modal footer — match the look of section-action buttons so Cancel and
+   Confirm sit at the same height with matching border-radius. The earlier
+   rule only styled them inside .settings-section-actions, leaving the
+   modal footer with browser defaults. Applies to ALL three pending-users
+   modals (invite, result, upload) so no button is ever naked. */
+.pending-invite-modal .modal-footer,
+.pending-result-modal .modal-footer,
+.pending-upload-modal .modal-footer { display: flex; gap: 0.6rem; justify-content: flex-end; padding: 1rem 1.25rem 1.25rem; }
+.pending-invite-modal .modal-footer .settings-btn,
+.pending-invite-modal .modal-footer .settings-btn-secondary,
+.pending-result-modal .modal-footer .settings-btn,
+.pending-result-modal .modal-footer .settings-btn-secondary,
+.pending-upload-modal .modal-footer .settings-btn,
+.pending-upload-modal .modal-footer .settings-btn-secondary {
+  display: inline-flex; align-items: center; gap: 0.45rem;
+  padding: 0.6rem 1.1rem; border-radius: 8px;
+  font-size: 0.88rem; font-weight: 600; cursor: pointer; line-height: 1;
+  transition: background 0.12s, border-color 0.12s;
+}
+.pending-invite-modal .modal-footer .settings-btn-secondary,
+.pending-result-modal .modal-footer .settings-btn-secondary {
+  background: transparent; color: var(--text, #1a1a1a);
+  border: 1px solid rgba(0,0,0,0.18);
+}
+.pending-invite-modal .modal-footer .settings-btn-secondary:hover,
+.pending-result-modal .modal-footer .settings-btn-secondary:hover { background: rgba(0,0,0,0.05); }
+[data-theme="dark"] .pending-invite-modal .modal-footer .settings-btn-secondary,
+[data-theme="dark"] .pending-result-modal .modal-footer .settings-btn-secondary {
+  color: #fff; border-color: rgba(255,255,255,0.18);
+}
+[data-theme="dark"] .pending-invite-modal .modal-footer .settings-btn-secondary:hover,
+[data-theme="dark"] .pending-result-modal .modal-footer .settings-btn-secondary:hover {
+  background: rgba(255,255,255,0.06);
+}
+.pending-invite-modal .modal-footer button:disabled,
+.pending-result-modal .modal-footer button:disabled { opacity: 0.5; cursor: not-allowed; }
+.pending-result-modal .modal-footer .settings-btn {
+  background: #0a84ff; color: #fff; border: 1px solid #0a84ff;
+}
+.pending-result-modal .modal-footer .settings-btn:hover {
+  background: #0c6fd6; border-color: #0c6fd6;
+}
+
+/* Confirm button — match the primary blue used by the Invite button in the
+   row and the Upload CSV button up top. Was flat green which didn't match
+   anything else in the dialer. */
+.pending-confirm-btn {
+  background: #0a84ff;
+  color: #fff;
+  border: 1px solid #0a84ff;
+}
+.pending-confirm-btn:hover { background: #0c6fd6; border-color: #0c6fd6; }
+
+/* CSV-upload preview note + preview table layout overrides. The preview
+   table reuses .pending-table for visual consistency but has 6 columns
+   (not 5), so the row-table fixed widths need to relax to auto. */
+.pending-preview-note {
+  margin: 0.6rem 0 0;
+  font-size: 0.78rem;
+  color: #6b7280;
+  font-style: italic;
+}
+[data-theme="dark"] .pending-preview-note { color: #8e8e93; }
+.pending-preview-grid { table-layout: auto !important; }
+.pending-preview-grid th,
+.pending-preview-grid td {
+  width: auto !important;
+  white-space: nowrap;
+  padding-left: 0.6rem;
+  padding-right: 0.6rem;
+}
+/* Re-show columns we hid in the live row table (Pulse ext + Connection
+   are still useful in the preview). */
+.pending-preview-grid th:nth-child(n),
+.pending-preview-grid td:nth-child(n) { display: table-cell !important; }
+
+/* Secret-style highlight for the SIP password cell. */
+.pending-secret {
+  background: rgba(255,204,0,0.18);
+  padding: 0.05rem 0.4rem;
+  border-radius: 4px;
+}
+[data-theme="dark"] .pending-secret { background: rgba(255,204,0,0.16); color: #f5c419; }
+
+/* Reveal-credentials button + box inside the invite modal. */
+.pending-reveal-row {
+  display: flex; align-items: center; gap: 0.6rem;
+  margin: 0.6rem 0 0;
+}
+.pending-reveal-btn {
+  display: inline-flex; align-items: center; gap: 0.4rem;
+  padding: 0.35rem 0.7rem; border-radius: 6px;
+  border: 1px solid rgba(0,0,0,0.15); background: transparent;
+  font-size: 0.78rem; font-weight: 600; cursor: pointer;
+  color: var(--text, #1a1a1a);
+}
+.pending-reveal-btn:hover { background: rgba(0,0,0,0.04); }
+.pending-reveal-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+[data-theme="dark"] .pending-reveal-btn { color: #fff; border-color: rgba(255,255,255,0.18); }
+[data-theme="dark"] .pending-reveal-btn:hover { background: rgba(255,255,255,0.06); }
+.pending-reveal-err {
+  display: inline-flex; align-items: center; gap: 0.3rem;
+  font-size: 0.78rem; color: #d70015;
+}
+.pending-reveal-box {
+  display: grid; grid-template-columns: auto 1fr; gap: 0.4rem 0.85rem;
+  margin: 0.6rem 0 0;
+  padding: 0.75rem 1rem;
+  border: 1px dashed rgba(0,0,0,0.12); border-radius: 8px;
+  background: rgba(0,0,0,0.02);
+  font-size: 0.82rem;
+}
+.pending-reveal-box > div { display: contents; }
+.pending-reveal-box span { color: #6b7280; }
+.pending-reveal-box strong { font-weight: 600; word-break: break-all; }
+[data-theme="dark"] .pending-reveal-box {
+  border-color: rgba(255,255,255,0.12);
+  background: rgba(255,255,255,0.03);
+}
+[data-theme="dark"] .pending-reveal-box span { color: #8e8e93; }
+
+/* Polish the upload-CSV modal: header padding, modal-close button, and the
+   browser-default file input that looked like 1998. */
+.pending-upload-modal { max-width: 720px; }
+.pending-upload-modal .modal-header,
+.pending-invite-modal .modal-header,
+.pending-result-modal .modal-header {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 0.75rem; padding: 1.1rem 1.25rem 0.85rem;
+  border-bottom: 1px solid rgba(0,0,0,0.06);
+}
+.pending-upload-modal .modal-header h3,
+.pending-invite-modal .modal-header h3,
+.pending-result-modal .modal-header h3 { margin: 0; font-size: 1.05rem; }
+[data-theme="dark"] .pending-upload-modal .modal-header,
+[data-theme="dark"] .pending-invite-modal .modal-header,
+[data-theme="dark"] .pending-result-modal .modal-header { border-bottom-color: rgba(255,255,255,0.08); }
+
+.pending-upload-modal .modal-close,
+.pending-invite-modal .modal-close,
+.pending-result-modal .modal-close {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px; padding: 0; border-radius: 6px;
+  border: none; background: transparent; color: #6b7280;
+  cursor: pointer;
+}
+.pending-upload-modal .modal-close:hover,
+.pending-invite-modal .modal-close:hover,
+.pending-result-modal .modal-close:hover { background: rgba(0,0,0,0.06); color: #1a1a1a; }
+[data-theme="dark"] .pending-upload-modal .modal-close,
+[data-theme="dark"] .pending-invite-modal .modal-close,
+[data-theme="dark"] .pending-result-modal .modal-close { color: #8e8e93; }
+[data-theme="dark"] .pending-upload-modal .modal-close:hover,
+[data-theme="dark"] .pending-invite-modal .modal-close:hover,
+[data-theme="dark"] .pending-result-modal .modal-close:hover { background: rgba(255,255,255,0.08); color: #fff; }
+
+.pending-upload-modal .modal-body { padding: 1rem 1.25rem; }
+
+.pending-upload-instructions {
+  margin: 0 0 1rem;
+  font-size: 0.85rem; color: #4b5563; line-height: 1.5;
+}
+.pending-upload-instructions code {
+  display: block; margin-top: 0.4rem;
+  padding: 0.5rem 0.7rem; border-radius: 6px;
+  background: rgba(0,0,0,0.05); color: #1f2937;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.78rem; line-height: 1.6;
+}
+[data-theme="dark"] .pending-upload-instructions { color: #d1d5db; }
+[data-theme="dark"] .pending-upload-instructions code { background: rgba(255,255,255,0.06); color: #f3f4f6; }
+
+/* Style the file input — Chrome/Edge file-selector-button can be themed
+   (Safari/Firefox use OS-default and we leave those alone). */
+.pending-upload-fileinput {
+  margin: 0 0 0.85rem;
+  padding: 0.85rem;
+  border: 1px dashed rgba(0,0,0,0.18);
+  border-radius: 8px;
+  background: rgba(0,0,0,0.015);
+}
+.pending-upload-fileinput input[type="file"] {
+  font-size: 0.85rem; color: #4b5563; max-width: 100%;
+}
+.pending-upload-fileinput input[type="file"]::file-selector-button {
+  margin-right: 0.7rem; padding: 0.45rem 0.85rem;
+  border: 1px solid #0a84ff; border-radius: 6px;
+  background: #0a84ff; color: #fff;
+  font-size: 0.82rem; font-weight: 600; cursor: pointer;
+}
+.pending-upload-fileinput input[type="file"]::file-selector-button:hover {
+  background: #0c6fd6; border-color: #0c6fd6;
+}
+[data-theme="dark"] .pending-upload-fileinput {
+  border-color: rgba(255,255,255,0.15); background: rgba(255,255,255,0.025);
+}
+[data-theme="dark"] .pending-upload-fileinput input[type="file"] { color: #d1d5db; }
+
+/* Unassigned-number picker dropdown inside the invite modal. */
+.pending-unassigned-select {
+  margin-left: 0.4rem;
+  padding: 0.35rem 0.55rem;
+  border-radius: 6px;
+  border: 1px solid rgba(0,0,0,0.18);
+  background: #fff;
+  color: var(--text, #1a1a1a);
+  font-size: 0.85rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  min-width: 14rem;
+}
+[data-theme="dark"] .pending-unassigned-select {
+  background: rgba(255,255,255,0.04);
+  color: #fff;
+  border-color: rgba(255,255,255,0.18);
+}
+.pending-icon-ok { color: #1e8a3e; vertical-align: middle; margin-right: 0.4rem; }
+.pending-icon-err { color: #d70015; vertical-align: middle; margin-right: 0.4rem; }
+.pending-result-summary p { margin: 0 0 0.6rem; font-size: 0.92rem; }
+.pending-result-bullets { margin: 0; padding-left: 1.2rem; font-size: 0.88rem; }
+.pending-steps-heading {
+  margin: 1rem 0 0.5rem; font-size: 0.74rem; font-weight: 700;
+  text-transform: uppercase; letter-spacing: 0.04em; color: #6b7280;
+}
+.pending-steps-list { list-style: none; margin: 0; padding: 0; font-size: 0.85rem; }
+.pending-steps-list li {
+  display: flex; align-items: flex-start; gap: 0.5rem;
+  padding: 0.45rem 0; border-bottom: 1px solid rgba(0,0,0,0.04); flex-wrap: wrap;
+}
+.pending-steps-list li:last-child { border-bottom: none; }
+.pending-step-error {
+  flex-basis: 100%; margin-left: 1.4rem; font-size: 0.78rem;
+  color: #d70015; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; word-break: break-word;
+}
+
+/* Spinner */
+@keyframes pending-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+.spin { animation: pending-spin 1s linear infinite; }
+
+/* ===========================================================================
+   Pending Users — FINAL clean layout pass
+   Replaces all prior stacked patches. One section, single source of truth.
+   =========================================================================== */
+
+/* The Settings pane caps every tab at max-width:560px (good for cred forms,
+   too narrow for our 5-column table + Invite button). Opt only the Pending
+   Users tab out of the cap. `:has()` is supported in every modern Chromium
+   (Electron 117+, Edge, Chrome 105+) and Safari 15.4+. */
+.settings-pane-body:has(.pending-users-section) {
+  max-width: 720px;
+}
+
+/* Legend strip that explains the P / I / A chip letters. */
+.pending-filter-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0 0 0.55rem;
+  font-size: 0.78rem;
+  color: #6b7280;
+}
+.pending-filter-legend strong {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.15rem;
+  height: 1.15rem;
+  margin-right: 0.3rem;
+  border-radius: 4px;
+  background: rgba(0,0,0,0.06);
+  color: #1f2937;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+.pending-filter-legend .sep { opacity: 0.55; }
+[data-theme="dark"] .pending-filter-legend { color: #8e8e93; }
+[data-theme="dark"] .pending-filter-legend strong {
+  background: rgba(255,255,255,0.08);
+  color: #e5e7eb;
+}
+
+/* Compact letter-only filter chips. The base .pending-filter-chip rule is
+   reused for hover/active colors; this just tightens padding and bumps the
+   letter weight. */
+.pending-filter-chip-letter {
+  padding: 0.32rem 0.6rem;
+  min-width: 2.6rem;
+  justify-content: center;
+}
+.pending-filter-chip-letter strong {
+  font-size: 0.85rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+/* Letter-only status pill inside each row — same square-ish shape as the
+   legend swatch, color comes from the existing .pending-{status} rules. */
+.pending-status-pill-letter {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  padding: 0;
+  border-radius: 6px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+/* Accepted status — green-on-light pill colors. Reuse existing invited
+   palette as a base then tint slightly bluer to differentiate. */
+.pending-status-pill.pending-accepted { background: rgba(10,132,255,0.18); color: #0a5fc6; }
+[data-theme="dark"] .pending-status-pill.pending-accepted { background: rgba(10,132,255,0.22); color: #5eb0ff; }
+
+/* Column widths for the 5 VISIBLE columns at the new 720px max:
+   1: Name | 2: Email | 4: Pulse DID | 6: Status (letter) | 8: Actions
+   Pulse ext (3), Connection (5), Imported (7) stay display:none from the
+   base rule above (line 5366 ish).
+   Email is sized to fit firstname.lastname@aptask.com comfortably; the
+   excess gets pushed to the Actions column so the trash icon never clips. */
+.pending-table th:nth-child(1), .pending-table td:nth-child(1) {
+  width: 22%;
+}
+.pending-table th:nth-child(2), .pending-table td:nth-child(2) {
+  width: 28%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding-right: 0.4rem;
+}
+.pending-table th:nth-child(4), .pending-table td:nth-child(4) {
+  width: 18%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding-left: 0.4rem;
+}
+.pending-table th:nth-child(6), .pending-table td:nth-child(6) {
+  width: 60px;
+  text-align: center;
+}
+.pending-table th:last-child, .pending-table td:last-child {
+  width: auto;
+  text-align: right;
+  white-space: nowrap;
+  padding-right: 0.85rem;
+}
+
+/* Hard floor — if the table genuinely can't fit (very narrow window), let
+   the wrap scroll horizontally instead of clipping the Invite button. */
+.pending-table-wrap { overflow-x: auto; }

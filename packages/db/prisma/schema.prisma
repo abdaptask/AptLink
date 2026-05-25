@@ -226,6 +226,70 @@ model InternalMessage {
 }
 
 // ---------------------------------------------------------------------------
+// PendingUser — Pulse-to-ACE migration staging.
+//
+// Loaded from a CSV upload of existing Pulse users (firstName, lastName,
+// email + their Telnyx-side voip_ext / voip_number / ext_password). Rows
+// sit here doing NOTHING until an admin explicitly invites a specific user
+// via POST /admin/pending-users/:id/invite.
+//
+// At invite time the admin picks 3 toggles in a modal:
+//   1) New DID?            yes = Telnyx API buys a new number
+//                          no  = use pulseVoipNumber as-is
+//   2) New SIP creds?      yes = Telnyx API creates a fresh Credential
+//                                Connection for this user
+//                          no  = use pulseVoipExt + pulseExtPassword as-is
+//   3) Repoint webhook?    yes = PATCH the Credential Connection's
+//                                webhook_event_url from pulse.aptask.com
+//                                to ACE's webhook (call logs flow to ACE)
+//                          no  = leave webhook on Pulse
+//
+// Only on Confirm does any Telnyx state change. Successful invite creates
+// the real User row, copies linkage into invitedUserId, sets status=invited.
+// ---------------------------------------------------------------------------
+model PendingUser {
+  id                  Int       @id @default(autoincrement())
+  firstName           String?   @map("first_name")
+  lastName            String?   @map("last_name")
+  email               String    @unique
+  /// Pulse-side SIP username (CSV: voip_ext). Used as User.sipUsername if
+  /// the admin picks "use existing creds" at invite.
+  pulseVoipExt        String    @map("pulse_voip_ext")
+  /// Pulse-side DID (CSV: voip_number, 10-digit US). Used as User.didNumber
+  /// if the admin picks "use existing DID" at invite.
+  pulseVoipNumber     String    @map("pulse_voip_number")
+  /// Pulse-side SIP password (CSV: ext_password). Used as User.sipPassword
+  /// if the admin picks "use existing creds" at invite.
+  pulseExtPassword    String    @map("pulse_ext_password")
+  /// Telnyx Credential Connection name (CSV: connection_name). Lets us look
+  /// up the connection by name when we need to PATCH its webhook URL or
+  /// route a new DID to it.
+  pulseConnectionName String?   @map("pulse_connection_name")
+  /// Pulse-internal status code (CSV: user_status). Kept for reference;
+  /// not used by ACE logic.
+  pulseUserStatus     String?   @map("pulse_user_status")
+  /// Lifecycle: pending (default) → invited (admin clicked Confirm) or
+  /// skipped (admin explicitly marked as "don't migrate"). Filter the
+  /// admin UI by this column.
+  status              String    @default("pending")
+  /// When the admin clicked Confirm on the invite modal.
+  invitedAt           DateTime? @map("invited_at")
+  /// FK to the User row created at invite time. NULL until invited.
+  /// Not a relation (avoids cascade-delete weirdness if a User is removed).
+  invitedUserId       Int?      @map("invited_user_id")
+  /// Each CSV upload gets a fresh UUID-style batch id so we can group
+  /// "all rows from this upload" — useful for filtering and for the
+  /// audit trail.
+  importBatchId       String?   @map("import_batch_id")
+  importedAt          DateTime  @default(now()) @map("imported_at")
+
+  @@index([status])
+  @@index([email])
+  @@index([importBatchId])
+  @@map("pending_users")
+}
+
+// ---------------------------------------------------------------------------
 // AuditLog — enterprise hygiene. Every admin action (invite/promote/demote/
 // deactivate/reset-password/role-change) writes a row here. Read-only for
 // non-admins; admins see the full feed at Settings → Audit Log.

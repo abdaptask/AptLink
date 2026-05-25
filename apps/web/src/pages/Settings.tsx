@@ -1,4 +1,4 @@
-import * as React from 'react';
+﻿import * as React from 'react';
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams, NavLink, Navigate } from 'react-router-dom';
 import {
@@ -62,6 +62,8 @@ import {
   type BlockedNumber,
   listAdminUsers,
   inviteAdminUser,
+  inviteNewUserAutoProvision,
+  type InviteNewUserResult,
   updateAdminUser,
   listAuditLogs,
   bulkImportUsers,
@@ -103,6 +105,7 @@ import {
   clearHoldMusic,
   HOLD_MUSIC_MAX_BYTES,
 } from '../lib/userPrefs';
+import PendingUsersSection from '../components/PendingUsersSection';
 
 interface AudioDevice {
   deviceId: string;
@@ -143,6 +146,7 @@ const SECTIONS: SectionDef[] = [
   { key: 'recruiter', category: 'Reports', label: 'Recruiter', icon: Target, blurb: 'Reach + conversation rate (admin only)', Component: RecruiterSection },
   { key: 'alerts', category: 'Reports', label: 'Alerts', icon: Siren, blurb: 'Health & anomaly alerts (admin only)', Component: AlertsSection },
   { key: 'users', category: 'Admin', label: 'Users', icon: Users, blurb: 'Invite, promote, deactivate (admin only)', Component: UsersAdminSection },
+  { key: 'pending-users', category: 'Admin', label: 'Pending Users', icon: UserPlus, blurb: 'Stage + invite Pulse users to ACE (admin only)', Component: PendingUsersSection },
   { key: 'audit-log', category: 'Admin', label: 'Audit log', icon: ScrollText, blurb: 'Recent admin actions (admin only)', Component: AuditLogSection },
 ];
 
@@ -167,6 +171,20 @@ function SettingsNav({ activeCategory }: { activeCategory: SectionCategory }) {
     return new Set<SectionCategory>(['Personal', activeCategory]);
   });
 
+  // Resolve isAdmin once so we can hide the Admin nav group from non-admins.
+  // The backend already 403s every /admin/* endpoint, but showing nav items
+  // a user can't open is confusing.
+  const [isAdmin, setIsAdmin] = useState<boolean>(false);
+  useEffect(() => {
+    const token = sessionStorage.getItem('ace_token');
+    if (!token) return;
+    let cancelled = false;
+    getMe(token)
+      .then((u) => { if (!cancelled) setIsAdmin(!!u.isAdmin); })
+      .catch(() => { /* leave isAdmin=false on error */ });
+    return () => { cancelled = true; };
+  }, []);
+
   useEffect(() => {
     setOpenCats((prev) => {
       if (prev.has(activeCategory)) return prev;
@@ -190,6 +208,9 @@ function SettingsNav({ activeCategory }: { activeCategory: SectionCategory }) {
   return (
     <nav className="settings-nav-list grouped">
       {SECTION_CATEGORIES.map((cat) => {
+        // Hide the Admin group entirely for non-admin users so they don't see
+        // nav items that 403 when clicked. Backend stays the source of truth.
+        if (cat === 'Admin' && !isAdmin) return null;
         const items = SECTIONS.filter((sec) => sec.category === cat);
         if (items.length === 0) return null;
         const open = openCats.has(cat);
@@ -236,7 +257,7 @@ export default function Settings() {
   const { section } = useParams<{ section?: string }>();
   const navigate = useNavigate();
 
-  // Redirect /settings → /settings/<default>
+  // Redirect /settings â†’ /settings/<default>
   if (!section) return <Navigate to={`/settings/${DEFAULT_SECTION}`} replace />;
   const active = SECTIONS.find((s) => s.key === section);
   if (!active) return <Navigate to={`/settings/${DEFAULT_SECTION}`} replace />;
@@ -272,7 +293,7 @@ export default function Settings() {
 }
 
 // ---------------------------------------------------------------------------
-// Account — name, email (read-only), DID, SIP username
+// Account â€” name, email (read-only), DID, SIP username
 // Multi-user routing on the server uses didNumber + sipUsername to figure out
 // which user a webhook event belongs to, so they need to be correct.
 // ---------------------------------------------------------------------------
@@ -338,14 +359,14 @@ function AccountSection() {
   }
 
   if (!state) {
-    return <div className="settings-section">{error ?? 'Loading…'}</div>;
+    return <div className="settings-section">{error ?? 'Loadingâ€¦'}</div>;
   }
 
   return (
     <div className="settings-section">
       <p className="settings-blurb">
         Your profile info. The DID + SIP username route inbound calls and SMS
-        to your account — set these to match your Telnyx setup.
+        to your account â€” set these to match your Telnyx setup.
       </p>
 
       <div className="cred-grid">
@@ -399,7 +420,7 @@ function AccountSection() {
           onClick={save}
           disabled={saving}
         >
-          {saving ? 'Saving…' : saved ? '✓ Saved' : 'Save changes'}
+          {saving ? 'Savingâ€¦' : saved ? 'âœ“ Saved' : 'Save changes'}
         </button>
       </div>
     </div>
@@ -537,7 +558,7 @@ function TelnyxSection() {
           onClick={save}
           disabled={!username || !password || saving}
         >
-          {saving ? 'Reconnecting…' : 'Save & reconnect'}
+          {saving ? 'Reconnectingâ€¦' : 'Save & reconnect'}
         </button>
         {(username || password || fromNumber) && (
           <button type="button" className="device-action" onClick={clearAll}>
@@ -690,9 +711,9 @@ function SpeakerSection() {
 }
 
 // ---------------------------------------------------------------------------
-// Hold music — upload an audio file to play when a caller is on hold.
+// Hold music â€” upload an audio file to play when a caller is on hold.
 // Stored locally as a data URL (base64). The actual track-swap happens in
-// sipService.startHoldMusic() / stopHoldMusic() — they replace the outgoing
+// sipService.startHoldMusic() / stopHoldMusic() â€” they replace the outgoing
 // mic track with this audio so the held party hears it (not silence).
 // ---------------------------------------------------------------------------
 function HoldMusicSection() {
@@ -711,11 +732,11 @@ function HoldMusicSection() {
     e.target.value = '';
     if (!file) return;
     if (!/^audio\//.test(file.type) && !/\.(mp3|wav|ogg|m4a|aac)$/i.test(file.name)) {
-      setError('That doesn’t look like an audio file.');
+      setError('That doesnâ€™t look like an audio file.');
       return;
     }
     if (file.size > HOLD_MUSIC_MAX_BYTES) {
-      setError(`Too big — please use a file under ${Math.round(HOLD_MUSIC_MAX_BYTES / 1024 / 1024)} MB.`);
+      setError(`Too big â€” please use a file under ${Math.round(HOLD_MUSIC_MAX_BYTES / 1024 / 1024)} MB.`);
       return;
     }
     const reader = new FileReader();
@@ -771,7 +792,7 @@ function HoldMusicSection() {
       <p className="settings-blurb">
         Play music to the other party when you put a call on hold. Without
         this, they hear silence (which usually makes them assume the call
-        dropped). Pick any MP3, WAV, or M4A file under 2 MB — it will loop
+        dropped). Pick any MP3, WAV, or M4A file under 2 MB â€” it will loop
         while the call is held. Stored on this device only.
       </p>
 
@@ -830,7 +851,7 @@ function HoldMusicSection() {
 }
 
 // ---------------------------------------------------------------------------
-// Voicemail greeting — parked. Telnyx Hosted Voicemail (the per-DID
+// Voicemail greeting â€” parked. Telnyx Hosted Voicemail (the per-DID
 // /v2/phone_numbers/{id}/voicemail endpoint) does not expose a
 // `greeting_audio_url` field. PATCH calls silently drop it and the carrier
 // continues using the default robot voice. Confirmed via Portal: the
@@ -890,10 +911,10 @@ function VoicemailGreetingSection() {
 
 
 // ---------------------------------------------------------------------------
-// Call Forwarding — per-user, Pulse-pattern feature.
+// Call Forwarding â€” per-user, Pulse-pattern feature.
 // Forwards inbound calls to a backup number (e.g. your cell) either always
 // or only on no-answer. The Save button hits our API which provisions Telnyx
-// (PATCH /v2/phone_numbers/{id}/voice → call_forwarding block).
+// (PATCH /v2/phone_numbers/{id}/voice â†’ call_forwarding block).
 // ---------------------------------------------------------------------------
 function CallForwardingSection() {
   const [loading, setLoading] = useState(true);
@@ -952,7 +973,7 @@ function CallForwardingSection() {
   }
 
   if (loading) {
-    return <div className="settings-section"><p className="muted">Loading…</p></div>;
+    return <div className="settings-section"><p className="muted">Loadingâ€¦</p></div>;
   }
 
   return (
@@ -1002,7 +1023,7 @@ function CallForwardingSection() {
               onChange={() => setMode('on_failure')}
               disabled={!enabled}
             />
-            <span>Only when I don't answer <span className="muted small">(recommended — voicemail still works)</span></span>
+            <span>Only when I don't answer <span className="muted small">(recommended â€” voicemail still works)</span></span>
           </label>
           <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
             <input
@@ -1013,7 +1034,7 @@ function CallForwardingSection() {
               onChange={() => setMode('always')}
               disabled={!enabled}
             />
-            <span>Always — every call goes to the forward number</span>
+            <span>Always â€” every call goes to the forward number</span>
           </label>
         </fieldset>
       </div>
@@ -1028,7 +1049,7 @@ function CallForwardingSection() {
           onClick={handleSave}
           disabled={saving}
         >
-          {saving ? 'Saving…' : 'Save'}
+          {saving ? 'Savingâ€¦' : 'Save'}
         </button>
       </div>
     </div>
@@ -1036,7 +1057,7 @@ function CallForwardingSection() {
 }
 
 // ---------------------------------------------------------------------------
-// Data — backup/restore of localStorage preferences
+// Data â€” backup/restore of localStorage preferences
 // Exports every ace_* key as a JSON file. Importing the file restores them
 // (overwriting current values). Useful when switching devices.
 // ---------------------------------------------------------------------------
@@ -1094,7 +1115,7 @@ function DataSection() {
         const parsed = JSON.parse(text);
         const prefs = parsed?.prefs;
         if (!prefs || typeof prefs !== 'object') {
-          setStatus('That doesn’t look like an ACE Dialer backup file.');
+          setStatus('That doesnâ€™t look like an ACE Dialer backup file.');
           return;
         }
         let n = 0;
@@ -1108,7 +1129,7 @@ function DataSection() {
         window.dispatchEvent(new CustomEvent('ace:quickRepliesChanged'));
         window.dispatchEvent(new CustomEvent('ace:notificationPrefsChanged'));
         window.dispatchEvent(new CustomEvent('ace:themeChanged'));
-        setStatus(`Restored ${n} settings. Reloading…`);
+        setStatus(`Restored ${n} settings. Reloadingâ€¦`);
         setTimeout(() => window.location.reload(), 800);
       } catch (err) {
         setStatus((err as Error).message);
@@ -1394,7 +1415,7 @@ function QuickRepliesSection() {
                     aria-label="Move up"
                     title="Move up"
                   >
-                    ↑
+                    â†‘
                   </button>
                   <button
                     type="button"
@@ -1404,7 +1425,7 @@ function QuickRepliesSection() {
                     aria-label="Move down"
                     title="Move down"
                   >
-                    ↓
+                    â†“
                   </button>
                   <button
                     type="button"
@@ -1425,7 +1446,7 @@ function QuickRepliesSection() {
       <div className="quick-reply-add">
         <input
           className="quick-reply-input"
-          placeholder="Add a new quick reply…"
+          placeholder="Add a new quick replyâ€¦"
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={(e) => {
@@ -1453,10 +1474,10 @@ function QuickRepliesSection() {
 }
 
 // ---------------------------------------------------------------------------
-// Blocked Numbers — per-user blocklist of inbound phone numbers.
+// Blocked Numbers â€” per-user blocklist of inbound phone numbers.
 // Calls from blocked numbers are hung up at the Telnyx layer (the webhook
 // handler issues a hangup via Call Control); SMS is silently dropped before
-// being stored. Both behaviors are server-side — closing the dialer doesn't
+// being stored. Both behaviors are server-side â€” closing the dialer doesn't
 // affect them. The list is editable from this Settings section; entries can
 // also be added by hitting "Block" on a row in Recents or in a Messages
 // thread header.
@@ -1495,7 +1516,7 @@ function BlockedNumbersSection() {
         number: trimmed,
         reason: draftReason.trim() || undefined,
       });
-      // Upsert into the local list — if the same number was already there
+      // Upsert into the local list â€” if the same number was already there
       // (the API upserts), we replace the existing row.
       setItems((prev) => {
         const filtered = prev.filter((r) => r.id !== row.id);
@@ -1524,7 +1545,7 @@ function BlockedNumbersSection() {
   }
 
   if (loading) {
-    return <div className="settings-section"><p className="muted">Loading…</p></div>;
+    return <div className="settings-section"><p className="muted">Loadingâ€¦</p></div>;
   }
 
   return (
@@ -1532,7 +1553,7 @@ function BlockedNumbersSection() {
       <h2 className="settings-title">Blocked numbers</h2>
       <p className="settings-blurb">
         Calls from these numbers are rejected at the carrier and never ring
-        the dialer. Text messages from these numbers are silently dropped —
+        the dialer. Text messages from these numbers are silently dropped â€”
         they never appear in your inbox and you get no notification.
       </p>
 
@@ -1564,7 +1585,7 @@ function BlockedNumbersSection() {
           onClick={() => void handleAdd()}
           disabled={adding || !draftNumber.trim()}
         >
-          {adding ? 'Blocking…' : (<><Plus size={14} /> Block</>)}
+          {adding ? 'Blockingâ€¦' : (<><Plus size={14} /> Block</>)}
         </button>
       </div>
 
@@ -1613,7 +1634,7 @@ function BlockedNumbersSection() {
 
       <p className="muted small" style={{ marginTop: '1rem' }}>
         Note: blocked status is enforced server-side, so it works even when
-        your dialer is closed. SMS senders won't see any error — the message
+        your dialer is closed. SMS senders won't see any error â€” the message
         appears delivered to them but is dropped before reaching you.
       </p>
     </div>
@@ -1622,7 +1643,7 @@ function BlockedNumbersSection() {
 
 
 // ---------------------------------------------------------------------------
-// Phase 6.13 — Admin Users panel
+// Phase 6.13 â€” Admin Users panel
 //
 // Lists every user in the org, lets admins invite new users, and exposes
 // promote / demote / deactivate / reactivate / reset-password actions in a
@@ -1639,6 +1660,7 @@ function UsersAdminSection() {
   const [error, setError] = useState<string | null>(null);
   const [showInvite, setShowInvite] = useState(false);
   const [showImport, setShowImport] = useState(false);
+  const [showAutoProvision, setShowAutoProvision] = useState(false);
   const [openMenuId, setOpenMenuId] = useState<number | null>(null);
   const [search, setSearch] = useState('');
 
@@ -1669,7 +1691,7 @@ function UsersAdminSection() {
   }, [openMenuId]);
 
   if (loading && rows.length === 0) {
-    return <div className="muted">Loading users…</div>;
+    return <div className="muted">Loading usersâ€¦</div>;
   }
   if (error && !me?.isAdmin) {
     return (
@@ -1725,7 +1747,7 @@ function UsersAdminSection() {
         <div>
           <h3 style={{ margin: 0 }}>Users ({rows.length})</h3>
           <p className="muted small" style={{ margin: '2px 0 0' }}>
-            {activeAdminCount} admin{activeAdminCount === 1 ? '' : 's'} ·{' '}
+            {activeAdminCount} admin{activeAdminCount === 1 ? '' : 's'} Â·{' '}
             {rows.filter((r) => r.isActive).length} active
           </p>
         </div>
@@ -1740,10 +1762,19 @@ function UsersAdminSection() {
           </button>
           <button
             type="button"
-            className="device-action primary"
+            className="device-action"
             onClick={() => setShowInvite(true)}
+            title="Add a user with pre-existing SIP credentials (you paste them)"
           >
-            <UserPlus size={14} /> Invite user
+            <UserPlus size={14} /> Add manually
+          </button>
+          <button
+            type="button"
+            className="device-action primary"
+            onClick={() => setShowAutoProvision(true)}
+            title="Brand-new hire: ACE buys a Telnyx DID, creates SIP creds, sends welcome email"
+          >
+            <UserPlus size={14} /> Invite new user
           </button>
         </div>
       </div>
@@ -1803,7 +1834,7 @@ function UsersAdminSection() {
                     {r.isActive ? 'Active' : 'Inactive'}
                   </span>
                 </td>
-                <td className="muted small">{r.didNumber || '—'}</td>
+                <td className="muted small">{r.didNumber || 'â€”'}</td>
                 <td className="muted small">
                   {r.lastLoginAt
                     ? new Date(r.lastLoginAt).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })
@@ -1834,7 +1865,7 @@ function UsersAdminSection() {
                           isSelf
                             ? "You can't change your own role"
                             : r.isAdmin && lastDemoteWouldStrand
-                              ? "Promote someone else first — this is the only active admin"
+                              ? "Promote someone else first â€” this is the only active admin"
                               : ''
                         }
                         onClick={() => {
@@ -1858,7 +1889,7 @@ function UsersAdminSection() {
                           isSelf
                             ? "You can't deactivate your own account"
                             : r.isActive && lastDeactivateWouldStrand
-                              ? "Promote someone else first — this is the only active admin"
+                              ? "Promote someone else first â€” this is the only active admin"
                               : ''
                         }
                         onClick={() => {
@@ -1872,7 +1903,7 @@ function UsersAdminSection() {
                         {r.isActive ? 'Deactivate' : 'Reactivate'}
                       </button>
 
-                      {/* Set SIP password — for users imported without a password */}
+                      {/* Set SIP password â€” for users imported without a password */}
                       <button
                         type="button"
                         onClick={() => {
@@ -1939,6 +1970,189 @@ function UsersAdminSection() {
           }}
         />
       )}
+
+      {showAutoProvision && (
+        <AutoProvisionUserModal
+          onClose={() => setShowAutoProvision(false)}
+          onDone={() => {
+            setShowAutoProvision(false);
+            load(); // refresh the table after a real provision
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+// ─────────────────── Auto-provision brand-new user ────────────────────
+// Used when admin adds someone who was NEVER on Pulse — a brand-new hire.
+// Backend purchases a Telnyx DID, creates SIP creds, binds messaging, sends
+// the welcome email, all in one POST. Modal shows per-step result table.
+function AutoProvisionUserModal({
+  onClose,
+  onDone,
+}: {
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const [email, setEmail] = useState('');
+  const [firstName, setFirstName] = useState('');
+  const [lastName, setLastName] = useState('');
+  const [areaCode, setAreaCode] = useState('');
+  const [makeAdmin, setMakeAdmin] = useState(false);
+  const [sendEmail, setSendEmail] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
+  const [result, setResult] = useState<InviteNewUserResult | null>(null);
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    const token = sessionStorage.getItem('ace_token');
+    if (!token) return;
+    if (!email.trim()) return;
+    setSubmitting(true);
+    setResult(null);
+    try {
+      const r = await inviteNewUserAutoProvision(token, {
+        email: email.trim(),
+        firstName: firstName.trim() || undefined,
+        lastName: lastName.trim() || undefined,
+        newDidAreaCode: areaCode.trim() || undefined,
+        isAdmin: makeAdmin,
+        sendEmail,
+      });
+      setResult(r);
+    } catch (err) {
+      setResult({ ok: false, error: (err as Error).message });
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div className="compose-modal" onClick={submitting ? undefined : onClose}>
+      <div
+        className="fav-modal"
+        onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-labelledby="auto-provision-title"
+        style={{ maxWidth: 560 }}
+      >
+        <div className="fav-modal-header">
+          <UserPlus size={18} className="fav-modal-icon" />
+          <h3 id="auto-provision-title">Invite a brand-new user</h3>
+        </div>
+
+        {!result && (
+          <>
+            <p className="muted small" style={{ marginTop: 0 }}>
+              For someone who was <strong>never on Pulse</strong>. ACE will buy a Telnyx DID, create SIP credentials, bind the messaging profile, and email the user — all in one click. <strong>This spends money on Telnyx (~$0.45 setup + $0.45/mo per number).</strong>
+            </p>
+
+            <form onSubmit={handleSubmit} autoComplete="off">
+              <label className="fav-modal-field" style={{ marginBottom: 8 }}>
+                <span className="fav-modal-label">Work email *</span>
+                <input
+                  type="email"
+                  className="fav-modal-input"
+                  placeholder="firstname.lastname@aptask.com"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  autoFocus
+                  required
+                />
+              </label>
+              <div className="fav-modal-row">
+                <label className="fav-modal-field">
+                  <span className="fav-modal-label">First name</span>
+                  <input
+                    type="text"
+                    className="fav-modal-input"
+                    value={firstName}
+                    onChange={(e) => setFirstName(e.target.value)}
+                  />
+                </label>
+                <label className="fav-modal-field">
+                  <span className="fav-modal-label">Last name</span>
+                  <input
+                    type="text"
+                    className="fav-modal-input"
+                    value={lastName}
+                    onChange={(e) => setLastName(e.target.value)}
+                  />
+                </label>
+              </div>
+              <label className="fav-modal-field" style={{ marginTop: 8 }}>
+                <span className="fav-modal-label">DID area code (3 digits)</span>
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  pattern="\d{3}"
+                  maxLength={3}
+                  className="fav-modal-input"
+                  placeholder="732"
+                  value={areaCode}
+                  onChange={(e) => setAreaCode(e.target.value.replace(/[^\d]/g, '').slice(0, 3))}
+                  style={{ maxWidth: 110 }}
+                />
+                <span className="muted small">Defaults to 732 if blank.</span>
+              </label>
+
+              <label className="fav-modal-field" style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12 }}>
+                <input
+                  type="checkbox"
+                  checked={makeAdmin}
+                  onChange={(e) => setMakeAdmin(e.target.checked)}
+                />
+                <span>Grant admin role</span>
+              </label>
+              <label className="fav-modal-field" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <input
+                  type="checkbox"
+                  checked={sendEmail}
+                  onChange={(e) => setSendEmail(e.target.checked)}
+                />
+                <span>Send welcome email after provisioning</span>
+              </label>
+
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 16 }}>
+                <button type="button" className="device-action" onClick={onClose} disabled={submitting}>
+                  Cancel
+                </button>
+                <button type="submit" className="device-action primary" disabled={submitting || !email.trim()}>
+                  {submitting ? 'Provisioning…' : 'Provision now'}
+                </button>
+              </div>
+            </form>
+          </>
+        )}
+
+        {result && (
+          <div style={{ marginTop: 4 }}>
+            <p style={{ margin: '0 0 12px', fontWeight: 600 }}>
+              {result.ok
+                ? `✅ User provisioned successfully${result.didNumber ? ' — ' + result.didNumber : ''}`
+                : `❌ Provisioning failed: ${result.error ?? 'unknown error'}`}
+            </p>
+
+            {result.steps && result.steps.length > 0 && (
+              <ul style={{ margin: 0, paddingLeft: 20, fontSize: 14 }}>
+                {result.steps.map((s, i) => (
+                  <li key={i} style={{ marginBottom: 4 }}>
+                    {s.ok ? '✓' : '✗'} {s.step}
+                    {s.error && <span className="muted small" style={{ marginLeft: 6 }}>— {s.error}</span>}
+                  </li>
+                ))}
+              </ul>
+            )}
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 16 }}>
+              <button type="button" className="device-action primary" onClick={onDone}>
+                Close
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -2000,7 +2214,7 @@ function InviteUserModal({
         </div>
 
         <p className="muted small" style={{ marginTop: 0 }}>
-          By default the user signs in with Microsoft and binds via their email on first sign-in. SIP credentials & DID are optional — paste them if you already provisioned in Telnyx.
+          By default the user signs in with Microsoft and binds via their email on first sign-in. SIP credentials & DID are optional â€” paste them if you already provisioned in Telnyx.
         </p>
 
         <form onSubmit={handleSubmit} autoComplete="off">
@@ -2051,7 +2265,7 @@ function InviteUserModal({
             onClick={() => setShowAdvanced(!showAdvanced)}
             style={{ marginTop: 12 }}
           >
-            {showAdvanced ? '▼' : '▶'} Advanced (Telnyx creds, local password)
+            {showAdvanced ? 'â–¼' : 'â–¶'} Advanced (Telnyx creds, local password)
           </button>
 
           {showAdvanced && (
@@ -2108,7 +2322,7 @@ function InviteUserModal({
           <div className="fav-modal-actions">
             <button type="button" className="fav-modal-cancel" onClick={onClose}>Cancel</button>
             <button type="submit" className="fav-modal-save" disabled={submitting}>
-              {submitting ? 'Inviting…' : 'Send invite'}
+              {submitting ? 'Invitingâ€¦' : 'Send invite'}
             </button>
           </div>
         </form>
@@ -2118,7 +2332,7 @@ function InviteUserModal({
 }
 
 // ---------------------------------------------------------------------------
-// Phase 6.13 — Audit log
+// Phase 6.13 â€” Audit log
 //
 // Read-only feed of recent admin actions. Cursor-paginated (500 max per
 // page; default 100). Renders a friendly summary per row plus the raw
@@ -2241,7 +2455,7 @@ function AuditLogSection() {
           disabled={loading}
           style={{ marginTop: 12 }}
         >
-          {loading ? 'Loading…' : 'Load more'}
+          {loading ? 'Loadingâ€¦' : 'Load more'}
         </button>
       )}
     </div>
@@ -2249,13 +2463,13 @@ function AuditLogSection() {
 }
 
 // ---------------------------------------------------------------------------
-// Phase 5 (#189) — BulkImportModal
+// Phase 5 (#189) â€” BulkImportModal
 //
 // Two-step flow:
-//   1. User picks a CSV → we parse client-side + auto-run a dry-run on the
+//   1. User picks a CSV â†’ we parse client-side + auto-run a dry-run on the
 //      server to validate every row. Result table shows green/yellow/red
 //      per row so the admin can spot problems BEFORE writing.
-//   2. If everything looks good, click "Confirm import" → real write.
+//   2. If everything looks good, click "Confirm import" â†’ real write.
 //
 // CSV format expected (case-sensitive header row):
 //   email, firstName, lastName, sipUsername, didNumber, sipPassword, isAdmin, phoneExtension
@@ -2411,7 +2625,7 @@ function BulkImportModal({
 
         <p className="muted small" style={{ marginTop: 0 }}>
           Expected header: <code>email,firstName,lastName,sipUsername,didNumber,sipPassword,isAdmin,phoneExtension</code>.
-          Rows without a SIP password will be created — set the password later from the kebab menu when each user is ready to migrate.
+          Rows without a SIP password will be created â€” set the password later from the kebab menu when each user is ready to migrate.
         </p>
 
         {!preview && !committed && (
@@ -2433,7 +2647,7 @@ function BulkImportModal({
               onClick={() => fileRef.current?.click()}
               disabled={submitting}
             >
-              <Upload size={14} /> {submitting ? 'Parsing…' : 'Choose CSV file'}
+              <Upload size={14} /> {submitting ? 'Parsingâ€¦' : 'Choose CSV file'}
             </button>
             {fileName && <div className="muted small" style={{ marginTop: 8 }}>{fileName}</div>}
             {parseError && <div className="error" style={{ marginTop: 12 }}>{parseError}</div>}
@@ -2448,7 +2662,7 @@ function BulkImportModal({
             <div className="bulk-stat warn">{stats.missingPasswords} <span>no password</span></div>
             <div className="bulk-stat err">{stats.errors} <span>errors</span></div>
             <div className="muted small" style={{ marginLeft: 'auto' }}>
-              {stats.dryRun ? 'Preview — nothing written yet' : 'Imported ✓'}
+              {stats.dryRun ? 'Preview â€” nothing written yet' : 'Imported âœ“'}
             </div>
           </div>
         )}
@@ -2475,7 +2689,7 @@ function BulkImportModal({
                     <td className="bulk-notes">
                       {it.error && <span className="bulk-err-text">{it.error}</span>}
                       {!it.error && it.missingPassword && (
-                        <span className="bulk-warn-text">No SIP password — set later</span>
+                        <span className="bulk-warn-text">No SIP password â€” set later</span>
                       )}
                     </td>
                   </tr>
@@ -2502,7 +2716,7 @@ function BulkImportModal({
                   onClick={() => void handleCommit()}
                   disabled={submitting || (preview.summary.errors > 0 && preview.summary.total === preview.summary.errors)}
                 >
-                  {submitting ? 'Importing…' : `Confirm import (${preview.summary.created + preview.summary.updated})`}
+                  {submitting ? 'Importingâ€¦' : `Confirm import (${preview.summary.created + preview.summary.updated})`}
                 </button>
               )}
             </>
@@ -2514,7 +2728,7 @@ function BulkImportModal({
 }
 
 // ---------------------------------------------------------------------------
-// Phase 8 (#204) — Live Ops Dashboard
+// Phase 8 (#204) â€” Live Ops Dashboard
 // Auto-refreshes every 15s. Admin-only.
 // ---------------------------------------------------------------------------
 function LiveOpsSection() {
@@ -2558,7 +2772,7 @@ function LiveOpsSection() {
       </div>
     );
   }
-  if (loading && !data) return <div className="muted">Loading…</div>;
+  if (loading && !data) return <div className="muted">Loadingâ€¦</div>;
   if (error && !data) return <div className="error">{error}</div>;
   if (!data) return null;
 
@@ -2593,7 +2807,7 @@ function LiveOpsSection() {
           <h3 style={{ margin: 0 }}>Live ops</h3>
           <p className="muted small" style={{ margin: '2px 0 0' }}>
             Auto-refreshes every 15s
-            {lastFetched && ' · last updated ' + fmtAgo(lastFetched.toISOString())}
+            {lastFetched && ' Â· last updated ' + fmtAgo(lastFetched.toISOString())}
           </p>
         </div>
       </div>
@@ -2611,7 +2825,7 @@ function LiveOpsSection() {
             Calls today
             {deltaPct !== null && (
               <span className={'liveops-delta ' + (delta >= 0 ? 'up' : 'down')}>
-                {delta >= 0 ? '↑' : '↓'} {Math.abs(deltaPct)}%
+                {delta >= 0 ? 'â†‘' : 'â†“'} {Math.abs(deltaPct)}%
               </span>
             )}
           </div>
@@ -2621,7 +2835,7 @@ function LiveOpsSection() {
           <div className="liveops-card-num">{data.sms.today.sent + data.sms.today.received}</div>
           <div className="liveops-card-label">
             SMS today
-            <span className="muted small"> · {data.sms.today.sent} sent / {data.sms.today.received} received</span>
+            <span className="muted small"> Â· {data.sms.today.sent} sent / {data.sms.today.received} received</span>
           </div>
         </div>
         <div className="liveops-card">
@@ -2629,7 +2843,7 @@ function LiveOpsSection() {
           <div className="liveops-card-num">{data.users.activeLast24h}</div>
           <div className="liveops-card-label">
             Active 24h
-            <span className="muted small"> · of {data.users.active} total</span>
+            <span className="muted small"> Â· of {data.users.active} total</span>
           </div>
         </div>
       </div>
@@ -2646,7 +2860,7 @@ function LiveOpsSection() {
           const total = h.inbound + h.outbound + h.missed;
           const pct = total > 0 ? (total / peakHour) * 100 : 0;
           return (
-            <div key={i} className="liveops-bar-wrap" title={i + ':00 — ' + h.inbound + ' in / ' + h.outbound + ' out / ' + h.missed + ' missed'}>
+            <div key={i} className="liveops-bar-wrap" title={i + ':00 â€” ' + h.inbound + ' in / ' + h.outbound + ' out / ' + h.missed + ' missed'}>
               <div className="liveops-bar-stack" style={{ height: pct + '%' }}>
                 {h.outbound > 0 && <div className="liveops-bar-seg out" style={{ flex: h.outbound }} />}
                 {h.inbound > 0 && <div className="liveops-bar-seg in" style={{ flex: h.inbound }} />}
@@ -2689,7 +2903,7 @@ function LiveOpsSection() {
                   <span className="liveops-missed-icon"><PhoneMissedIcon size={14} /></span>
                   <span className="liveops-missed-text">
                     <div>{fmtPhoneLocal(m.fromNumber)}</div>
-                    <div className="muted small">to {m.userName} · {fmtAgo(m.startedAt)}</div>
+                    <div className="muted small">to {m.userName} Â· {fmtAgo(m.startedAt)}</div>
                   </span>
                 </li>
               ))}
@@ -2702,7 +2916,7 @@ function LiveOpsSection() {
 }
 
 // ---------------------------------------------------------------------------
-// Phase 8 — Presence dashboard (#211)
+// Phase 8 â€” Presence dashboard (#211)
 // Real-time table of every active user: on_call / active / recent / idle.
 // Auto-refreshes every 10s for "live agent" feel.
 // ---------------------------------------------------------------------------
@@ -2743,7 +2957,7 @@ function PresenceSection() {
       </div>
     );
   }
-  if (loading && !data) return <div className="muted">Loading…</div>;
+  if (loading && !data) return <div className="muted">Loadingâ€¦</div>;
   if (error && !data) return <div className="error">{error}</div>;
   if (!data) return null;
 
@@ -2754,7 +2968,7 @@ function PresenceSection() {
   });
 
   function fmtAgo(iso: string | null): string {
-    if (!iso) return '—';
+    if (!iso) return 'â€”';
     const ms = Date.now() - new Date(iso).getTime();
     const mins = Math.floor(ms / 60000);
     if (mins < 1) return 'just now';
@@ -2785,7 +2999,7 @@ function PresenceSection() {
         <div>
           <h3 style={{ margin: 0 }}>Presence</h3>
           <p className="muted small" style={{ margin: '2px 0 0' }}>
-            Refreshes every 10s · {data.items.length} users
+            Refreshes every 10s Â· {data.items.length} users
           </p>
         </div>
         <div className="presence-filter">
@@ -2815,7 +3029,7 @@ function PresenceSection() {
                   <span className={`presence-dot ${u.status}`} aria-hidden="true" />
                   <div>
                     <div>{u.name}</div>
-                    <div className="muted small">{u.email}{u.isAdmin && ' · admin'}</div>
+                    <div className="muted small">{u.email}{u.isAdmin && ' Â· admin'}</div>
                   </div>
                 </div>
               </td>
@@ -2830,12 +3044,12 @@ function PresenceSection() {
                 {u.currentCall ? (
                   <div>
                     <div>
-                      {u.currentCall.direction === 'inbound' ? '↘ ' : '↗ '}
+                      {u.currentCall.direction === 'inbound' ? 'â†˜ ' : 'â†— '}
                       {fmtPhone(u.currentCall.direction === 'inbound' ? u.currentCall.fromNumber : u.currentCall.toNumber)}
                     </div>
                     <div className="muted small">{fmtCallDuration(u.currentCall.startedAt)}</div>
                   </div>
-                ) : <span className="muted small">—</span>}
+                ) : <span className="muted small">â€”</span>}
               </td>
               <td className="muted small">{fmtAgo(u.lastActivity)}</td>
               <td className="presence-today">
@@ -2844,7 +3058,7 @@ function PresenceSection() {
                   {' '}({u.todayBreakdown.inbound}/{u.todayBreakdown.outbound}/{u.todayBreakdown.missed})
                 </span>
               </td>
-              <td className="muted small">{fmtPhone(u.didNumber) || '—'}</td>
+              <td className="muted small">{fmtPhone(u.didNumber) || 'â€”'}</td>
             </tr>
           ))}
           {filtered.length === 0 && (
@@ -2860,7 +3074,7 @@ function PresenceSection() {
 }
 
 // ---------------------------------------------------------------------------
-// Phase 8 — Usage report (#205)
+// Phase 8 â€” Usage report (#205)
 // Per-user leaderboard + daily volume chart.
 // ---------------------------------------------------------------------------
 function UsageSection() {
@@ -2889,7 +3103,7 @@ function UsageSection() {
   if (me && !me.isAdmin) {
     return <div className="admin-empty"><ShieldCheck size={28} /><p><strong>Admin access required</strong></p></div>;
   }
-  if (loading && !data) return <div className="muted">Loading…</div>;
+  if (loading && !data) return <div className="muted">Loadingâ€¦</div>;
   if (error && !data) return <div className="error">{error}</div>;
   if (!data) return null;
 
@@ -2923,7 +3137,7 @@ function UsageSection() {
           const total = d.inbound + d.outbound + d.missed;
           const pct = total > 0 ? (total / peakDay) * 100 : 0;
           return (
-            <div key={d.date} className="liveops-bar-wrap" title={`${d.date} — ${d.inbound} in / ${d.outbound} out / ${d.missed} missed`}>
+            <div key={d.date} className="liveops-bar-wrap" title={`${d.date} â€” ${d.inbound} in / ${d.outbound} out / ${d.missed} missed`}>
               <div className="liveops-bar-stack" style={{ height: pct + '%' }}>
                 {d.outbound > 0 && <div className="liveops-bar-seg out" style={{ flex: d.outbound }} />}
                 {d.inbound > 0 && <div className="liveops-bar-seg in" style={{ flex: d.inbound }} />}
@@ -2964,7 +3178,7 @@ function UsageSection() {
 }
 
 // ---------------------------------------------------------------------------
-// Phase 8 — Quality report (#206)
+// Phase 8 â€” Quality report (#206)
 // Missed-rate per user + hangup-cause breakdown + peak-hours heatmap.
 // ---------------------------------------------------------------------------
 function QualitySection() {
@@ -2993,7 +3207,7 @@ function QualitySection() {
   if (me && !me.isAdmin) {
     return <div className="admin-empty"><ShieldCheck size={28} /><p><strong>Admin access required</strong></p></div>;
   }
-  if (loading && !data) return <div className="muted">Loading…</div>;
+  if (loading && !data) return <div className="muted">Loadingâ€¦</div>;
   if (error && !data) return <div className="error">{error}</div>;
   if (!data) return null;
 
@@ -3007,7 +3221,7 @@ function QualitySection() {
         <div>
           <h3 style={{ margin: 0 }}>Quality &amp; health</h3>
           <p className="muted small" style={{ margin: '2px 0 0' }}>
-            {data.totals.totalCalls} total calls · {data.totals.shortCalls} under 10s
+            {data.totals.totalCalls} total calls Â· {data.totals.shortCalls} under 10s
           </p>
         </div>
         <div className="presence-filter">
@@ -3076,7 +3290,7 @@ function QualitySection() {
               const v = data.heatmap[d][h];
               const intensity = peakHeat > 0 ? v / peakHeat : 0;
               return (
-                <div key={h} className="heatmap-cell" style={{ background: `rgba(10, 132, 255, ${0.05 + intensity * 0.85})` }} title={`${day} ${h}:00 — ${v} calls`} />
+                <div key={h} className="heatmap-cell" style={{ background: `rgba(10, 132, 255, ${0.05 + intensity * 0.85})` }} title={`${day} ${h}:00 â€” ${v} calls`} />
               );
             })}
           </React.Fragment>
@@ -3087,7 +3301,7 @@ function QualitySection() {
 }
 
 // ---------------------------------------------------------------------------
-// Phase 8.1 — Cost report (#207)
+// Phase 8.1 â€” Cost report (#207)
 // ---------------------------------------------------------------------------
 function CostSection() {
   const [me, setMe] = useState<{ isAdmin: boolean } | null>(null);
@@ -3112,7 +3326,7 @@ function CostSection() {
   }, [range]);
 
   if (me && !me.isAdmin) return <div className="admin-empty"><ShieldCheck size={28} /><p><strong>Admin access required</strong></p></div>;
-  if (loading && !data) return <div className="muted">Loading…</div>;
+  if (loading && !data) return <div className="muted">Loadingâ€¦</div>;
   if (error && !data) return <div className="error">{error}</div>;
   if (!data) return null;
 
@@ -3148,7 +3362,7 @@ function CostSection() {
         </div>
         <div className="liveops-card">
           <div className="liveops-card-num">{fmtMoney(data.totals.didRentalMonthly)}</div>
-          <div className="liveops-card-label">{data.totals.activeDids} DIDs × ${data.pricing.didMonthly}/mo</div>
+          <div className="liveops-card-label">{data.totals.activeDids} DIDs Ã— ${data.pricing.didMonthly}/mo</div>
         </div>
       </div>
 
@@ -3192,14 +3406,14 @@ function CostSection() {
       </div>
 
       <p className="muted small" style={{ marginTop: 16 }}>
-        Defaults: ${data.pricing.inboundPerMin}/min inbound · ${data.pricing.outboundPerMin}/min outbound · ${data.pricing.perSms}/SMS · ${data.pricing.didMonthly}/DID/mo. Override via env: <code>TELNYX_COST_INBOUND_PER_MIN</code> etc.
+        Defaults: ${data.pricing.inboundPerMin}/min inbound Â· ${data.pricing.outboundPerMin}/min outbound Â· ${data.pricing.perSms}/SMS Â· ${data.pricing.didMonthly}/DID/mo. Override via env: <code>TELNYX_COST_INBOUND_PER_MIN</code> etc.
       </p>
     </div>
   );
 }
 
 // ---------------------------------------------------------------------------
-// Phase 8.1 — Recruiter metrics (#208)
+// Phase 8.1 â€” Recruiter metrics (#208)
 // ---------------------------------------------------------------------------
 function RecruiterSection() {
   const [me, setMe] = useState<{ isAdmin: boolean } | null>(null);
@@ -3224,7 +3438,7 @@ function RecruiterSection() {
   }, [range]);
 
   if (me && !me.isAdmin) return <div className="admin-empty"><ShieldCheck size={28} /><p><strong>Admin access required</strong></p></div>;
-  if (loading && !data) return <div className="muted">Loading…</div>;
+  if (loading && !data) return <div className="muted">Loadingâ€¦</div>;
   if (error && !data) return <div className="error">{error}</div>;
   if (!data) return null;
 
@@ -3294,8 +3508,8 @@ function RecruiterSection() {
 }
 
 // ---------------------------------------------------------------------------
-// Phase 8.1 — Health alerts (#210)
-// Polls every 60s. No cron yet — admin refreshes the page to recompute.
+// Phase 8.1 â€” Health alerts (#210)
+// Polls every 60s. No cron yet â€” admin refreshes the page to recompute.
 // ---------------------------------------------------------------------------
 function AlertsSection() {
   const [me, setMe] = useState<{ isAdmin: boolean } | null>(null);
@@ -3325,7 +3539,7 @@ function AlertsSection() {
   }, []);
 
   if (me && !me.isAdmin) return <div className="admin-empty"><ShieldCheck size={28} /><p><strong>Admin access required</strong></p></div>;
-  if (loading && !data) return <div className="muted">Loading…</div>;
+  if (loading && !data) return <div className="muted">Loadingâ€¦</div>;
   if (error && !data) return <div className="error">{error}</div>;
   if (!data) return null;
 
@@ -3337,20 +3551,20 @@ function AlertsSection() {
         <div>
           <h3 style={{ margin: 0 }}>Health alerts</h3>
           <p className="muted small" style={{ margin: '2px 0 0' }}>
-            Refreshes every 60s · {data.alerts.length} alerts active
+            Refreshes every 60s Â· {data.alerts.length} alerts active
           </p>
         </div>
       </div>
 
       <div className="liveops-breakdown">
-        <div className="liveops-pill missed">🔴 {data.counts.critical} critical</div>
-        <div className="liveops-pill out" style={{ background: 'rgba(255,149,0,0.16)', color: '#ff9500' }}>⚠️ {data.counts.warn} warnings</div>
-        <div className="liveops-pill in" style={{ background: 'rgba(118,118,128,0.16)', color: 'var(--text-muted)' }}>ℹ️ {data.counts.info} info</div>
+        <div className="liveops-pill missed">ðŸ”´ {data.counts.critical} critical</div>
+        <div className="liveops-pill out" style={{ background: 'rgba(255,149,0,0.16)', color: '#ff9500' }}>âš ï¸ {data.counts.warn} warnings</div>
+        <div className="liveops-pill in" style={{ background: 'rgba(118,118,128,0.16)', color: 'var(--text-muted)' }}>â„¹ï¸ {data.counts.info} info</div>
       </div>
 
       {data.alerts.length === 0 ? (
         <div className="admin-empty">
-          <p>🎉 <strong>All clear.</strong></p>
+          <p>ðŸŽ‰ <strong>All clear.</strong></p>
           <p className="muted small">No anomalies detected right now.</p>
         </div>
       ) : (
@@ -3360,7 +3574,7 @@ function AlertsSection() {
               <span className="alert-icon">{sevIcon(a.severity)}</span>
               <div className="alert-text">
                 <div className="alert-message">{a.message}</div>
-                {a.userName && <div className="muted small">{a.userName} · {a.userEmail}</div>}
+                {a.userName && <div className="muted small">{a.userName} Â· {a.userEmail}</div>}
               </div>
               <span className={`alert-tag ${a.severity}`}>{a.severity}</span>
             </li>
@@ -3369,7 +3583,7 @@ function AlertsSection() {
       )}
 
       <p className="muted small" style={{ marginTop: 14 }}>
-        Alert types: <strong>user.idle_7d</strong> (no activity 7 days), <strong>missed.spike</strong> (today &gt; 1.5× 7-day avg), <strong>did.inactive_14d</strong> (no inbound 14 days).
+        Alert types: <strong>user.idle_7d</strong> (no activity 7 days), <strong>missed.spike</strong> (today &gt; 1.5Ã— 7-day avg), <strong>did.inactive_14d</strong> (no inbound 14 days).
       </p>
     </div>
   );

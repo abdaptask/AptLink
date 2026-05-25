@@ -973,6 +973,53 @@ export async function inviteAdminUser(
   return (await res.json()) as AdminUserRow;
 }
 
+/// Auto-provision a brand-new user (no Pulse history): purchases a Telnyx
+/// DID, creates SIP credentials, binds messaging profile, and sends the
+/// welcome email — all in one call. Returns the full step log so the UI
+/// can show which sub-step succeeded or failed.
+export interface InviteNewUserInput {
+  email: string;
+  firstName?: string;
+  lastName?: string;
+  newDidAreaCode?: string;
+  isAdmin?: boolean;
+  sendEmail?: boolean;
+}
+export interface InviteNewUserResult {
+  ok: boolean;
+  user?: AdminUserRow;
+  didNumber?: string;
+  sipUsername?: string;
+  emailSent?: boolean;
+  steps?: Array<{ step: string; ok: boolean; error?: string }>;
+  error?: string;
+}
+export async function inviteNewUserAutoProvision(
+  token: string,
+  input: InviteNewUserInput,
+): Promise<InviteNewUserResult> {
+  const res = await fetch(`${API_URL}/admin/users/invite-new`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify(input),
+  });
+  const body = (await res.json().catch(() => ({}))) as InviteNewUserResult;
+  if (!res.ok) {
+    return {
+      ok: false,
+      error:
+        typeof body === 'object' && 'error' in body
+          ? String((body as { error: unknown }).error)
+          : `HTTP ${res.status}`,
+      steps: 'steps' in body ? (body as { steps?: InviteNewUserResult['steps'] }).steps : undefined,
+    };
+  }
+  return body;
+}
+
 export interface UpdateAdminUserInput {
   firstName?: string | null;
   lastName?: string | null;
@@ -1316,4 +1363,210 @@ export async function getAlertsReport(token: string): Promise<AlertsReport> {
   });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return (await res.json()) as AlertsReport;
+}
+
+// ─── Phase 8 (#216-220): Pulse-to-ACE migration via PendingUser staging ────
+
+export interface PendingUserRow {
+  email: string;
+  firstName?: string | null;
+  lastName?: string | null;
+  pulseVoipExt: string;
+  pulseVoipNumber: string;
+  pulseExtPassword: string;
+  pulseConnectionName?: string | null;
+  pulseUserStatus?: string | null;
+}
+
+export interface PendingUser {
+  id: number;
+  email: string;
+  firstName: string | null;
+  lastName: string | null;
+  pulseVoipExt: string;
+  pulseVoipNumber: string;
+  pulseConnectionName: string | null;
+  pulseUserStatus: string | null;
+  status: 'pending' | 'invited' | 'skipped';
+  hasPassword: boolean;
+  /// True when status='invited' AND the linked User row has logged in
+  /// at least once. Lets the UI show a derived "Accepted" state.
+  hasLoggedIn?: boolean;
+  invitedAt: string | null;
+  invitedUserId: number | null;
+  importBatchId: string | null;
+  importedAt: string;
+}
+
+export interface PendingUserList {
+  items: PendingUser[];
+  counts: {
+    pending: number;
+    /// "Invited but not yet logged in" — the API subtracts the
+    /// accepted slice so totals don't double-count.
+    invited: number;
+    skipped: number;
+    /// Derived: invited rows whose linked User has logged in.
+    accepted: number;
+  };
+}
+
+export interface PendingUserImportResult {
+  batchId: string;
+  inserted: number;
+  updated: number;
+  errors: Array<{ row: number; email: string; error: string }>;
+}
+
+export interface InvitePendingInput {
+  // 'existing'   = keep the user's current Pulse DID
+  // 'new'        = purchase a fresh local US DID from Telnyx
+  // 'unassigned' = pick an existing ACE-owned DID that isn't routed anywhere
+  didMode: 'existing' | 'new' | 'unassigned';
+  credsMode: 'existing' | 'new';
+  repointWebhook: boolean;
+  sendEmail: boolean;
+  newDidAreaCode?: string;
+  /// E.164 of the unassigned DID the admin picked. Required when didMode==='unassigned'.
+  unassignedDidNumber?: string;
+}
+
+/// Unassigned Telnyx numbers we already own (not routed to any voice or
+/// messaging connection). Powers the "pick from existing inventory" UI.
+export interface UnassignedTelnyxNumber {
+  id: string;
+  phoneNumber: string;            // E.164
+  areaCode: string | null;
+  status: string;
+  regionLabel: string | null;
+}
+export async function listUnassignedTelnyxNumbers(
+  token: string,
+): Promise<UnassignedTelnyxNumber[]> {
+  const res = await fetch(`${API_URL}/admin/telnyx/unassigned-numbers`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const body = (await res.json()) as { items: UnassignedTelnyxNumber[] };
+  return body.items ?? [];
+}
+
+export interface InvitePendingResult {
+  ok: boolean;
+  userId?: number;
+  didNumber?: string;
+  sipUsername?: string;
+  credsCreated?: boolean;
+  didPurchased?: boolean;
+  webhookRepointed?: boolean;
+  emailSent?: boolean;
+  steps?: Array<{ step: string; ok: boolean; error?: string }>;
+  error?: string;
+}
+
+export async function listPendingUsers(
+  token: string,
+  status:
+    | 'pending'
+    | 'invited'
+    | 'accepted'
+    | 'skipped'
+    | 'all' = 'pending',
+): Promise<PendingUserList> {
+  // "accepted" is a UI-side derived bucket (status='invited' + hasLoggedIn);
+  // the API doesn't know that filter name, so we ask for all invited rows
+  // and the caller filters client-side using PendingUser.hasLoggedIn.
+  const serverStatus = status === 'accepted' ? 'invited' : status;
+  const params = serverStatus === 'all' ? '' : `?status=${serverStatus}`;
+  const res = await fetch(`${API_URL}/admin/pending-users${params}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return (await res.json()) as PendingUserList;
+}
+
+export async function importPendingUsers(
+  token: string,
+  rows: PendingUserRow[],
+): Promise<PendingUserImportResult> {
+  const res = await fetch(`${API_URL}/admin/pending-users/import`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ rows }),
+  });
+  if (!res.ok) {
+    const errBody = await res.json().catch(() => ({}));
+    throw new Error(
+      typeof errBody === 'object' && errBody !== null && 'error' in errBody
+        ? String((errBody as { error: unknown }).error)
+        : `HTTP ${res.status}`,
+    );
+  }
+  return (await res.json()) as PendingUserImportResult;
+}
+
+export async function invitePendingUser(
+  token: string,
+  id: number,
+  input: InvitePendingInput,
+): Promise<InvitePendingResult> {
+  const res = await fetch(`${API_URL}/admin/pending-users/${id}/invite`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify(input),
+  });
+  const body = (await res.json().catch(() => ({}))) as InvitePendingResult;
+  if (!res.ok) {
+    return {
+      ok: false,
+      error:
+        typeof body === 'object' && 'error' in body
+          ? String((body as { error: unknown }).error)
+          : `HTTP ${res.status}`,
+      steps: 'steps' in body ? (body as { steps?: InvitePendingResult['steps'] }).steps : undefined,
+    };
+  }
+  return body;
+}
+
+export async function deletePendingUser(token: string, id: number): Promise<void> {
+  const res = await fetch(`${API_URL}/admin/pending-users/${id}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    const errBody = await res.json().catch(() => ({}));
+    throw new Error(
+      typeof errBody === 'object' && errBody !== null && 'error' in errBody
+        ? String((errBody as { error: unknown }).error)
+        : `HTTP ${res.status}`,
+    );
+  }
+}
+
+/// Returns the unredacted SIP credentials for a single staged user. Every
+/// call is audit-logged server-side. Used by the invite-modal "Reveal
+/// credentials" button so the admin can verify what's about to be migrated.
+export interface PendingUserCredentials {
+  email: string;
+  pulseVoipExt: string;
+  pulseVoipNumber: string;
+  pulseExtPassword: string;
+  pulseConnectionName: string | null;
+}
+export async function getPendingUserCredentials(
+  token: string,
+  id: number,
+): Promise<PendingUserCredentials> {
+  const res = await fetch(`${API_URL}/admin/pending-users/${id}/credentials`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return (await res.json()) as PendingUserCredentials;
 }

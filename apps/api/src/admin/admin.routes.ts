@@ -17,9 +17,13 @@
 //   - Can't change your own admin flag — ask another admin.
 
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
+import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { prisma } from '@ace/db';
 import bcrypt from 'bcryptjs';
+import { config } from '../config.js';
+import * as telnyx from '../telnyx/numbers.js';
+import { sendWelcomeEmail } from '../email/sendgrid.js';
 
 interface JwtPayload {
   sub: number;
@@ -126,6 +130,41 @@ const BulkImportSchema = z.object({
   rows: z.array(BulkRowSchema).min(1).max(500),
 });
 
+// Phase 8 (#216-220) — Pulse-to-ACE migration via PendingUser staging.
+//
+// PendingUser rows come from the new admin "Pending Users" tab CSV upload.
+// Nothing on Telnyx changes until an admin clicks Invite + Confirm on a
+// specific row. The invite endpoint then orchestrates Telnyx + DB + email
+// per the 3 modal toggles (didMode / credsMode / repointWebhook).
+const PendingUserRowSchema = z.object({
+  email: z.string().email(),
+  firstName: z.string().max(80).optional().nullable(),
+  lastName: z.string().max(80).optional().nullable(),
+  pulseVoipExt: z.string().min(1).max(120),
+  pulseVoipNumber: z.string().min(1).max(20),
+  pulseExtPassword: z.string().min(1).max(200),
+  pulseConnectionName: z.string().max(120).optional().nullable(),
+  pulseUserStatus: z.string().max(20).optional().nullable(),
+});
+const PendingUserImportSchema = z.object({
+  rows: z.array(PendingUserRowSchema).min(1).max(500),
+});
+
+const InviteFromPendingSchema = z.object({
+  // 'existing'   = keep the user's current Pulse DID
+  // 'new'        = purchase a fresh local US DID from Telnyx
+  // 'unassigned' = pick an existing ACE-owned DID that isn't routed anywhere
+  didMode: z.enum(['existing', 'new', 'unassigned']),
+  credsMode: z.enum(['existing', 'new']),
+  repointWebhook: z.boolean(),
+  sendEmail: z.boolean(),
+  // Optional override for the area code when purchasing a new DID. Defaults
+  // to extracting from pulseVoipNumber (so user keeps a local-feeling number).
+  newDidAreaCode: z.string().regex(/^\d{3}$/).optional(),
+  // E.164 of the unassigned DID the admin picked (required when didMode === 'unassigned').
+  unassignedDidNumber: z.string().optional(),
+});
+
 export async function adminRoutes(app: FastifyInstance) {
   // ───────────────────────── GET /admin/users ─────────────────────────
   app.get(
@@ -203,6 +242,161 @@ export async function adminRoutes(app: FastifyInstance) {
       });
 
       return publicUser(created);
+    },
+  );
+
+  // ───────────────────────── POST /admin/users/invite-new ─────────────
+  // Brand-new hire: no Pulse history, no pre-provisioned Telnyx assets.
+  // We do the full auto-provision in one shot:
+  //   1. Create new Telnyx Credential Connection (returns sipUsername + sipPassword)
+  //   2. Search available local DIDs in the area code
+  //   3. Purchase one, route to the new connection
+  //   4. Bind the DID to ACE's messaging profile (SMS routing)
+  //   5. Create User row with all the captured values
+  //   6. Send welcome email
+  // Every step is logged into `steps`, same shape as the pending-users
+  // invite endpoint, so the UI can show a per-step success/error table.
+  app.post(
+    '/admin/users/invite-new',
+    { onRequest: [app.authenticate, requireAdmin] },
+    async (request, reply) => {
+      const actor = request.user as JwtPayload;
+      const InviteNewSchema = z.object({
+        email: z.string().email(),
+        firstName: z.string().optional(),
+        lastName: z.string().optional(),
+        newDidAreaCode: z.string().regex(/^\d{3}$/).optional(),
+        isAdmin: z.boolean().optional(),
+        sendEmail: z.boolean().default(true),
+      });
+      const parsed = InviteNewSchema.safeParse(request.body);
+      if (!parsed.success) {
+        return reply.code(400).send({ error: 'Invalid input', details: parsed.error.flatten() });
+      }
+      const { email, firstName, lastName, newDidAreaCode, isAdmin: makeAdmin, sendEmail } = parsed.data;
+      const normEmail = email.trim().toLowerCase();
+
+      // Idempotency: bail early if a User with this email already exists.
+      const dup = await prisma.user.findUnique({ where: { email: normEmail }, select: { id: true } });
+      if (dup) {
+        return reply.code(409).send({ error: 'A user with this email already exists.' });
+      }
+
+      const steps: Array<{ step: string; ok: boolean; error?: string }> = [];
+      const step = (label: string, ok: boolean, error?: string) =>
+        steps.push({ step: label, ok, ...(error ? { error } : {}) });
+
+      // 1) Create Telnyx Credential Connection
+      const slug = (firstName || normEmail.split('@')[0])
+        .toLowerCase()
+        .replace(/[^a-z0-9-]/gi, '');
+      const connectionName = `${slug}-ace-${Date.now().toString(36).slice(-5)}`;
+      // Telnyx user_name: letters + digits only — no underscores, hyphens,
+      // or spaces (see Telnyx error code 10015).
+      const userName = `ace${slug.replace(/[^a-z0-9]/gi, '').slice(0, 20)}${Date.now().toString(36).slice(-6)}`;
+      const conn = await telnyx.createCredentialConnection({ connectionName, userName });
+      if (!conn.ok || !conn.data) {
+        step('create Telnyx Credential Connection', false, JSON.stringify(conn.error));
+        return reply.code(502).send({ error: 'createCredentialConnection failed', steps });
+      }
+      const sipUsername = conn.data.data.user_name;
+      const sipPassword = conn.data.data.password ?? '';
+      const connectionId = conn.data.data.id;
+      step('create Telnyx Credential Connection', true);
+
+      // 2) Search for an available DID
+      const areaCode = newDidAreaCode ?? '732';
+      const search = await telnyx.searchAvailableLocal(areaCode, 5);
+      if (!search.ok || !search.data?.data?.length) {
+        step('search available DIDs', false, `No numbers available in area code ${areaCode}`);
+        return reply.code(502).send({ error: 'No DIDs available', steps });
+      }
+      const targetDid = search.data.data[0].phone_number;
+      step(`found candidate DID ${targetDid} in area ${areaCode}`, true);
+
+      // 3) Purchase the DID and route to the new connection
+      const purchase = await telnyx.purchaseDid(targetDid, connectionId);
+      if (!purchase.ok || !purchase.data) {
+        step(`purchase DID ${targetDid}`, false, JSON.stringify(purchase.error));
+        return reply.code(502).send({ error: 'DID purchase failed', steps });
+      }
+      step(`purchase DID ${targetDid} (routed to new connection)`, true);
+
+      // 4) Bind the DID to ACE's messaging profile so SMS works
+      if (config.telnyxMessagingProfileId) {
+        const lookup = await telnyx.findNumberByE164(targetDid);
+        if (!lookup.ok || !lookup.data) {
+          step('look up DID to bind messaging profile', false, `Not found: ${targetDid}`);
+        } else {
+          const bind = await telnyx.assignNumberMessagingProfile(
+            lookup.data.id,
+            config.telnyxMessagingProfileId,
+          );
+          if (bind.ok) {
+            step('bind DID to ACE messaging profile (SMS routing)', true);
+          } else {
+            step('bind DID to ACE messaging profile', false, JSON.stringify(bind.error));
+          }
+        }
+      } else {
+        step('bind messaging profile', false,
+          'Skipped: TELNYX_MESSAGING_PROFILE_ID env var not set');
+      }
+
+      // 5) Create the User row
+      const created = await prisma.user.create({
+        data: {
+          email: normEmail,
+          firstName: firstName ?? null,
+          lastName: lastName ?? null,
+          sipUsername,
+          sipPassword,
+          didNumber: targetDid,
+          isAdmin: !!makeAdmin,
+          isActive: true,
+          provider: 'microsoft',
+        },
+        select: {
+          id: true, email: true, firstName: true, lastName: true,
+          isAdmin: true, isActive: true, provider: true,
+          sipUsername: true, didNumber: true, lastLoginAt: true, createdAt: true,
+        },
+      });
+      step('create User row in database', true);
+
+      await recordAudit(actor.sub, 'user.auto_provisioned', created.id, {
+        email: normEmail,
+        didNumber: targetDid,
+        sipUsername,
+        areaCode,
+      });
+
+      // 6) Send welcome email
+      let emailSent = false;
+      if (sendEmail) {
+        const mail = await sendWelcomeEmail({
+          toEmail: normEmail,
+          firstName: firstName ?? null,
+          didNumber: targetDid,
+        });
+        if (mail.ok) {
+          emailSent = true;
+          step('send welcome email', true);
+        } else {
+          step('send welcome email', false, mail.error ?? `HTTP ${mail.status}`);
+        }
+      } else {
+        step('send welcome email', true);   // skipped per request
+      }
+
+      return {
+        ok: true,
+        user: publicUser(created),
+        didNumber: targetDid,
+        sipUsername,
+        emailSent,
+        steps,
+      };
     },
   );
 
@@ -1363,4 +1557,617 @@ export async function adminRoutes(app: FastifyInstance) {
       };
     },
   );
+  // ───────────────────── Pulse-to-ACE migration (#216-220) ─────────────────
+  //
+  // POST /admin/pending-users/import  — bulk staging upload from CSV
+  // GET  /admin/pending-users         — list with status filter
+  // POST /admin/pending-users/:id/invite — orchestrate per-user provisioning
+  // DELETE /admin/pending-users/:id   — clean up a wrong CSV row
+  //
+  // The invite endpoint is the only place that touches Telnyx in this
+  // feature. All others are pure DB reads/writes. See InviteFromPendingSchema
+  // for the per-row choices (didMode / credsMode / repointWebhook / sendEmail).
+
+  // ── GET /admin/telnyx/unassigned-numbers ────────────────────────────────
+  // Returns the list of Telnyx numbers we own that aren't currently routed
+  // to any voice connection AND not bound to any messaging profile. Powers
+  // the invite-modal "Use an ACE number you already own" picker — letting
+  // admins re-use leftover inventory instead of buying a new DID.
+  app.get(
+    '/admin/telnyx/unassigned-numbers',
+    { onRequest: [app.authenticate, requireAdmin] },
+    async (_request, reply) => {
+      const res = await telnyx.listUnassignedNumbers();
+      if (!res.ok) {
+        return reply.code(502).send({
+          error: 'Failed to fetch unassigned numbers from Telnyx',
+          detail: res.error,
+        });
+      }
+      return { items: res.data };
+    },
+  );
+
+  // ── POST /admin/pending-users/import ────────────────────────────────────
+  app.post(
+    '/admin/pending-users/import',
+    { onRequest: [app.authenticate, requireAdmin] },
+    async (request, reply) => {
+      const actor = request.user as JwtPayload;
+      const parsed = PendingUserImportSchema.safeParse(request.body);
+      if (!parsed.success) {
+        return reply.code(400).send({ error: 'Invalid input', details: parsed.error.flatten() });
+      }
+      const batchId = randomUUID();
+      let inserted = 0;
+      let updated = 0;
+      const errors: Array<{ row: number; email: string; error: string }> = [];
+
+      for (let i = 0; i < parsed.data.rows.length; i += 1) {
+        const row = parsed.data.rows[i];
+        const email = row.email.trim().toLowerCase();
+        try {
+          const existing = await prisma.pendingUser.findUnique({
+            where: { email },
+            select: { id: true },
+          });
+          const data = {
+            firstName: row.firstName ?? null,
+            lastName: row.lastName ?? null,
+            pulseVoipExt: row.pulseVoipExt,
+            pulseVoipNumber: row.pulseVoipNumber,
+            pulseExtPassword: row.pulseExtPassword,
+            pulseConnectionName: row.pulseConnectionName ?? null,
+            pulseUserStatus: row.pulseUserStatus ?? null,
+            importBatchId: batchId,
+          };
+          if (existing) {
+            await prisma.pendingUser.update({
+              where: { email },
+              data: { ...data, importedAt: new Date() },
+            });
+            updated += 1;
+          } else {
+            await prisma.pendingUser.create({ data: { email, ...data } });
+            inserted += 1;
+          }
+        } catch (e) {
+          errors.push({
+            row: i + 1,
+            email,
+            error: e instanceof Error ? e.message : String(e),
+          });
+        }
+      }
+
+      await recordAudit(actor.sub, 'pending_users.imported', null, {
+        batchId,
+        total: parsed.data.rows.length,
+        inserted,
+        updated,
+        errorCount: errors.length,
+      });
+
+      return { batchId, inserted, updated, errors };
+    },
+  );
+
+  // ── GET /admin/pending-users ────────────────────────────────────────────
+  app.get(
+    '/admin/pending-users',
+    { onRequest: [app.authenticate, requireAdmin] },
+    async (request) => {
+      const q = request.query as { status?: string; batch?: string };
+      const where: Record<string, unknown> = {};
+      if (q.status === 'invited' || q.status === 'pending' || q.status === 'skipped') {
+        where.status = q.status;
+      }
+      if (q.batch) where.importBatchId = q.batch;
+
+      const rows = await prisma.pendingUser.findMany({
+        where,
+        orderBy: [{ status: 'asc' }, { importedAt: 'desc' }],
+      });
+
+      // PendingUser.invitedUserId is a plain Int column, NOT a Prisma
+      // relation (intentional — avoids cascade-delete weirdness if a
+      // User row is removed). So we can't `include` the User; instead
+      // we bulk-fetch the lastLoginAt for every invitedUserId we saw
+      // and build a lookup map.
+      const invitedIds = rows
+        .map((r) => r.invitedUserId)
+        .filter((v): v is number => typeof v === 'number');
+      const loginMap = new Map<number, Date | null>();
+      if (invitedIds.length > 0) {
+        const users = await prisma.user.findMany({
+          where: { id: { in: invitedIds } },
+          select: { id: true, lastLoginAt: true },
+        });
+        for (const u of users) loginMap.set(u.id, u.lastLoginAt);
+      }
+
+      const groups = await prisma.pendingUser.groupBy({
+        by: ['status'],
+        _count: { id: true },
+      });
+      // Counts: pending / invited / skipped come from the raw status
+      // column; `accepted` is a derived bucket = status='invited' AND
+      // the linked User has logged in at least once. We then subtract
+      // the accepted slice from `invited` so the UI's "Invited" chip
+      // shows only people who haven't logged in yet.
+      const counts: Record<string, number> = {
+        pending: 0,
+        invited: 0,
+        skipped: 0,
+        accepted: 0,
+      };
+      for (const g of groups) counts[g.status] = g._count.id;
+      let acceptedCount = 0;
+      for (const r of rows) {
+        if (r.status === 'invited' && r.invitedUserId != null) {
+          if (loginMap.get(r.invitedUserId)) acceptedCount += 1;
+        }
+      }
+      // The findMany result is filtered by `where`, so the raw groupBy
+      // is the source of truth for total invited; only the accepted
+      // count uses the filtered rows. Compute global accepted via a
+      // separate count to keep the chip totals consistent across
+      // status filters.
+      const globalAcceptedRows = await prisma.pendingUser.findMany({
+        where: { status: 'invited', invitedUserId: { not: null } },
+        select: { invitedUserId: true },
+      });
+      const globalInvitedIds = globalAcceptedRows
+        .map((r) => r.invitedUserId)
+        .filter((v): v is number => typeof v === 'number');
+      if (globalInvitedIds.length > 0) {
+        const globalUsers = await prisma.user.findMany({
+          where: { id: { in: globalInvitedIds }, lastLoginAt: { not: null } },
+          select: { id: true },
+        });
+        acceptedCount = globalUsers.length;
+      } else {
+        acceptedCount = 0;
+      }
+      counts.accepted = acceptedCount;
+      counts.invited = Math.max(0, counts.invited - acceptedCount);
+
+      return {
+        items: rows.map((r) => ({
+          ...r,
+          // Don't leak the SIP password to the client in the LIST view —
+          // only the invite endpoint needs to know it server-side. Show a
+          // boolean indicator instead.
+          pulseExtPassword: undefined,
+          hasPassword: !!r.pulseExtPassword,
+          // True when the linked User row has logged in at least once.
+          // Lets the client compute the derived "Accepted" status without
+          // a second round-trip.
+          hasLoggedIn:
+            r.invitedUserId != null && !!loginMap.get(r.invitedUserId),
+          importedAt: r.importedAt.toISOString(),
+          invitedAt: r.invitedAt ? r.invitedAt.toISOString() : null,
+        })),
+        counts,
+      };
+    },
+  );
+
+  // ── POST /admin/pending-users/:id/invite ───────────────────────────────
+  // The actual provisioning. Reads PendingUser + the 4 modal toggles, then
+  // orchestrates: (Telnyx work?) → create User row → (welcome email?) →
+  // mark PendingUser.status=invited. Every step is logged into the returned
+  // `steps` array so the UI can show a per-step success/error table.
+  app.post<{ Params: { id: string } }>(
+    '/admin/pending-users/:id/invite',
+    { onRequest: [app.authenticate, requireAdmin] },
+    async (request, reply) => {
+      const actor = request.user as JwtPayload;
+      const id = Number(request.params.id);
+      if (!Number.isFinite(id)) return reply.code(400).send({ error: 'Invalid id' });
+
+      const parsed = InviteFromPendingSchema.safeParse(request.body);
+      if (!parsed.success) {
+        return reply.code(400).send({ error: 'Invalid input', details: parsed.error.flatten() });
+      }
+      const { didMode, credsMode, repointWebhook, sendEmail, newDidAreaCode } = parsed.data;
+
+      const pending = await prisma.pendingUser.findUnique({ where: { id } });
+      if (!pending) return reply.code(404).send({ error: 'Pending user not found' });
+      if (pending.status === 'invited') {
+        return reply.code(409).send({
+          error: 'Already invited',
+          invitedAt: pending.invitedAt?.toISOString() ?? null,
+          invitedUserId: pending.invitedUserId,
+        });
+      }
+
+      // Pre-flight: refuse to start the Telnyx orchestration if this email is
+      // already a User row (e.g. the admin themselves, or someone added via
+      // Admin → Users). Otherwise we'd touch Telnyx and then fail on the
+      // Prisma unique constraint at the very end. Same check for sipUsername
+      // when credsMode=existing, since reusing the Pulse extension as the
+      // sipUsername would collide too.
+      const dupEmail = await prisma.user.findUnique({
+        where: { email: pending.email.toLowerCase() },
+        select: { id: true, email: true, didNumber: true },
+      });
+      if (dupEmail) {
+        return reply.code(409).send({
+          error:
+            `A User row already exists for ${pending.email} ` +
+            `(id ${dupEmail.id}). Delete that user first, or skip this row.`,
+          existingUserId: dupEmail.id,
+        });
+      }
+      if (parsed.data.credsMode === 'existing' && pending.pulseVoipExt) {
+        const dupSip = await prisma.user.findUnique({
+          where: { sipUsername: pending.pulseVoipExt },
+          select: { id: true, email: true },
+        });
+        if (dupSip) {
+          return reply.code(409).send({
+            error:
+              `SIP username "${pending.pulseVoipExt}" is already in use by ` +
+              `User id ${dupSip.id} (${dupSip.email}). Pick "Generate new ACE credentials" instead.`,
+            existingUserId: dupSip.id,
+          });
+        }
+      }
+
+      type StepLog = { step: string; ok: boolean; error?: string };
+      const steps: StepLog[] = [];
+      const step = (name: string, ok: boolean, error?: string) => {
+        steps.push({ step: name, ok, ...(error ? { error } : {}) });
+      };
+
+      // Resolved values we'll write into the User row at the end.
+      let sipUsername: string = pending.pulseVoipExt;
+      let sipPassword: string = pending.pulseExtPassword;
+      let didNumber: string = pending.pulseVoipNumber;
+      let newConnectionId: string | null = null;
+      let credsCreated = false;
+      let didPurchased = false;
+      let webhookRepointed = false;
+      let emailSent = false;
+
+      // ── Step 1: SIP credentials ──────────────────────────────────────
+      if (credsMode === 'existing') {
+        step('use existing SIP credentials (from CSV)', true);
+      } else {
+        const connectionName =
+          `${(pending.firstName || pending.email.split('@')[0]).toLowerCase()}-ace`.replace(/[^a-z0-9-]/gi, '');
+        // Telnyx user_name: letters + digits only. No underscores, hyphens,
+        // or spaces (see Telnyx error code 10015).
+        const userName =
+          `ace${pending.pulseVoipExt.replace(/[^a-z0-9]/gi, '').toLowerCase().slice(0, 20)}${Date.now().toString(36).slice(-6)}`;
+        const res = await telnyx.createCredentialConnection({ connectionName, userName });
+        if (!res.ok || !res.data) {
+          step('create new Telnyx Credential Connection', false, JSON.stringify(res.error));
+          return reply.code(502).send({
+            error: 'Telnyx createCredentialConnection failed',
+            steps,
+          });
+        }
+        sipUsername = res.data.data.user_name;
+        sipPassword = res.data.data.password ?? '';
+        newConnectionId = res.data.data.id;
+        credsCreated = true;
+        step('create new Telnyx Credential Connection', true);
+      }
+
+      // ── Step 2: DID number ──────────────────────────────────────────
+      if (didMode === 'existing') {
+        // Use the user's existing Pulse DID as-is. If we ALSO created new
+        // credentials above, we need to reroute the DID from the Pulse
+        // connection to the new ACE connection.
+        if (credsMode === 'new' && newConnectionId) {
+          const digits = pending.pulseVoipNumber.replace(/[^\d]/g, '');
+          const e164 = digits.length === 10 ? `+1${digits}` : digits.startsWith('1') ? `+${digits}` : `+${digits}`;
+          const lookup = await telnyx.findNumberByE164(e164);
+          if (!lookup.ok || !lookup.data) {
+            step('look up existing DID in Telnyx', false, `Number not found: ${e164}`);
+            return reply.code(502).send({ error: 'Existing DID lookup failed', steps });
+          }
+          const assign = await telnyx.assignDidToConnection(lookup.data.id, newConnectionId);
+          if (!assign.ok) {
+            step('assign existing DID to new connection', false, JSON.stringify(assign.error));
+            return reply.code(502).send({ error: 'DID assignment failed', steps });
+          }
+          step('reroute existing DID to new ACE connection', true);
+        } else {
+          step('use existing DID (from CSV)', true);
+        }
+      } else if (didMode === 'unassigned') {
+        // Admin picked an already-owned-but-unassigned ACE number from the
+        // dropdown. Skip the purchase and just route it to their connection.
+        // Saves the per-DID monthly cost of buying a new one.
+        const picked = parsed.data.unassignedDidNumber;
+        if (!picked) {
+          step('use unassigned ACE number', false, 'No number was picked');
+          return reply.code(400).send({ error: 'unassignedDidNumber required', steps });
+        }
+        const lookup = await telnyx.findNumberByE164(picked);
+        if (!lookup.ok || !lookup.data) {
+          step('look up unassigned DID in Telnyx', false, `Number not found: ${picked}`);
+          return reply.code(502).send({ error: 'Unassigned DID lookup failed', steps });
+        }
+
+        // Decide which connection to route it to: the freshly-created ACE
+        // connection (credsMode=new) or the user's Pulse connection from
+        // the CSV (credsMode=existing).
+        let targetConnId: string | undefined = newConnectionId ?? undefined;
+        if (!targetConnId && pending.pulseConnectionName) {
+          const c = await telnyx.findConnectionByName(pending.pulseConnectionName);
+          if (c.ok && c.data) targetConnId = c.data.id;
+        }
+        if (!targetConnId) {
+          step('assign unassigned DID', false, 'No target connection could be resolved');
+          return reply.code(502).send({ error: 'No target connection for unassigned DID', steps });
+        }
+
+        const assign = await telnyx.assignDidToConnection(lookup.data.id, targetConnId);
+        if (!assign.ok) {
+          step(`assign unassigned DID ${picked}`, false, JSON.stringify(assign.error));
+          return reply.code(502).send({ error: 'Unassigned DID assignment failed', steps });
+        }
+        didNumber = picked;
+        step(`assign unassigned DID ${picked} to user connection`, true);
+      } else {
+        // Purchase a new DID. Match the area code of the user's existing
+        // Pulse number unless the admin overrode it.
+        const areaCode = newDidAreaCode ?? telnyx.extractUsAreaCode(pending.pulseVoipNumber) ?? '732';
+        const search = await telnyx.searchAvailableLocal(areaCode, 5);
+        if (!search.ok || !search.data?.data?.length) {
+          step('search available DIDs', false, `No numbers available in area code ${areaCode}`);
+          return reply.code(502).send({ error: 'No DIDs available', steps });
+        }
+        const target = search.data.data[0].phone_number;
+        step(`found candidate DID ${target} in area ${areaCode}`, true);
+
+        // Pick which connection to route the new DID to.
+        let targetConnId: string | undefined = newConnectionId ?? undefined;
+        if (!targetConnId && pending.pulseConnectionName) {
+          const lookup = await telnyx.findConnectionByName(pending.pulseConnectionName);
+          if (lookup.ok && lookup.data) {
+            targetConnId = lookup.data.id;
+          }
+        }
+
+        const purchase = await telnyx.purchaseDid(target, targetConnId);
+        if (!purchase.ok || !purchase.data) {
+          step(`purchase DID ${target}`, false, JSON.stringify(purchase.error));
+          return reply.code(502).send({ error: 'DID purchase failed', steps });
+        }
+        didNumber = target;
+        didPurchased = true;
+        step(`purchase DID ${target}` + (targetConnId ? ' (routed to connection)' : ''), true);
+      }
+
+      // ── Step 2.5: Auto-flip messaging profile to ACE ─────────────────
+      // Regardless of which DID mode the admin picked, the user's number
+      // should route inbound SMS to ACE's messaging webhook (not Pulse).
+      // This runs every time so users are SMS-ready the moment they log in
+      // — no manual portal config, no "valuable time" wasted.
+      // Skipped only if TELNYX_MESSAGING_PROFILE_ID isn't configured in env.
+      if (didNumber && config.telnyxMessagingProfileId) {
+        const digits = didNumber.replace(/[^\d]/g, '');
+        const e164 = digits.length === 10
+          ? `+1${digits}`
+          : digits.startsWith('1') ? `+${digits}` : `+${digits}`;
+        const lookup = await telnyx.findNumberByE164(e164);
+        if (!lookup.ok || !lookup.data) {
+          step('look up DID to bind messaging profile', false, `Number not found: ${e164}`);
+          // Non-fatal — user can still receive calls; we just won't get SMS
+          // until an admin binds the messaging profile manually.
+        } else {
+          const bind = await telnyx.assignNumberMessagingProfile(
+            lookup.data.id,
+            config.telnyxMessagingProfileId,
+          );
+          if (bind.ok) {
+            step('bind DID to ACE messaging profile (SMS routing)', true);
+          } else {
+            step('bind DID to ACE messaging profile (SMS routing)', false, JSON.stringify(bind.error));
+            // Also non-fatal — voice still works.
+          }
+        }
+      } else if (didNumber && !config.telnyxMessagingProfileId) {
+        step('bind messaging profile', false,
+          'Skipped: TELNYX_MESSAGING_PROFILE_ID env var not set');
+      }
+
+      // ── Step 3: Repoint webhook ─────────────────────────────────────
+      // Only meaningful when we're keeping the user's existing Pulse
+      // connection (credsMode=existing). If credsMode=new, the new
+      // connection already has the ACE webhook from createCredentialConnection.
+      if (repointWebhook) {
+        if (credsMode === 'new') {
+          step('webhook already on ACE (new connection)', true);
+          webhookRepointed = true;
+        } else if (!pending.pulseConnectionName) {
+          step('repoint webhook to ACE', false, 'pulseConnectionName missing in CSV row');
+        } else {
+          const conn = await telnyx.findConnectionByName(pending.pulseConnectionName);
+          if (!conn.ok || !conn.data) {
+            step('look up Pulse connection for webhook repoint', false,
+              `Connection not found: ${pending.pulseConnectionName}`);
+          } else {
+            const patch = await telnyx.patchConnectionWebhook(conn.data.id, config.telnyxWebhookUrl);
+            if (patch.ok) {
+              webhookRepointed = true;
+              step('repoint webhook to ACE', true);
+            } else {
+              step('repoint webhook to ACE', false, JSON.stringify(patch.error));
+            }
+          }
+        }
+      }
+
+      // ── Step 4: Create the User row ─────────────────────────────────
+      // Normalize the DID to +E.164 so it matches the rest of the system.
+      const digits = didNumber.replace(/[^\d]/g, '');
+      const didE164 = didNumber.startsWith('+')
+        ? didNumber
+        : digits.length === 11 && digits.startsWith('1')
+          ? `+${digits}`
+          : digits.length === 10
+            ? `+1${digits}`
+            : `+${digits}`;
+
+      let createdUser: { id: number; email: string; firstName: string | null; didNumber: string | null };
+      try {
+        createdUser = await prisma.user.create({
+          data: {
+            email: pending.email.toLowerCase(),
+            firstName: pending.firstName,
+            lastName: pending.lastName,
+            sipUsername,
+            sipPassword,
+            didNumber: didE164,
+            isAdmin: false,
+            isActive: true,
+            provider: 'microsoft',
+            passwordHash: null,
+          },
+          select: { id: true, email: true, firstName: true, didNumber: true },
+        });
+        step('create User row', true);
+      } catch (e) {
+        step('create User row', false, e instanceof Error ? e.message : String(e));
+        return reply.code(500).send({
+          error: 'User creation failed (likely duplicate email or sipUsername)',
+          steps,
+        });
+      }
+
+      // ── Step 5: Mark PendingUser as invited ─────────────────────────
+      await prisma.pendingUser.update({
+        where: { id },
+        data: {
+          status: 'invited',
+          invitedAt: new Date(),
+          invitedUserId: createdUser.id,
+        },
+      });
+      step('mark PendingUser as invited', true);
+
+      // ── Step 6: Send welcome email (optional) ──────────────────────
+      if (sendEmail) {
+        const sendRes = await sendWelcomeEmail({
+          toEmail: createdUser.email,
+          firstName: createdUser.firstName,
+          didNumber: createdUser.didNumber,
+        });
+        if (sendRes.ok) {
+          emailSent = true;
+          step('send welcome email', true);
+        } else {
+          step('send welcome email', false,
+            typeof sendRes.error === 'string' ? sendRes.error : JSON.stringify(sendRes.error));
+        }
+      } else {
+        step('skip welcome email (admin opted out)', true);
+      }
+
+      // ── Audit ───────────────────────────────────────────────────────
+      await recordAudit(actor.sub, 'pending_user.invited', createdUser.id, {
+        pendingUserId: pending.id,
+        pendingEmail: pending.email,
+        didMode,
+        credsMode,
+        repointWebhook,
+        sendEmail,
+        didNumber: didE164,
+        credsCreated,
+        didPurchased,
+        webhookRepointed,
+        emailSent,
+      });
+
+      return {
+        ok: true,
+        userId: createdUser.id,
+        didNumber: didE164,
+        sipUsername,
+        credsCreated,
+        didPurchased,
+        webhookRepointed,
+        emailSent,
+        steps,
+      };
+    },
+  );
+
+  // ── DELETE /admin/pending-users/:id ─────────────────────────────────────
+  app.delete<{ Params: { id: string } }>(
+    '/admin/pending-users/:id',
+    { onRequest: [app.authenticate, requireAdmin] },
+    async (request, reply) => {
+      const actor = request.user as JwtPayload;
+      const id = Number(request.params.id);
+      if (!Number.isFinite(id)) return reply.code(400).send({ error: 'Invalid id' });
+
+      const pending = await prisma.pendingUser.findUnique({
+        where: { id },
+        select: { id: true, email: true, status: true },
+      });
+      if (!pending) return reply.code(404).send({ error: 'Not found' });
+      if (pending.status === 'invited') {
+        return reply.code(400).send({
+          error: 'Cannot delete an already-invited row. Use Admin → Users to manage the actual user.',
+        });
+      }
+
+      await prisma.pendingUser.delete({ where: { id } });
+      await recordAudit(actor.sub, 'pending_user.deleted', null, {
+        pendingUserId: id,
+        email: pending.email,
+      });
+      return { ok: true };
+    },
+  );
+
+  // ── GET /admin/pending-users/:id/credentials ────────────────────────────
+  // Returns the unredacted SIP credentials for one staged row. Admin-only
+  // and audited — every reveal is logged so we can see who looked.
+  // The general LIST endpoint strips the password (returns `hasPassword`
+  // boolean instead); this endpoint is the only way to recover the raw
+  // value, intended for the invite-modal "Reveal credentials" button.
+  app.get<{ Params: { id: string } }>(
+    '/admin/pending-users/:id/credentials',
+    { onRequest: [app.authenticate, requireAdmin] },
+    async (request, reply) => {
+      const actor = request.user as JwtPayload;
+      const id = Number(request.params.id);
+      if (!Number.isFinite(id)) return reply.code(400).send({ error: 'Invalid id' });
+
+      const pending = await prisma.pendingUser.findUnique({
+        where: { id },
+        select: {
+          id: true,
+          email: true,
+          pulseVoipExt: true,
+          pulseVoipNumber: true,
+          pulseExtPassword: true,
+          pulseConnectionName: true,
+        },
+      });
+      if (!pending) return reply.code(404).send({ error: 'Not found' });
+
+      await recordAudit(actor.sub, 'pending_user.credentials_viewed', null, {
+        pendingUserId: id,
+        email: pending.email,
+      });
+
+      return {
+        email: pending.email,
+        pulseVoipExt: pending.pulseVoipExt,
+        pulseVoipNumber: pending.pulseVoipNumber,
+        pulseExtPassword: pending.pulseExtPassword,
+        pulseConnectionName: pending.pulseConnectionName,
+      };
+    },
+  );
+
 }
