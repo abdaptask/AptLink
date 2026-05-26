@@ -85,4 +85,14 @@ export const config = {
   sendGridFromEmail: optional('SENDGRID_FROM_EMAIL', 'noreply@aptask.com'),
   sendGridFromName: optional('SENDGRID_FROM_NAME', 'ACE Dialer'),
   aceSupportEmail: optional('ACE_SUPPORT_EMAIL', 'it@aptask.com'),
+
+  // v0.9.13 — Cloudflare TURN failover for WebRTC audio when Telnyx TURN
+  // can't reach a behind-NAT user. To enable:
+  //   1. Sign in at dash.cloudflare.com → Calls → TURN
+  //   2. Create a TURN application; copy the Key ID + API Token
+  //   3. Set both env vars on Render's api service
+  // When unset, GET /turn-credentials returns an empty list and the client
+  // falls back to Telnyx-TURN-only (which handles ~95% of NAT cases anyway).
+  cloudflareTurnKeyId: optional('CLOUDFLARE_TURN_KEY_ID'),
+  cloudflareTurnApiToken: optional('CLOUDFLARE_TURN_API_TOKEN'),
 };

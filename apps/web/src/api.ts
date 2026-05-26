@@ -79,6 +79,28 @@ export async function getMe(token: string): Promise<User> {
   return res.json();
 }
 
+// v0.9.13 — Fetch optional extra TURN servers (Cloudflare). Returns an
+// empty array when the backend isn't configured for Cloudflare TURN; the
+// SIP service already includes Telnyx TURN unconditionally, so callers
+// can treat this as "best-effort failover."
+export interface TurnCredentialsResponse {
+  iceServers: Array<{ urls: string | string[]; username?: string; credential?: string }>;
+  provider?: string;
+}
+export async function getTurnCredentials(token: string): Promise<TurnCredentialsResponse> {
+  try {
+    const res = await fetch(`${API_URL}/turn-credentials`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) return { iceServers: [], provider: 'http-error' };
+    return (await res.json()) as TurnCredentialsResponse;
+  } catch {
+    // Network error — silently fall through. Telnyx TURN is enough for
+    // 95% of users; no point blocking login on a Cloudflare hiccup.
+    return { iceServers: [], provider: 'fetch-throw' };
+  }
+}
+
 // Bottom-nav unread/missed badge counts.
 // Each endpoint takes a `since` ISO timestamp; the client passes its
 // last-visit time so we only count items the user hasn't seen yet.

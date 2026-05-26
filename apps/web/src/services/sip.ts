@@ -37,6 +37,14 @@ export interface SipConfig {
   wssUri?: string;
   /** Override the SIP domain (the part after @). Defaults to sip.telnyx.com. */
   realm?: string;
+  /**
+   * v0.9.13 — Additional ICE servers to add to the default Telnyx STUN+TURN
+   * set. Cloudflare TURN credentials live here when the backend's
+   * GET /turn-credentials endpoint returns them. Optional and may be undefined
+   * — if it's not set, we fall back to Telnyx-TURN-only which is enough for
+   * 95% of NAT topologies.
+   */
+  extraIceServers?: RTCIceServer[];
 }
 
 export interface CallEvent {
@@ -350,6 +358,60 @@ export class SipService {
 
   /** Saved connect() config, used by reconnect() to rebuild the UA. */
   private lastConfig: SipConfig | null = null;
+
+  /**
+   * v0.9.13 — Build the ICE servers list used by both outbound call() and
+   * inbound answer() PeerConnections. Includes:
+   *   1) STUN (Telnyx + Google) for direct-connection NAT discovery
+   *   2) Telnyx TURN, authenticated with the user's SIP credentials. This
+   *      relays media through Telnyx's global TURN footprint when ICE can't
+   *      find a direct path — the typical case for users behind symmetric
+   *      NAT (corporate networks, many Indian/SE Asian ISPs). Without this,
+   *      SIP signaling succeeds but RTP gets blackholed and both sides hear
+   *      silence after answering. UDP first (fastest), then TCP fallback,
+   *      then TLS-443 fallback for networks that block UDP and non-443 TCP.
+   *   3) Optional extra servers — currently used to layer Cloudflare TURN as
+   *      a failover when CLOUDFLARE_TURN_KEY_ID/API_TOKEN are set on the API.
+   */
+  /**
+   * v0.9.13 — Layer in additional ICE servers after the initial connect.
+   * Used by SipContext to add Cloudflare TURN once the API's
+   * /turn-credentials round-trip finishes (which happens asynchronously so
+   * it doesn't delay the initial REGISTER). The next call() or answer()
+   * will pick these up. Existing in-flight calls keep their original ICE
+   * config (PeerConnections don't accept iceServers updates mid-session).
+   */
+  updateExtraIceServers(extraIceServers: RTCIceServer[]): void {
+    if (!this.lastConfig) return;
+    this.lastConfig = { ...this.lastConfig, extraIceServers };
+  }
+
+  private buildIceServers(): RTCIceServer[] {
+    const cfg = this.lastConfig;
+    const turnUser = cfg?.username ?? '';
+    const turnPass = cfg?.password ?? '';
+    const servers: RTCIceServer[] = [
+      { urls: 'stun:stun.telnyx.com:3478' },
+      { urls: 'stun:stun.l.google.com:19302' },
+      { urls: 'stun:stun1.l.google.com:19302' },
+    ];
+    // Only add Telnyx TURN if we actually have SIP credentials. Without
+    // them the TURN authentication challenge would fail and we'd just be
+    // adding latency for nothing.
+    if (turnUser && turnPass) {
+      servers.push(
+        { urls: 'turn:turn.telnyx.com:3478?transport=udp', username: turnUser, credential: turnPass },
+        { urls: 'turn:turn.telnyx.com:3478?transport=tcp', username: turnUser, credential: turnPass },
+        // TLS-443 fallback for restrictive networks (corporate firewalls
+        // that allow only outbound 443/TCP).
+        { urls: 'turns:turn.telnyx.com:443?transport=tcp', username: turnUser, credential: turnPass },
+      );
+    }
+    if (cfg?.extraIceServers?.length) {
+      servers.push(...cfg.extraIceServers);
+    }
+    return servers;
+  }
 
   /**
    * v0.9.13 — first-login registration-retry state. Survives across
@@ -900,11 +962,7 @@ export class SipService {
       const session = this.ua.call(target, {
         mediaConstraints: { audio: buildAudioConstraints(), video: false },
         pcConfig: {
-          iceServers: [
-            { urls: 'stun:stun.telnyx.com:3478' },
-            { urls: 'stun:stun.l.google.com:19302' },
-            { urls: 'stun:stun1.l.google.com:19302' },
-          ],
+          iceServers: this.buildIceServers(),
           iceTransportPolicy: 'all',
           bundlePolicy: 'max-bundle',
           rtcpMuxPolicy: 'require',
@@ -1145,11 +1203,7 @@ export class SipService {
         // getUserMedia call inside the answer pipeline.
         mediaStream: stream,
         pcConfig: {
-          iceServers: [
-            { urls: 'stun:stun.telnyx.com:3478' },
-            { urls: 'stun:stun.l.google.com:19302' },
-            { urls: 'stun:stun1.l.google.com:19302' },
-          ],
+          iceServers: this.buildIceServers(),
           iceTransportPolicy: 'all',
           bundlePolicy: 'max-bundle',
           rtcpMuxPolicy: 'require',

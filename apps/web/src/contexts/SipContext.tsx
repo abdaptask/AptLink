@@ -7,6 +7,7 @@ import {
   lookupCall,
   transferCallApi,
   addLegApi,
+  getTurnCredentials,
 } from '../api';
 import { createSipWatchdog } from '../lib/sessionGuard';
 
@@ -136,8 +137,26 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
 
       console.log('[sip] connecting as', username, 'caller=', callerNumber);
       const wssUri = import.meta.env.VITE_SIP_WSS_URI as string | undefined;
+
+      // v0.9.13 — Connect immediately with Telnyx-TURN-only so the user
+      // isn't delayed by the Cloudflare-credentials round-trip. Then
+      // asynchronously fetch Cloudflare TURN and trigger a reconnect when
+      // it lands so future ICE renegotiations include the extra relay path.
       sipService.connect({ username, password, callerNumber, wssUri });
       connected = true;
+
+      const token = sessionStorage.getItem('ace_token');
+      if (token) {
+        void (async () => {
+          const turn = await getTurnCredentials(token);
+          if (turn.iceServers.length > 0) {
+            console.log('[sip] cloudflare TURN added, provider=', turn.provider);
+            sipService.updateExtraIceServers(turn.iceServers);
+          } else {
+            console.log('[sip] no extra TURN provider; Telnyx TURN only (provider=', turn.provider, ')');
+          }
+        })();
+      }
       return true;
     }
 
