@@ -63,7 +63,9 @@ import {
   listAdminUsers,
   inviteAdminUser,
   inviteNewUserAutoProvision,
+  listUnassignedTelnyxNumbers,
   type InviteNewUserResult,
+  type UnassignedTelnyxNumber,
   updateAdminUser,
   listAuditLogs,
   bulkImportUsers,
@@ -1998,17 +2000,44 @@ function AutoProvisionUserModal({
   const [email, setEmail] = useState('');
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
+  const [didMode, setDidMode] = useState<'new' | 'unassigned'>('new');
   const [areaCode, setAreaCode] = useState('');
   const [makeAdmin, setMakeAdmin] = useState(false);
   const [sendEmail, setSendEmail] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [result, setResult] = useState<InviteNewUserResult | null>(null);
 
+  // Lazy-load the unassigned-numbers list the first time the admin picks
+  // the 'unassigned' radio. Avoids a Telnyx round-trip if they never use it.
+  const [unassigned, setUnassigned] = useState<UnassignedTelnyxNumber[] | null>(null);
+  const [unassignedLoading, setUnassignedLoading] = useState(false);
+  const [unassignedErr, setUnassignedErr] = useState<string | null>(null);
+  const [pickedUnassignedDid, setPickedUnassignedDid] = useState<string>('');
+
+  useEffect(() => {
+    if (didMode !== 'unassigned' || unassigned !== null || unassignedLoading) return;
+    const token = sessionStorage.getItem('ace_token');
+    if (!token) return;
+    setUnassignedLoading(true);
+    setUnassignedErr(null);
+    listUnassignedTelnyxNumbers(token)
+      .then((items) => {
+        setUnassigned(items);
+        if (items.length > 0) setPickedUnassignedDid(items[0].phoneNumber);
+      })
+      .catch((e) => setUnassignedErr(e instanceof Error ? e.message : 'Failed to load'))
+      .finally(() => setUnassignedLoading(false));
+  }, [didMode, unassigned, unassignedLoading]);
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     const token = sessionStorage.getItem('ace_token');
     if (!token) return;
     if (!email.trim()) return;
+    if (didMode === 'unassigned' && !pickedUnassignedDid) {
+      setResult({ ok: false, error: 'Pick an unassigned number from the dropdown first.' });
+      return;
+    }
     setSubmitting(true);
     setResult(null);
     try {
@@ -2016,7 +2045,9 @@ function AutoProvisionUserModal({
         email: email.trim(),
         firstName: firstName.trim() || undefined,
         lastName: lastName.trim() || undefined,
-        newDidAreaCode: areaCode.trim() || undefined,
+        didMode,
+        newDidAreaCode: didMode === 'new' && areaCode.trim() ? areaCode.trim() : undefined,
+        unassignedDidNumber: didMode === 'unassigned' ? pickedUnassignedDid : undefined,
         isAdmin: makeAdmin,
         sendEmail,
       });
@@ -2081,21 +2112,99 @@ function AutoProvisionUserModal({
                   />
                 </label>
               </div>
-              <label className="fav-modal-field" style={{ marginTop: 8 }}>
-                <span className="fav-modal-label">DID area code (3 digits)</span>
-                <input
-                  type="text"
-                  inputMode="numeric"
-                  pattern="\d{3}"
-                  maxLength={3}
-                  className="fav-modal-input"
-                  placeholder="732"
-                  value={areaCode}
-                  onChange={(e) => setAreaCode(e.target.value.replace(/[^\d]/g, '').slice(0, 3))}
-                  style={{ maxWidth: 110 }}
-                />
-                <span className="muted small">Defaults to 732 if blank.</span>
-              </label>
+              {/* Phone number — purchase new OR pick from unassigned ACE inventory */}
+              <fieldset className="fav-modal-field" style={{ marginTop: 12, border: 'none', padding: 0 }}>
+                <legend className="fav-modal-label" style={{ marginBottom: 6 }}>Phone number</legend>
+
+                <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', marginBottom: 6 }}>
+                  <input
+                    type="radio"
+                    name="autoProvisionDidMode"
+                    checked={didMode === 'new'}
+                    onChange={() => setDidMode('new')}
+                    style={{ marginTop: 4 }}
+                  />
+                  <span>
+                    <strong>Purchase a new DID</strong>
+                    <div className="muted small">
+                      Telnyx buys a fresh local US number (~$0.45 setup + $0.45/mo).
+                    </div>
+                    {didMode === 'new' && (
+                      <div style={{ marginTop: 6 }}>
+                        <label className="muted small" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                          Area code:
+                          <input
+                            type="text"
+                            inputMode="numeric"
+                            pattern="\d{3}"
+                            maxLength={3}
+                            className="fav-modal-input"
+                            placeholder="732"
+                            value={areaCode}
+                            onChange={(e) => setAreaCode(e.target.value.replace(/[^\d]/g, '').slice(0, 3))}
+                            style={{ maxWidth: 90 }}
+                          />
+                          <span>(defaults to 732)</span>
+                        </label>
+                      </div>
+                    )}
+                  </span>
+                </label>
+
+                <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+                  <input
+                    type="radio"
+                    name="autoProvisionDidMode"
+                    checked={didMode === 'unassigned'}
+                    onChange={() => setDidMode('unassigned')}
+                    style={{ marginTop: 4 }}
+                  />
+                  <span style={{ flex: 1 }}>
+                    <strong>Use an ACE number you already own</strong>
+                    <div className="muted small">
+                      Pick from numbers already in your Telnyx account that aren't routed anywhere. $0.
+                    </div>
+                    {didMode === 'unassigned' && (
+                      <div style={{ marginTop: 6 }}>
+                        {unassignedLoading && (
+                          <span className="muted small">Loading unassigned numbers…</span>
+                        )}
+                        {unassignedErr && (
+                          <span className="muted small" style={{ color: '#d70015' }}>
+                            {unassignedErr}
+                          </span>
+                        )}
+                        {unassigned && unassigned.length === 0 && !unassignedLoading && (
+                          <span className="muted small">
+                            No unassigned numbers found in your Telnyx account. Pick "Purchase a new DID" instead.
+                          </span>
+                        )}
+                        {unassigned && unassigned.length > 0 && (
+                          <>
+                            <select
+                              value={pickedUnassignedDid}
+                              onChange={(e) => setPickedUnassignedDid(e.target.value)}
+                              className="fav-modal-input"
+                              style={{ maxWidth: 320 }}
+                            >
+                              {unassigned.map((n) => (
+                                <option key={n.id} value={n.phoneNumber}>
+                                  {n.phoneNumber}
+                                  {n.regionLabel ? ` — ${n.regionLabel}` : ''}
+                                  {n.areaCode ? ` (${n.areaCode})` : ''}
+                                </option>
+                              ))}
+                            </select>
+                            <div className="muted small" style={{ marginTop: 4 }}>
+                              {unassigned.length} available
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    )}
+                  </span>
+                </label>
+              </fieldset>
 
               <label className="fav-modal-field" style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12 }}>
                 <input

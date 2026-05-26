@@ -981,7 +981,12 @@ export interface InviteNewUserInput {
   email: string;
   firstName?: string;
   lastName?: string;
+  /// 'new' (default) = purchase a fresh local DID from Telnyx (~$0.45)
+  /// 'unassigned'    = pick an ACE-owned DID that isn't routed anywhere ($0)
+  didMode?: 'new' | 'unassigned';
   newDidAreaCode?: string;
+  /// E.164 of the unassigned DID the admin picked. Required when didMode='unassigned'.
+  unassignedDidNumber?: string;
   isAdmin?: boolean;
   sendEmail?: boolean;
 }

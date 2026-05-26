@@ -265,7 +265,13 @@ export async function adminRoutes(app: FastifyInstance) {
         email: z.string().email(),
         firstName: z.string().optional(),
         lastName: z.string().optional(),
+        // 'new'        = purchase a fresh local US DID from Telnyx (~$0.45)
+        // 'unassigned' = pick an existing ACE-owned DID not routed anywhere ($0)
+        didMode: z.enum(['new', 'unassigned']).default('new'),
         newDidAreaCode: z.string().regex(/^\d{3}$/).optional(),
+        // E.164 of the unassigned DID the admin picked. Required when
+        // didMode === 'unassigned'.
+        unassignedDidNumber: z.string().optional(),
         isAdmin: z.boolean().optional(),
         sendEmail: z.boolean().default(true),
       });
@@ -273,7 +279,17 @@ export async function adminRoutes(app: FastifyInstance) {
       if (!parsed.success) {
         return reply.code(400).send({ error: 'Invalid input', details: parsed.error.flatten() });
       }
-      const { email, firstName, lastName, newDidAreaCode, isAdmin: makeAdmin, sendEmail } = parsed.data;
+      const {
+        email, firstName, lastName,
+        didMode, newDidAreaCode, unassignedDidNumber,
+        isAdmin: makeAdmin, sendEmail,
+      } = parsed.data;
+
+      if (didMode === 'unassigned' && !unassignedDidNumber) {
+        return reply.code(400).send({
+          error: 'unassignedDidNumber is required when didMode=unassigned',
+        });
+      }
       const normEmail = email.trim().toLowerCase();
 
       // Idempotency: bail early if a User with this email already exists.
@@ -304,23 +320,43 @@ export async function adminRoutes(app: FastifyInstance) {
       const connectionId = conn.data.data.id;
       step('create Telnyx Credential Connection', true);
 
-      // 2) Search for an available DID
-      const areaCode = newDidAreaCode ?? '732';
-      const search = await telnyx.searchAvailableLocal(areaCode, 5);
-      if (!search.ok || !search.data?.data?.length) {
-        step('search available DIDs', false, `No numbers available in area code ${areaCode}`);
-        return reply.code(502).send({ error: 'No DIDs available', steps });
-      }
-      const targetDid = search.data.data[0].phone_number;
-      step(`found candidate DID ${targetDid} in area ${areaCode}`, true);
+      // 2 + 3) Get a DID and route it to the new connection. Two paths:
+      //   - 'unassigned': look up an already-owned DID, assign it (no purchase)
+      //   - 'new':        search Telnyx inventory, purchase, route on order
+      let targetDid: string;
+      if (didMode === 'unassigned') {
+        const picked = unassignedDidNumber!;
+        const lookup = await telnyx.findNumberByE164(picked);
+        if (!lookup.ok || !lookup.data) {
+          step('look up unassigned DID in Telnyx', false, `Number not found: ${picked}`);
+          return reply.code(502).send({ error: 'Unassigned DID lookup failed', steps });
+        }
+        const assign = await telnyx.assignDidToConnection(lookup.data.id, connectionId);
+        if (!assign.ok) {
+          step(`assign unassigned DID ${picked}`, false, JSON.stringify(assign.error));
+          return reply.code(502).send({ error: 'Unassigned DID assignment failed', steps });
+        }
+        targetDid = picked;
+        step(`assign unassigned DID ${picked} to new connection`, true);
+      } else {
+        // Search Telnyx inventory for a free local number in the area code.
+        const areaCode = newDidAreaCode ?? '732';
+        const search = await telnyx.searchAvailableLocal(areaCode, 5);
+        if (!search.ok || !search.data?.data?.length) {
+          step('search available DIDs', false, `No numbers available in area code ${areaCode}`);
+          return reply.code(502).send({ error: 'No DIDs available', steps });
+        }
+        targetDid = search.data.data[0].phone_number;
+        step(`found candidate DID ${targetDid} in area ${areaCode}`, true);
 
-      // 3) Purchase the DID and route to the new connection
-      const purchase = await telnyx.purchaseDid(targetDid, connectionId);
-      if (!purchase.ok || !purchase.data) {
-        step(`purchase DID ${targetDid}`, false, JSON.stringify(purchase.error));
-        return reply.code(502).send({ error: 'DID purchase failed', steps });
+        // Purchase the DID and route to the new connection (billable Telnyx call).
+        const purchase = await telnyx.purchaseDid(targetDid, connectionId);
+        if (!purchase.ok || !purchase.data) {
+          step(`purchase DID ${targetDid}`, false, JSON.stringify(purchase.error));
+          return reply.code(502).send({ error: 'DID purchase failed', steps });
+        }
+        step(`purchase DID ${targetDid} (routed to new connection)`, true);
       }
-      step(`purchase DID ${targetDid} (routed to new connection)`, true);
 
       // 4) Bind the DID to ACE's messaging profile so SMS works
       if (config.telnyxMessagingProfileId) {
