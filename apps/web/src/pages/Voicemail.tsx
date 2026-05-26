@@ -154,6 +154,33 @@ export default function Voicemail() {
     load();
   }, [load]);
 
+  // Auto-poll the list while any voicemail is still missing a transcript.
+  // Deepgram typically returns within 3-5 sec of the voicemail webhook;
+  // we poll every 4 sec for up to 60 sec, then stop. Hand-edited refresh
+  // (e.g. switching tabs and back) restarts the loop naturally via the
+  // load() effect above.
+  useEffect(() => {
+    const missing = items.some((vm) => !vm.transcription);
+    if (!missing) return;
+    let cancelled = false;
+    let elapsed = 0;
+    const id = window.setInterval(() => {
+      elapsed += 4000;
+      if (elapsed > 60_000 || cancelled) {
+        window.clearInterval(id);
+        return;
+      }
+      // Only refetch — don't show the loading spinner, this is silent.
+      const token = sessionStorage.getItem('ace_token');
+      if (!token) return;
+      getVoicemails(token).then(setItems).catch(() => undefined);
+    }, 4000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, [items]);
+
   async function handleExpand(vm: VoicemailRecord) {
     const next = expandedId === vm.id ? null : vm.id;
     setExpandedId(next);
@@ -577,10 +604,15 @@ function VoicemailRow({
               ))}
             </div>
           </div>
-          {vm.transcription && (
+          {vm.transcription ? (
             <p className="vm-transcript">
               <span className="vm-transcript-tag">Transcript</span>
               {vm.transcription}
+            </p>
+          ) : (
+            <p className="vm-transcript vm-transcript-pending">
+              <span className="vm-transcript-tag">Transcript</span>
+              <em style={{ opacity: 0.7 }}>Transcribing…</em>
             </p>
           )}
         </div>

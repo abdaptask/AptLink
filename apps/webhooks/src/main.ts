@@ -4,6 +4,7 @@ import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import formbody from '@fastify/formbody';
 import { prisma } from '@ace/db';
+import { transcribeAndUpdateVoicemail } from './deepgram.js';
 
 const SERVICE_NAME = 'ace-dialer-webhooks';
 const START_TIME = new Date().toISOString();
@@ -498,7 +499,11 @@ app.post('/webhooks/telnyx/calls', async (request) => {
             fromNumber: vmFrom,
             toNumber: vmTo,
           });
-          await prisma.voicemail.create({
+          // Pre-fill transcription from Telnyx if they happen to include it
+          // (we don't pay them for it, but if it's there, use it as a head-
+          // start before our Deepgram call returns).
+          const telnyxText: string | null = payload.transcription_text ?? null;
+          const created = await prisma.voicemail.create({
             data: {
               userId: ownerUserId,
               telnyxCallId: callId,
@@ -506,14 +511,23 @@ app.post('/webhooks/telnyx/calls', async (request) => {
               toNumber: vmTo,
               recordingUrl,
               durationSeconds: Math.max(1, Math.round(durSec)),
-              transcription: payload.transcription_text ?? null,
+              transcription: telnyxText,
               receivedAt: new Date(),
             },
+            select: { id: true },
           });
           app.log.info(
-            { fromNumber: vmFrom, recordingUrl, durationSeconds: durSec },
+            { fromNumber: vmFrom, recordingUrl, durationSeconds: durSec, voicemailId: created.id },
             '[vm] voicemail saved from Telnyx Hosted Voicemail',
           );
+          // Fire-and-forget Deepgram transcription if we don't already have
+          // a transcript from Telnyx. The webhook response goes back to
+          // Telnyx within ms; Deepgram runs in the background and updates
+          // the row when done (~2-5 sec for short voicemails). UI polls
+          // until the transcription field populates.
+          if (!telnyxText) {
+            void transcribeAndUpdateVoicemail(created.id, recordingUrl);
+          }
         } catch (e) {
           app.log.error({ err: e }, '[vm] failed to write Voicemail row');
         }

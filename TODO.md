@@ -60,8 +60,9 @@ See git log + ACE_DIALER_PROJECT.md changelog for what's already shipped.
       existing User rows as their own primary on migration.
 - [ ] **Local presence picker** — "calling from" DID selector per outbound
       call. Ties directly into multi-DID. Wires through the dialer UI.
-- [ ] **Voicemail transcription** — enable in Telnyx Portal. Voicemails come
-      with text transcripts via webhook.
+- [x] ~~Voicemail transcription~~ — DONE in v0.9.5 via Deepgram (Nova-2,
+      $0.0043/min, ~$200 free credit). Webhook fires transcription async,
+      UI auto-polls for updates.
 - [ ] **Internal user-to-user chat** (socket.io) — frontend done, backend done,
       needs Redis adapter for multi-instance Render (see Infra).
 
