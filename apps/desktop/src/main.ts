@@ -580,8 +580,17 @@ function initAutoUpdater() {
     }
   });
   autoUpdater.on('error', (err) => {
-    console.warn('[auto-update] error', err?.message ?? err);
-    lastUpdateState = { phase: 'error', message: err?.message ?? String(err) };
+    const message = err?.message ?? String(err);
+    console.warn('[auto-update] error', message);
+    lastUpdateState = { phase: 'error', message };
+    // v0.9.1 — also forward to the renderer so UpdateBanner can surface
+    // the failure. Previously we only updated the mirror, so the banner
+    // sat silently on "Downloading 100%" forever when (e.g.) the Windows
+    // installer was rejected because it isn't code-signed yet, or when
+    // GitHub returned a 403 mid-download.
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('ace:update-error', { message });
+    }
   });
 
   // First check shortly after launch (give the renderer a moment to mount

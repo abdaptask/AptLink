@@ -23,6 +23,10 @@ interface AceElectronBridge {
   onUpdateAvailable?: (cb: (info: { version: string | null }) => void) => () => void;
   onUpdateProgress?: (cb: (info: { percent: number }) => void) => () => void;
   onUpdateDownloaded?: (cb: (info: { version: string | null }) => void) => () => void;
+  // v0.9.1 — surfaced when electron-updater errors out (download failed,
+  // installer rejected, GitHub 403, etc.). Optional so older preloads
+  // (without the bridge) still type-check.
+  onUpdateError?: (cb: (info: { message: string }) => void) => () => void;
   installUpdate?: () => Promise<boolean>;
   checkForUpdates?: () => Promise<{ state: string; version?: string | null; message?: string }>;
   // v0.8.8 — state-mirror query for the auto-update banner to rehydrate

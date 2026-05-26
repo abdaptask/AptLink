@@ -87,6 +87,15 @@ contextBridge.exposeInMainWorld('ace', {
     ipcRenderer.on('ace:update-downloaded', handler);
     return () => ipcRenderer.removeListener('ace:update-downloaded', handler);
   },
+  // v0.9.1 — auto-update failure event. Fires for any electron-updater
+  // 'error' (download failed, installer rejected by Windows, GitHub 403,
+  // etc.). UpdateBanner subscribes so the user actually SEES the failure
+  // instead of staring at a stuck "Downloading 100%" forever.
+  onUpdateError: (cb: (info: { message: string }) => void) => {
+    const handler = (_e: unknown, info: { message: string }) => cb(info);
+    ipcRenderer.on('ace:update-error', handler);
+    return () => ipcRenderer.removeListener('ace:update-error', handler);
+  },
   // v0.8.8 — query the current auto-update state on demand. Closes the
   // "stuck at 100%" gap where the UpdateBanner mounted AFTER electron-
   // updater already fired the one-shot 'update-downloaded' event. The

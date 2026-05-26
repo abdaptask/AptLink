@@ -4160,6 +4160,34 @@ button.call-pill-info:hover { background: rgba(255, 255, 255, 0.05); }
   .update-banner { padding: 8px 10px; gap: 6px; }
   .update-banner-versions { display: none; }
   .update-banner-cta span { display: none; }
+  /* Exception: in the error state the "versions" span is actually the error
+     MESSAGE — keep it visible so the user knows what failed. */
+  .update-banner.update-banner--error .update-banner-versions { display: inline; }
+}
+
+/* v0.9.1 — error variant. Used when electron-updater reports a failed
+   download or rejected installer (Windows code-signing, GitHub 403, etc.).
+   Amber/red palette so users can tell at a glance this isn't a normal
+   "update ready" pill. */
+.update-banner.update-banner--error {
+  background: linear-gradient(90deg,
+    rgba(245, 158, 11, 0.18),
+    rgba(220, 38, 38, 0.16));
+  border-bottom-color: rgba(220, 38, 38, 0.45);
+}
+.update-banner.update-banner--error .update-banner-icon {
+  background: rgba(220, 38, 38, 0.22);
+  color: #f97316;
+}
+[data-theme="light"] .update-banner.update-banner--error {
+  background: linear-gradient(90deg,
+    rgba(245, 158, 11, 0.14),
+    rgba(220, 38, 38, 0.10));
+  border-bottom-color: rgba(220, 38, 38, 0.35);
+}
+[data-theme="light"] .update-banner.update-banner--error .update-banner-icon {
+  background: rgba(220, 38, 38, 0.16);
+  color: #c2410c;
 }
 
 /* ============ ADMIN USERS PANEL + AUDIT LOG (#168, #179, #180) ============ */
