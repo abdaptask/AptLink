@@ -404,7 +404,10 @@ export async function adminRoutes(app: FastifyInstance) {
         email: normEmail,
         didNumber: targetDid,
         sipUsername,
-        areaCode,
+        didMode,
+        // For 'new', record the area code we used; for 'unassigned' it'd
+        // just be derived from the DID, so log undefined.
+        areaCode: didMode === 'new' ? (newDidAreaCode ?? '732') : undefined,
       });
 
       // 6) Send welcome email
