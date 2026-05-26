@@ -2374,17 +2374,33 @@ export async function adminRoutes(app: FastifyInstance) {
       // Only meaningful when we're keeping the user's existing Pulse
       // connection (credsMode=existing). If credsMode=new, the new
       // connection already has the ACE webhook from createCredentialConnection.
+      //
+      // v0.9.10 — "Pulse connection not found" is NOT a real failure here.
+      // The user's calls + SMS already route to ACE via the DID's
+      // connection_id + messaging_profile_id (set in Step 2 / 2.5). The
+      // webhook repoint is only relevant if the OLD Pulse connection is
+      // still listed in Telnyx and stealing events. If it's not there,
+      // nothing to do — log as a clean success ("skipped — no stale
+      // Pulse connection") instead of a scary red X.
       if (repointWebhook) {
         if (credsMode === 'new') {
           step('webhook already on ACE (new connection)', true);
           webhookRepointed = true;
         } else if (!pending.pulseConnectionName) {
-          step('repoint webhook to ACE', false, 'pulseConnectionName missing in CSV row');
+          step(
+            'webhook repoint skipped — no Pulse connection name in CSV row (calls + SMS still route to ACE)',
+            true,
+          );
         } else {
           const conn = await telnyx.findConnectionByName(pending.pulseConnectionName);
           if (!conn.ok || !conn.data) {
-            step('look up Pulse connection for webhook repoint', false,
-              `Connection not found: ${pending.pulseConnectionName}`);
+            // Pulse connection isn't in Telnyx — probably already removed,
+            // renamed, or the CSV name was a placeholder. Either way, no
+            // repoint needed because there's no stale webhook to flip.
+            step(
+              `webhook repoint skipped — Pulse connection "${pending.pulseConnectionName}" not in Telnyx (likely already migrated; calls + SMS still route to ACE)`,
+              true,
+            );
           } else {
             const patch = await telnyx.patchConnectionWebhook(conn.data.id, config.telnyxWebhookUrl);
             if (patch.ok) {
