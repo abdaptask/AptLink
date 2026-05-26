@@ -308,10 +308,20 @@ export async function adminRoutes(app: FastifyInstance) {
       }
       const normEmail = email.trim().toLowerCase();
 
-      // Idempotency: bail early if a User with this email already exists.
-      const dup = await prisma.user.findUnique({ where: { email: normEmail }, select: { id: true } });
-      if (dup) {
-        return reply.code(409).send({ error: 'A user with this email already exists.' });
+      // v0.9.10 — accept soft-deactivated rows as recyclable. After a hard-
+      // delete that fell back to soft-deactivate (FK constraints kept the
+      // row alive for history), the email is still taken. Without this we'd
+      // refuse to re-invite and admin couldn't recover. If the existing row
+      // is ACTIVE, refuse — that's a real collision.
+      const dup = await prisma.user.findUnique({
+        where: { email: normEmail },
+        select: { id: true, isActive: true },
+      });
+      const recycleExistingUserId = dup && !dup.isActive ? dup.id : null;
+      if (dup && dup.isActive) {
+        return reply.code(409).send({
+          error: 'A user with this email already exists and is active. Deactivate them first if you want to replace them.',
+        });
       }
 
       const steps: Array<{ step: string; ok: boolean; error?: string }> = [];
@@ -437,26 +447,54 @@ export async function adminRoutes(app: FastifyInstance) {
           'Skipped: TELNYX_MESSAGING_PROFILE_ID env var not set');
       }
 
-      // 5) Create the User row
-      const created = await prisma.user.create({
-        data: {
-          email: normEmail,
-          firstName: firstName ?? null,
-          lastName: lastName ?? null,
-          sipUsername,
-          sipPassword,
-          didNumber: targetDid,
-          isAdmin: !!makeAdmin,
-          isActive: true,
-          provider: 'microsoft',
-        },
-        select: {
-          id: true, email: true, firstName: true, lastName: true,
-          isAdmin: true, isActive: true, provider: true,
-          sipUsername: true, didNumber: true, lastLoginAt: true, createdAt: true,
-        },
-      });
-      step('create User row in database', true);
+      // 5) Create OR recycle the User row.
+      // v0.9.10 — if recycleExistingUserId is set (a soft-deactivated row
+      // exists for this email), UPDATE that row instead of failing on the
+      // unique-email constraint. This lets admins re-invite users whose
+      // history blocked the hard delete (Postgres FK on calls/messages/etc).
+      const userSelect = {
+        id: true, email: true, firstName: true, lastName: true,
+        isAdmin: true, isActive: true, provider: true,
+        sipUsername: true, didNumber: true, lastLoginAt: true, createdAt: true,
+      };
+      const created = recycleExistingUserId
+        ? await prisma.user.update({
+            where: { id: recycleExistingUserId },
+            data: {
+              firstName: firstName ?? null,
+              lastName: lastName ?? null,
+              sipUsername,
+              sipPassword,
+              didNumber: targetDid,
+              isAdmin: !!makeAdmin,
+              isActive: true,
+              provider: 'microsoft',
+              // Clear lastLoginAt so the "Accepted" status only triggers
+              // when the recycled user actually signs in again.
+              lastLoginAt: null,
+            },
+            select: userSelect,
+          })
+        : await prisma.user.create({
+            data: {
+              email: normEmail,
+              firstName: firstName ?? null,
+              lastName: lastName ?? null,
+              sipUsername,
+              sipPassword,
+              didNumber: targetDid,
+              isAdmin: !!makeAdmin,
+              isActive: true,
+              provider: 'microsoft',
+            },
+            select: userSelect,
+          });
+      step(
+        recycleExistingUserId
+          ? `recycle deactivated User row #${recycleExistingUserId} (re-activated)`
+          : 'create User row in database',
+        true,
+      );
 
       await recordAudit(actor.sub, 'user.auto_provisioned', created.id, {
         email: normEmail,
@@ -2102,15 +2140,18 @@ export async function adminRoutes(app: FastifyInstance) {
       // Prisma unique constraint at the very end. Same check for sipUsername
       // when credsMode=existing, since reusing the Pulse extension as the
       // sipUsername would collide too.
+      // v0.9.10 — allow recycling soft-deactivated rows so admins can
+      // re-invite users whose history blocked the hard delete.
       const dupEmail = await prisma.user.findUnique({
         where: { email: pending.email.toLowerCase() },
-        select: { id: true, email: true, didNumber: true },
+        select: { id: true, email: true, didNumber: true, isActive: true },
       });
-      if (dupEmail) {
+      const recyclePendingUserId = dupEmail && !dupEmail.isActive ? dupEmail.id : null;
+      if (dupEmail && dupEmail.isActive) {
         return reply.code(409).send({
           error:
             `A User row already exists for ${pending.email} ` +
-            `(id ${dupEmail.id}). Delete that user first, or skip this row.`,
+            `(id ${dupEmail.id}) and is active. Delete that user first, or skip this row.`,
           existingUserId: dupEmail.id,
         });
       }
@@ -2369,24 +2410,46 @@ export async function adminRoutes(app: FastifyInstance) {
 
       let createdUser: { id: number; email: string; firstName: string | null; didNumber: string | null };
       try {
-        createdUser = await prisma.user.create({
-          data: {
-            email: pending.email.toLowerCase(),
-            firstName: pending.firstName,
-            lastName: pending.lastName,
-            sipUsername,
-            sipPassword,
-            didNumber: didE164,
-            isAdmin: false,
-            isActive: true,
-            provider: 'microsoft',
-            passwordHash: null,
-          },
-          select: { id: true, email: true, firstName: true, didNumber: true },
-        });
-        step('create User row', true);
+        // v0.9.10 — recycle the soft-deactivated row if we found one earlier.
+        // Lets admins re-invite users whose history blocked hard delete.
+        createdUser = recyclePendingUserId
+          ? await prisma.user.update({
+              where: { id: recyclePendingUserId },
+              data: {
+                firstName: pending.firstName,
+                lastName: pending.lastName,
+                sipUsername,
+                sipPassword,
+                didNumber: didE164,
+                isActive: true,
+                provider: 'microsoft',
+                lastLoginAt: null,
+              },
+              select: { id: true, email: true, firstName: true, didNumber: true },
+            })
+          : await prisma.user.create({
+              data: {
+                email: pending.email.toLowerCase(),
+                firstName: pending.firstName,
+                lastName: pending.lastName,
+                sipUsername,
+                sipPassword,
+                didNumber: didE164,
+                isAdmin: false,
+                isActive: true,
+                provider: 'microsoft',
+                passwordHash: null,
+              },
+              select: { id: true, email: true, firstName: true, didNumber: true },
+            });
+        step(
+          recyclePendingUserId
+            ? `recycle deactivated User row #${recyclePendingUserId} (re-activated)`
+            : 'create User row',
+          true,
+        );
       } catch (e) {
-        step('create User row', false, e instanceof Error ? e.message : String(e));
+        step('create/recycle User row', false, e instanceof Error ? e.message : String(e));
         return reply.code(500).send({
           error: 'User creation failed (likely duplicate email or sipUsername)',
           steps,
