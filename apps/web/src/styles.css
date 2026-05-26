@@ -5567,40 +5567,67 @@ body::-webkit-scrollbar { display: none; }
    modals (invite, result, upload) so no button is ever naked. */
 .pending-invite-modal .modal-footer,
 .pending-result-modal .modal-footer,
-.pending-upload-modal .modal-footer { display: flex; gap: 0.6rem; justify-content: flex-end; padding: 1rem 1.25rem 1.25rem; }
+.pending-upload-modal .modal-footer,
+.pending-delete-modal .modal-footer,
+.pending-edit-modal .modal-footer { display: flex; gap: 0.6rem; justify-content: flex-end; padding: 1rem 1.25rem 1.25rem; }
 .pending-invite-modal .modal-footer .settings-btn,
 .pending-invite-modal .modal-footer .settings-btn-secondary,
 .pending-result-modal .modal-footer .settings-btn,
 .pending-result-modal .modal-footer .settings-btn-secondary,
 .pending-upload-modal .modal-footer .settings-btn,
-.pending-upload-modal .modal-footer .settings-btn-secondary {
+.pending-upload-modal .modal-footer .settings-btn-secondary,
+.pending-delete-modal .modal-footer .settings-btn,
+.pending-delete-modal .modal-footer .settings-btn-secondary,
+.pending-edit-modal .modal-footer .settings-btn,
+.pending-edit-modal .modal-footer .settings-btn-secondary {
   display: inline-flex; align-items: center; gap: 0.45rem;
   padding: 0.6rem 1.1rem; border-radius: 8px;
   font-size: 0.88rem; font-weight: 600; cursor: pointer; line-height: 1;
   transition: background 0.12s, border-color 0.12s;
 }
 .pending-invite-modal .modal-footer .settings-btn-secondary,
-.pending-result-modal .modal-footer .settings-btn-secondary {
+.pending-result-modal .modal-footer .settings-btn-secondary,
+.pending-delete-modal .modal-footer .settings-btn-secondary,
+.pending-edit-modal .modal-footer .settings-btn-secondary {
   background: transparent; color: var(--text, #1a1a1a);
   border: 1px solid rgba(0,0,0,0.18);
 }
 .pending-invite-modal .modal-footer .settings-btn-secondary:hover,
-.pending-result-modal .modal-footer .settings-btn-secondary:hover { background: rgba(0,0,0,0.05); }
+.pending-result-modal .modal-footer .settings-btn-secondary:hover,
+.pending-delete-modal .modal-footer .settings-btn-secondary:hover,
+.pending-edit-modal .modal-footer .settings-btn-secondary:hover { background: rgba(0,0,0,0.05); }
 [data-theme="dark"] .pending-invite-modal .modal-footer .settings-btn-secondary,
-[data-theme="dark"] .pending-result-modal .modal-footer .settings-btn-secondary {
+[data-theme="dark"] .pending-result-modal .modal-footer .settings-btn-secondary,
+[data-theme="dark"] .pending-delete-modal .modal-footer .settings-btn-secondary,
+[data-theme="dark"] .pending-edit-modal .modal-footer .settings-btn-secondary {
   color: #fff; border-color: rgba(255,255,255,0.18);
 }
 [data-theme="dark"] .pending-invite-modal .modal-footer .settings-btn-secondary:hover,
-[data-theme="dark"] .pending-result-modal .modal-footer .settings-btn-secondary:hover {
+[data-theme="dark"] .pending-result-modal .modal-footer .settings-btn-secondary:hover,
+[data-theme="dark"] .pending-delete-modal .modal-footer .settings-btn-secondary:hover,
+[data-theme="dark"] .pending-edit-modal .modal-footer .settings-btn-secondary:hover {
   background: rgba(255,255,255,0.06);
 }
 .pending-invite-modal .modal-footer button:disabled,
-.pending-result-modal .modal-footer button:disabled { opacity: 0.5; cursor: not-allowed; }
-.pending-result-modal .modal-footer .settings-btn {
+.pending-result-modal .modal-footer button:disabled,
+.pending-delete-modal .modal-footer button:disabled,
+.pending-edit-modal .modal-footer button:disabled { opacity: 0.5; cursor: not-allowed; }
+.pending-result-modal .modal-footer .settings-btn,
+.pending-delete-modal .modal-footer .settings-btn,
+.pending-edit-modal .modal-footer .settings-btn {
   background: #0a84ff; color: #fff; border: 1px solid #0a84ff;
 }
-.pending-result-modal .modal-footer .settings-btn:hover {
+.pending-result-modal .modal-footer .settings-btn:hover,
+.pending-delete-modal .modal-footer .settings-btn:hover,
+.pending-edit-modal .modal-footer .settings-btn:hover {
   background: #0c6fd6; border-color: #0c6fd6;
+}
+/* Destructive button override — red, not blue. */
+.pending-delete-modal .modal-footer .pending-delete-confirm-btn {
+  background: #d70015; border-color: #d70015;
+}
+.pending-delete-modal .modal-footer .pending-delete-confirm-btn:hover {
+  background: #b00010; border-color: #b00010;
 }
 
 /* Confirm button — match the primary blue used by the Invite button in the
@@ -5686,7 +5713,9 @@ body::-webkit-scrollbar { display: none; }
 .pending-upload-modal { max-width: 720px; }
 .pending-upload-modal .modal-header,
 .pending-invite-modal .modal-header,
-.pending-result-modal .modal-header {
+.pending-result-modal .modal-header,
+.pending-delete-modal .modal-header,
+.pending-edit-modal .modal-header {
   display: flex; align-items: center; justify-content: space-between;
   gap: 0.75rem; padding: 1.1rem 1.25rem 0.85rem;
   border-bottom: 1px solid rgba(0,0,0,0.06);

@@ -265,19 +265,24 @@ export default function Settings() {
   const { section } = useParams<{ section?: string }>();
   const navigate = useNavigate();
 
-  // Reset scroll to top whenever the user switches sections. The ACTUAL
-  // scroll container is .app-content (set in Layout.tsx — overflow-y: auto),
-  // NOT the inner pane/pane-body. The earlier v0.9.3 fix targeted children
-  // that don't scroll, which is why users still saw blank space when
-  // switching sections. Reset .app-content too (and the others as belt-
-  // and-suspenders for any future layout change).
+  // Reset scroll to top whenever the user switches sections.
+  // Real scroll container is .app-content (Layout.tsx has overflow-y: auto).
+  // v0.9.9 — fire THREE times: immediate, after rAF, and after 50ms timeout.
+  // Some section components (Reports, Users, Audit) do their own fetch+render
+  // that re-anchors scroll position; the delayed attempts catch those.
   const paneBodyRef = useRef<HTMLDivElement | null>(null);
   const paneRef = useRef<HTMLElement | null>(null);
   useEffect(() => {
-    document.querySelector('.app-content')?.scrollTo({ top: 0, left: 0 });
-    paneBodyRef.current?.scrollTo({ top: 0, left: 0 });
-    paneRef.current?.scrollTo({ top: 0, left: 0 });
-    window.scrollTo({ top: 0, left: 0 });
+    const scrollEverything = () => {
+      document.querySelector('.app-content')?.scrollTo({ top: 0, left: 0 });
+      paneBodyRef.current?.scrollTo({ top: 0, left: 0 });
+      paneRef.current?.scrollTo({ top: 0, left: 0 });
+      window.scrollTo({ top: 0, left: 0 });
+    };
+    scrollEverything();                              // immediate
+    requestAnimationFrame(scrollEverything);         // after next paint
+    const t = window.setTimeout(scrollEverything, 50); // after async render settles
+    return () => window.clearTimeout(t);
   }, [section]);
 
   // Redirect /settings → /settings/<default>
@@ -1688,6 +1693,10 @@ function UsersAdminSection() {
   const [search, setSearch] = useState('');
   // v0.9.8 — Hard-delete modal target. null = closed.
   const [hardDeleteTarget, setHardDeleteTarget] = useState<AdminUserRow | null>(null);
+  // v0.9.9 — Hide deactivated users by default (so "delete" feels like
+  // delete even when FK constraints force soft-deactivate). Admin can
+  // toggle to see the full list.
+  const [showInactive, setShowInactive] = useState(false);
 
   function load() {
     const token = sessionStorage.getItem('ace_token');
@@ -1739,8 +1748,11 @@ function UsersAdminSection() {
 
   const activeAdminCount = rows.filter((r) => r.isAdmin && r.isActive).length;
 
-  // Client-side search (matches name, email, DID).
+  // Client-side search (matches name, email, DID) + hide-inactive filter.
+  // v0.9.9: hide deactivated users by default. Soft-deactivated rows from
+  // a failed hard-delete were leaking into this list and confusing admins.
   const filtered = rows.filter((r) => {
+    if (!showInactive && !r.isActive) return false;
     const q = search.trim().toLowerCase();
     if (!q) return true;
     const name = [r.firstName, r.lastName].filter(Boolean).join(' ').toLowerCase();
@@ -1749,6 +1761,7 @@ function UsersAdminSection() {
     if ((r.didNumber ?? '').toLowerCase().includes(q)) return true;
     return false;
   });
+  const inactiveCount = rows.filter((r) => !r.isActive).length;
 
   async function handlePatch(id: number, input: Parameters<typeof updateAdminUser>[2]) {
     const token = sessionStorage.getItem('ace_token');
@@ -1804,14 +1817,26 @@ function UsersAdminSection() {
         </div>
       </div>
 
-      <div className="search-bar" style={{ marginBottom: 12 }}>
+      <div className="search-bar" style={{ marginBottom: 12, display: 'flex', alignItems: 'center', gap: 12 }}>
         <input
           type="search"
           className="search-input"
           placeholder="Search by name, email, or DID"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
+          style={{ flex: 1 }}
         />
+        {inactiveCount > 0 && (
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.82rem', whiteSpace: 'nowrap', cursor: 'pointer' }}>
+            <input
+              type="checkbox"
+              checked={showInactive}
+              onChange={(e) => setShowInactive(e.target.checked)}
+              style={{ margin: 0 }}
+            />
+            Show {inactiveCount} deactivated
+          </label>
+        )}
       </div>
 
       {error && <div className="error" style={{ marginBottom: 12 }}>{error}</div>}
