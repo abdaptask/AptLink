@@ -155,18 +155,19 @@ export default function Voicemail() {
   }, [load]);
 
   // Auto-poll the list while any voicemail is still missing a transcript.
-  // Deepgram typically returns within 3-5 sec of the voicemail webhook;
-  // we poll every 4 sec for up to 60 sec, then stop. Hand-edited refresh
-  // (e.g. switching tabs and back) restarts the loop naturally via the
-  // load() effect above.
+  // v0.9.15: tightened from 4s → 2s polling for snappier perceived latency,
+  // extended timeout from 60s → 120s to cover Deepgram retries (deepgram.ts
+  // now retries once after 3s if the first call fails) + Telnyx CDN delay
+  // on freshly-recorded files. Hand-edited refresh (switching tabs and
+  // back) restarts the loop naturally via the load() effect above.
   useEffect(() => {
     const missing = items.some((vm) => !vm.transcription);
     if (!missing) return;
     let cancelled = false;
     let elapsed = 0;
     const id = window.setInterval(() => {
-      elapsed += 4000;
-      if (elapsed > 60_000 || cancelled) {
+      elapsed += 2000;
+      if (elapsed > 120_000 || cancelled) {
         window.clearInterval(id);
         return;
       }
@@ -174,7 +175,7 @@ export default function Voicemail() {
       const token = sessionStorage.getItem('ace_token');
       if (!token) return;
       getVoicemails(token).then(setItems).catch(() => undefined);
-    }, 4000);
+    }, 2000);
     return () => {
       cancelled = true;
       window.clearInterval(id);
