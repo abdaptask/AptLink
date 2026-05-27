@@ -24,6 +24,7 @@ import bcrypt from 'bcryptjs';
 import { config } from '../config.js';
 import * as telnyx from '../telnyx/numbers.js';
 import { sendWelcomeEmail } from '../email/sendgrid.js';
+import { recordAudit } from '../lib/audit.js';
 
 interface JwtPayload {
   sub: number;
@@ -68,27 +69,8 @@ function publicUser(u: {
 
 // Audit helper — best-effort. We never want an audit-log write to fail the
 // admin action itself, so log + swallow.
-async function recordAudit(
-  actorUserId: number,
-  action: string,
-  targetUserId: number | null,
-  metadata: Record<string, unknown> | null,
-): Promise<void> {
-  try {
-    await prisma.auditLog.create({
-      data: {
-        actorUserId,
-        action,
-        targetUserId,
-        // Prisma's JSON column accepts undefined (NULL) or a value, NOT a
-        // bare null literal — that requires Prisma.JsonNull. Coerce.
-        metadata: (metadata ?? undefined) as object | undefined,
-      },
-    });
-  } catch (err) {
-    console.warn('[audit] failed to write audit entry', { action, err });
-  }
-}
+// v0.10.0 — `recordAudit` moved to ../lib/audit.ts so non-admin routes
+// (specifically /me/active-did and friends) can write audit entries too.
 
 const InviteSchema = z.object({
   email: z.string().email(),

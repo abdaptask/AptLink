@@ -27,6 +27,7 @@ import {
 } from '../api';
 import { useSip } from '../contexts/SipContext';
 import { useJobDivaContact, getCachedJobDivaName } from '../hooks/useJobDivaContact';
+import LineBadge from '../components/LineBadge';
 import { formatPhone } from '../lib/phone';
 import { getFavoriteName } from '../lib/userPrefs';
 
@@ -527,7 +528,12 @@ function VoicemailRow({
         <div className="vm-left">
           {!selectMode && unread && <span className="vm-dot" aria-label="Unread" />}
           <div className="vm-text">
-            <div className="vm-number">{label}</div>
+            <div className="vm-number">
+              {label}
+              {/* v0.10.0 Task 5 — which of the user's DIDs this voicemail
+                  landed on. Hidden when the user has only 1 DID. */}
+              <LineBadge userDid={vm.userDid} />
+            </div>
             <div className="vm-meta">
               {formatTime(vm.receivedAt)}
               {displaySeconds > 0 && ` · ${formatDuration(Math.round(displaySeconds))}`}

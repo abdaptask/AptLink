@@ -27,6 +27,7 @@ import {
   markThreadVisited,
 } from '../lib/userPrefs';
 import { formatPhone } from '../lib/phone';
+import LineBadge from '../components/LineBadge';
 
 function formatNumber(raw: string): string {
   return formatPhone(raw);
@@ -446,6 +447,14 @@ function ThreadDetail({ number, onBack }: ThreadDetailProps) {
         </button>
         <div className="thread-header-name">
           {displayName}
+          {/* v0.10.0 Task 5 — Line badge in the thread header. Use the
+              most-recent message's userDid since that's the line the
+              user is currently active on for this contact. In the
+              normal case all messages in a thread share the same DID. */}
+          {(() => {
+            const lastWithDid = [...messages].reverse().find((m) => m.userDid);
+            return <LineBadge userDid={lastWithDid?.userDid} variant="header" />;
+          })()}
           {displayName !== formatNumber(number) && (
             <span className="thread-header-sub">{formatNumber(number)}</span>
           )}
@@ -917,7 +926,12 @@ function ThreadRow({
     >
       {unread && <span className="thread-unread-dot" aria-label="Unread message" />}
       <div className="thread-text">
-        <div className="thread-name">{label}</div>
+        <div className="thread-name">
+          {label}
+          {/* v0.10.0 Task 5 — which of the user's DIDs this thread's
+              most-recent message landed on. Hidden when single-DID. */}
+          <LineBadge userDid={thread.userDid} />
+        </div>
         <div className="thread-preview">
           {thread.direction === 'outbound' ? 'You: ' : ''}
           {thread.body || (thread.mediaUrls?.length ? '\u{1F4CE} attachment' : '')}

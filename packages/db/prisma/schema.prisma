@@ -123,16 +123,13 @@ model UserDid {
   /// bound to. Cached for the same reason as telnyxNumberId.
   connectionId    String?  @map("connection_id")
   /// Display label shown in the dialer dropdown + on inbound rows.
-  /// e.g. "Main", "Sales", "Personal". Defaults to "Line" so a DID added
-  /// without a label still renders sensibly.
+  /// e.g. "Main", "Sales", "Personal". Defaults to "Line".
   label           String   @default("Line")
   /// Hex color for the inbound-DID tag pill that renders in Recents /
-  /// Messages / Voicemail. Default = ACE blue; admin UI offers a small
-  /// palette of distinct colors when adding/editing a DID.
+  /// Messages / Voicemail. Default = ACE blue.
   colorHex        String   @default("#3b82f6") @map("color_hex")
   /// Exactly one UserDid per user should have isDefault=true. Enforced
-  /// in application code at the API layer; not a partial-unique index
-  /// (would require Postgres-specific Prisma extensions).
+  /// in application code at the API layer.
   isDefault       Boolean  @default(false) @map("is_default")
   /// FUTURE (Pillar 3) — non-null binds this DID's inbound to a RingGroup
   /// instead of routing to the user's SIP credential.
@@ -142,6 +139,13 @@ model UserDid {
   ivrMenuId       Int?     @map("ivr_menu_id")
   createdAt       DateTime @default(now()) @map("created_at")
   updatedAt       DateTime @updatedAt      @map("updated_at")
+
+  /// v0.10.0 Task 5 — reverse relations for inbound DID flagging.
+  /// Call/Message/Voicemail rows reference this UserDid via userDidId
+  /// to surface a "line badge" in Recents / Messages / Voicemail.
+  calls           Call[]
+  messages        Message[]
+  voicemails      Voicemail[]
 
   @@index([userId])
   @@index([ringGroupId])
@@ -212,10 +216,17 @@ model Call {
   hangupCause     String?   @map("hangup_cause")
   hangupSource    String?   @map("hangup_source")
   recordingUrl    String?   @map("recording_url")
+  /// v0.10.0 — Which of the user's DIDs this call landed on (inbound)
+  /// or was placed from (outbound). NULL for legacy rows pre-backfill
+  /// or for users that don't yet have any UserDid rows. Drives the line
+  /// badge ("Sales", "Main") rendered on Recents rows in the UI.
+  userDidId       Int?      @map("user_did_id")
+  userDid         UserDid?  @relation(fields: [userDidId], references: [id], onDelete: SetNull)
   createdAt       DateTime  @default(now()) @map("created_at")
   updatedAt       DateTime  @updatedAt      @map("updated_at")
 
   @@index([userId, startedAt])
+  @@index([userDidId])
   @@map("calls")
 }
 
@@ -237,11 +248,17 @@ model Message {
   errors           Json?
   sentAt           DateTime? @map("sent_at")
   deliveredAt      DateTime? @map("delivered_at")
+  /// v0.10.0 — Which of the user's DIDs this message landed on (inbound)
+  /// or was sent from (outbound). NULL for legacy rows pre-backfill.
+  /// See Call.userDidId for the design rationale.
+  userDidId        Int?      @map("user_did_id")
+  userDid          UserDid?  @relation(fields: [userDidId], references: [id], onDelete: SetNull)
   createdAt        DateTime  @default(now()) @map("created_at")
   updatedAt        DateTime  @updatedAt      @map("updated_at")
 
   @@index([userId, threadKey, createdAt])
   @@index([userId, createdAt])
+  @@index([userDidId])
   @@map("messages")
 }
 
@@ -262,10 +279,16 @@ model Voicemail {
   /// When the caller hung up after leaving the message.
   receivedAt      DateTime  @map("received_at")
   listenedAt      DateTime? @map("listened_at")
+  /// v0.10.0 — Which of the user's DIDs this voicemail came in on.
+  /// Voicemails are inbound-only by definition; we resolve via the
+  /// toNumber match. NULL for legacy rows pre-backfill.
+  userDidId       Int?      @map("user_did_id")
+  userDid         UserDid?  @relation(fields: [userDidId], references: [id], onDelete: SetNull)
   createdAt       DateTime  @default(now()) @map("created_at")
   updatedAt       DateTime  @updatedAt      @map("updated_at")
 
   @@index([userId, receivedAt])
+  @@index([userDidId])
   @@map("voicemails")
 }
 

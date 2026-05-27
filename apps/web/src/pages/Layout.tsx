@@ -26,6 +26,7 @@ import IncomingCall from '../components/IncomingCall';
 import PostDeclineReply from '../components/PostDeclineReply';
 import SmsNotifier from '../components/SmsNotifier';
 import UpdateBanner from '../components/UpdateBanner';
+import DidSwitcher from '../components/DidSwitcher';
 import { useSip } from '../contexts/SipContext';
 import { ensureNotificationPermission } from '../lib/notify';
 import {
@@ -231,21 +232,29 @@ export default function Layout({ user, onLogout }: Props) {
           </div>
         </div>
 
-        <div className={`sip-status-pill ${sipPresentation.dot}`} role="status" title={`SIP: ${sipPresentation.label}${user.didNumber ? ' · ' + user.didNumber : ''}`}>
+        <div className={`sip-status-pill ${sipPresentation.dot}`} role="status" title={`SIP: ${sipPresentation.label}`}>
           <span className={`sip-status-dot ${sipPresentation.dot}`} />
           <span className="sip-status-label">{sipPresentation.label}</span>
-          {/* The user's own DID, shown right next to the status pill so
-              they always know what number is calling out / what's ringing
-              in. Falls back to nothing when no DID is provisioned yet. */}
-          {user.didNumber && (
-            <>
-              <span className="sip-status-sep" aria-hidden="true">·</span>
-              <span className="sip-status-did" title="Your phone number">
-                {formatPhone(user.didNumber)}
-              </span>
-            </>
-          )}
         </div>
+
+        {/* v0.10.0 — Multi-DID switcher. Renders the user's active phone
+            number (color swatch + label + formatted number) and a popover
+            dropdown to switch outbound caller ID when the user owns >1 DID.
+            For single-DID users, renders the same look as a static
+            display (no interactive affordance) so there's no UI change.
+            For zero-DID users (uncommon — migration backfill should have
+            populated everyone), renders nothing; the SIP status pill
+            above still indicates Online/Offline so the header isn't blank. */}
+        <DidSwitcher
+          onSwitch={(did) => {
+            // Outbound caller ID has been PATCHed on Telnyx via
+            // /me/active-did. Calls placed after this point use the new
+            // ani_override. SMS path reads User.activeUserDidId on every
+            // /messages POST, so nothing to wire client-side beyond this
+            // notification. Log purely for diagnostics.
+            console.log('[layout] active DID switched to', did.label, did.didNumber);
+          }}
+        />
 
         <div className="header-user" ref={menuRef}>
           <button

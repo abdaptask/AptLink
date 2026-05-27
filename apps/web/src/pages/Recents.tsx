@@ -6,6 +6,7 @@ import { useSip } from '../contexts/SipContext';
 import { useJobDivaContact, getCachedJobDivaName } from '../hooks/useJobDivaContact';
 import { formatPhone, toE164 } from '../lib/phone';
 import { addFavorite, isFavorite, removeFavorite, getFavoriteName } from '../lib/userPrefs';
+import LineBadge from '../components/LineBadge';
 
 function formatDuration(seconds: number): string {
   if (!seconds) return '';
@@ -457,7 +458,14 @@ function RecentRow({
         <div className="call-left">
           {callIcon(c)}
           <div className="call-text">
-            <div className="call-number">{displayName}</div>
+            <div className="call-number">
+              {displayName}
+              {/* v0.10.0 Task 5 — Line tag: which of the user's DIDs this
+                  call touched. Inbound: the DID the caller dialed.
+                  Outbound: the DID the user called from. Auto-hidden when
+                  the user owns only 1 DID. */}
+              <LineBadge userDid={c.userDid} />
+            </div>
             <div className="call-meta">
               {statusLabel(c)}
               {jd?.company ? ` · ${jd.company}` : ''}

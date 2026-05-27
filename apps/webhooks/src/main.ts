@@ -26,8 +26,9 @@ function last10(p: string | undefined | null): string {
  *   - If we have a SIP username (Telnyx puts it in sip_username for SIP
  *     events), match users.sip_username.
  *   - Otherwise compare last-10 of the candidate phone numbers (from / to)
- *     against users.did_number. Whichever side matches a known DID is the
- *     owner.
+ *     against the UserDid table. Whichever side matches a known DID gives
+ *     us BOTH the owning user_id and the specific user_did_id that was
+ *     touched (used by Task 5 to tag inbound rows with the line badge).
  *   - Fall back to FALLBACK_USER_ID if nothing matches.
  */
 async function resolveUserId(opts: {
@@ -35,29 +36,73 @@ async function resolveUserId(opts: {
   fromNumber?: string | null;
   toNumber?: string | null;
 }): Promise<number> {
-  // 1. SIP username (exact match)
+  const { userId } = await resolveUserAndDid(opts);
+  return userId;
+}
+
+/**
+ * v0.10.0 Task 5 — extended resolver that also returns which UserDid
+ * matched. Used by the inbound webhook handlers to populate
+ * Call.userDidId / Message.userDidId / Voicemail.userDidId so the UI
+ * can render a colored line badge per row.
+ *
+ * Returns:
+ *   - userId:    the owning user (or FALLBACK_USER_ID if no match)
+ *   - userDidId: the specific UserDid row matched by to_number or
+ *                from_number, or null if we fell back via SIP username
+ *                (no DID context) or no DID matched at all.
+ *
+ * Match priority for userDidId:
+ *   1. to_number  → user's INBOUND-side line (most common case)
+ *   2. from_number → user's OUTBOUND-side line (the DID they called from)
+ *
+ * Last-10-digits comparison tolerates Telnyx-vs-storage formatting drift.
+ */
+async function resolveUserAndDid(opts: {
+  sipUsername?: string | null;
+  fromNumber?: string | null;
+  toNumber?: string | null;
+}): Promise<{ userId: number; userDidId: number | null }> {
+  // 1. SIP username (exact match). Tells us the user but not which of
+  // their DIDs was touched — we resolve userDidId via to/from numbers
+  // separately below.
+  let userId: number | null = null;
   if (opts.sipUsername) {
     const u = await prisma.user.findFirst({
       where: { sipUsername: opts.sipUsername },
       select: { id: true },
     });
-    if (u) return u.id;
+    if (u) userId = u.id;
   }
-  // 2. DID match — last10 digits of either from or to.
+
+  // 2. DID match (also gives us userDidId).
+  let userDidId: number | null = null;
   const candidates = [opts.toNumber, opts.fromNumber]
     .map(last10)
     .filter((d) => d.length === 10);
   if (candidates.length > 0) {
-    const allUsersWithDid = await prisma.user.findMany({
-      where: { didNumber: { not: null } },
-      select: { id: true, didNumber: true },
+    const allDids = await prisma.userDid.findMany({
+      where: { userId: { not: null } },
+      select: { id: true, userId: true, didNumber: true },
     });
     for (const c of candidates) {
-      const match = allUsersWithDid.find((u) => last10(u.didNumber) === c);
-      if (match) return match.id;
+      const match = allDids.find((d) => last10(d.didNumber) === c);
+      if (match) {
+        userDidId = match.id;
+        // Only override userId if SIP-username didn't already resolve it.
+        // (Edge case: a user's call where to=their own DID — both routes
+        // resolve to the same userId so it doesn't matter, but in the
+        // unlikely case they diverge, trust SIP username over DID.)
+        if (userId === null) userId = match.userId ?? null;
+        break;
+      }
     }
   }
-  return FALLBACK_USER_ID;
+
+  return {
+    userId: userId ?? FALLBACK_USER_ID,
+    userDidId,
+  };
 }
 
 // Decode the client_state Telnyx echoes back on every call event. We use it
@@ -260,7 +305,11 @@ app.post('/webhooks/telnyx/calls', async (request) => {
 
     switch (event.event_type) {
       case 'call.initiated': {
-        const ownerUserId = await resolveUserId({
+        // v0.10.0 Task 5 — also resolve userDidId so the new Call row
+        // carries a line tag for the Recents badge. resolveUserAndDid
+        // returns the matched UserDid id by comparing to/from against
+        // user_dids.did_number.
+        const { userId: ownerUserId, userDidId } = await resolveUserAndDid({
           sipUsername: payload.sip_username ?? payload.client_username ?? null,
           fromNumber,
           toNumber,
@@ -290,6 +339,7 @@ app.post('/webhooks/telnyx/calls', async (request) => {
           update: {
             status: blocked ? 'blocked' : 'initiated',
             ...(callControlId ? { callControlId } : {}),
+            ...(userDidId ? { userDidId } : {}),
           },
           create: {
             userId: ownerUserId,
@@ -301,6 +351,7 @@ app.post('/webhooks/telnyx/calls', async (request) => {
             toNumber,
             status: blocked ? 'blocked' : 'initiated',
             startedAt: payload.start_time ? new Date(payload.start_time) : new Date(),
+            userDidId,
           },
         });
 
@@ -495,7 +546,10 @@ app.post('/webhooks/telnyx/calls', async (request) => {
           '[vm] duration field probe',
         );
         try {
-          const ownerUserId = await resolveUserId({
+          // v0.10.0 Task 5 — resolve userDidId for the line-badge tag.
+          // Voicemails are always inbound by definition; the DID we
+          // care about is the to_number (the line the caller dialed).
+          const { userId: ownerUserId, userDidId } = await resolveUserAndDid({
             fromNumber: vmFrom,
             toNumber: vmTo,
           });
@@ -513,6 +567,7 @@ app.post('/webhooks/telnyx/calls', async (request) => {
               durationSeconds: Math.max(1, Math.round(durSec)),
               transcription: telnyxText,
               receivedAt: new Date(),
+              userDidId,
             },
             select: { id: true },
           });
@@ -589,8 +644,12 @@ app.post('/webhooks/telnyx/sms', async (request) => {
       case 'message.received': {
         // Inbound: from = the PSTN caller, to = our DID. Route to whichever
         // user owns this DID (Phase 5.7 multi-user).
+        // v0.10.0 Task 5 — also resolve userDidId so the inbound row carries
+        // a line-tag for the UI badge.
         const threadKey = fromNumber; // the other party
-        const ownerUserId = await resolveUserId({ toNumber, fromNumber });
+        const { userId: ownerUserId, userDidId } = await resolveUserAndDid({
+          toNumber, fromNumber,
+        });
 
         // Phase 6.8 - number blocking: silently drop SMS from blocked
         // senders. We ack the webhook (Telnyx requires 200) but skip
@@ -617,6 +676,7 @@ app.post('/webhooks/telnyx/sms', async (request) => {
             mediaUrls,
             status: 'received',
             sentAt: payload.received_at ? new Date(payload.received_at) : new Date(),
+            userDidId,
           },
         });
         break;
@@ -865,7 +925,10 @@ app.post('/webhooks/telnyx/voicemail', async (request) => {
     }
 
     // Phase 5.7 — route the voicemail to the user that owns the called DID.
-    const ownerUserId = await resolveUserId({ toNumber, fromNumber });
+    // v0.10.0 Task 5 — also resolve userDidId for line-badge tagging.
+    const { userId: ownerUserId, userDidId } = await resolveUserAndDid({
+      toNumber, fromNumber,
+    });
 
     // Phase 6.12 - drop blocked voicemails. Telnyx Hosted Voicemail still
     // triggers on USER_BUSY (Telnyx Support confirmed they can't disable
@@ -889,6 +952,7 @@ app.post('/webhooks/telnyx/voicemail', async (request) => {
         durationSeconds,
         transcription: transcription ?? null,
         receivedAt,
+        userDidId,
       },
     });
 

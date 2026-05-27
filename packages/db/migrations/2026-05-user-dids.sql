@@ -1,18 +1,19 @@
 -- ============================================================================
--- v0.10.0 — Multi-DID per user (Pillar 1 of feature/multi-num-teams-routing)
+-- v0.10.0 — Multi-DID per user (Pillars 1 + Task 5 of feature/multi-num-teams-routing)
 --
--- Adds user_dids table + users.active_user_did_id pointer. Backfills one
--- user_dids row per existing user that has a did_number, marked isDefault.
--- Sets users.active_user_did_id to that row so today's outbound SMS keeps
--- working unchanged (the API will look up via the active pointer, which
--- resolves to the same number that User.did_number currently holds).
+-- This migration covers BOTH:
+--   1. The user_dids table itself + users.active_user_did_id pointer
+--      (Task 1 — sprint plan).
+--   2. The user_did_id FK columns on calls / messages / voicemails so
+--      inbound interactions can be tagged with which DID they landed on
+--      (Task 5 — inbound DID flagging).
 --
--- This migration is additive — nothing is dropped. User.did_number +
--- User.telnyx_number_id remain in place (deprecated, removed in v1.0).
+-- One migration covers both because Task 5's FK references depend on the
+-- user_dids table existing first; running them as two separate scripts
+-- works but creates an ordering trap. Combining keeps it atomic.
 --
--- Idempotent: re-running the migration is safe. The backfill INSERT uses
--- ON CONFLICT DO NOTHING on did_number, and the pointer UPDATE is a no-op
--- if active_user_did_id is already set.
+-- Idempotent: re-running is safe. Backfill INSERTs use ON CONFLICT
+-- DO NOTHING; column additions use IF NOT EXISTS.
 -- ============================================================================
 
 -- ── 1. user_dids table ──────────────────────────────────────────────────────
@@ -42,12 +43,7 @@ ALTER TABLE users
   ADD COLUMN IF NOT EXISTS active_user_did_id BIGINT
     REFERENCES user_dids(id) ON DELETE SET NULL;
 
--- ── 3. Backfill: one user_dids row per existing user.did_number ─────────────
---
--- Existing model: users.did_number is unique per user. We mint a UserDid for
--- each, copying telnyx_number_id verbatim. Label defaults to 'Main', color
--- to ACE blue. isDefault=true since this is the user's only DID at backfill
--- time. created_at mirrors users.created_at so audit/history makes sense.
+-- ── 3. Backfill user_dids: one row per existing user.did_number ─────────────
 
 INSERT INTO user_dids (user_id, did_number, telnyx_number_id, label, color_hex, is_default, created_at, updated_at)
 SELECT
@@ -73,8 +69,75 @@ WHERE ud.user_id = u.id
   AND ud.is_default = TRUE
   AND u.active_user_did_id IS NULL;
 
--- ── 5. Sanity check (logged via the migration runner — does nothing on prod
---      besides emit a NOTICE if counts are odd) ─────────────────────────────
+-- ── 5. Task 5: user_did_id FK on calls / messages / voicemails ──────────────
+--
+-- ON DELETE SET NULL because if a UserDid row is deleted we want to keep
+-- the historical Call/Message/Voicemail rows but lose the line-tag (rather
+-- than cascading-delete the user's whole call history).
+
+ALTER TABLE calls
+  ADD COLUMN IF NOT EXISTS user_did_id BIGINT
+    REFERENCES user_dids(id) ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS calls_user_did_id_idx ON calls(user_did_id);
+
+ALTER TABLE messages
+  ADD COLUMN IF NOT EXISTS user_did_id BIGINT
+    REFERENCES user_dids(id) ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS messages_user_did_id_idx ON messages(user_did_id);
+
+ALTER TABLE voicemails
+  ADD COLUMN IF NOT EXISTS user_did_id BIGINT
+    REFERENCES user_dids(id) ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS voicemails_user_did_id_idx ON voicemails(user_did_id);
+
+-- ── 6. Backfill user_did_id on existing rows ────────────────────────────────
+--
+-- Match logic:
+--   - INBOUND row: to_number matches the user's UserDid.did_number
+--     (the caller dialed THAT DID, so that's the line it landed on)
+--   - OUTBOUND row: from_number matches the user's UserDid.did_number
+--     (the user sent FROM that DID)
+--
+-- We rely on the user_dids.user_id matching the call/message/voicemail's
+-- user_id as a sanity check — if a UserDid row somehow exists with a
+-- did_number colliding with another user's call's to/from, the user_id
+-- filter prevents cross-user contamination.
+
+UPDATE calls c
+SET user_did_id = ud.id
+FROM user_dids ud
+WHERE ud.user_id = c.user_id
+  AND c.user_did_id IS NULL
+  AND (
+    (c.direction = 'inbound'  AND ud.did_number = c.to_number)
+    OR
+    (c.direction = 'outbound' AND ud.did_number = c.from_number)
+  );
+
+UPDATE messages m
+SET user_did_id = ud.id
+FROM user_dids ud
+WHERE ud.user_id = m.user_id
+  AND m.user_did_id IS NULL
+  AND (
+    (m.direction = 'inbound'  AND ud.did_number = m.to_number)
+    OR
+    (m.direction = 'outbound' AND ud.did_number = m.from_number)
+  );
+
+-- Voicemails are always inbound by definition.
+UPDATE voicemails v
+SET user_did_id = ud.id
+FROM user_dids ud
+WHERE ud.user_id = v.user_id
+  AND v.user_did_id IS NULL
+  AND ud.did_number = v.to_number;
+
+-- ── 7. Sanity check (NOTICE log) ────────────────────────────────────────────
+--
+-- Simple count printouts. Postgres RAISE is strict about % placeholders;
+-- previously had a percentage-formatting block that mismatched arg count.
+-- Plain "tagged / total" is enough to spot a backfill miss.
 
 DO $$
 DECLARE
@@ -82,21 +145,27 @@ DECLARE
   user_with_did_count    INTEGER;
   user_did_count         INTEGER;
   active_pointer_count   INTEGER;
+  calls_total            INTEGER;
+  calls_tagged           INTEGER;
+  messages_total         INTEGER;
+  messages_tagged        INTEGER;
+  voicemails_total       INTEGER;
+  voicemails_tagged      INTEGER;
 BEGIN
   SELECT COUNT(*) INTO user_count             FROM users WHERE is_active = TRUE;
   SELECT COUNT(*) INTO user_with_did_count    FROM users WHERE is_active = TRUE AND did_number IS NOT NULL;
   SELECT COUNT(*) INTO user_did_count         FROM user_dids;
   SELECT COUNT(*) INTO active_pointer_count   FROM users WHERE active_user_did_id IS NOT NULL;
+  SELECT COUNT(*) INTO calls_total            FROM calls;
+  SELECT COUNT(*) INTO calls_tagged           FROM calls WHERE user_did_id IS NOT NULL;
+  SELECT COUNT(*) INTO messages_total         FROM messages;
+  SELECT COUNT(*) INTO messages_tagged        FROM messages WHERE user_did_id IS NOT NULL;
+  SELECT COUNT(*) INTO voicemails_total       FROM voicemails;
+  SELECT COUNT(*) INTO voicemails_tagged      FROM voicemails WHERE user_did_id IS NOT NULL;
 
-  RAISE NOTICE '[migration] active users: %, with DID: %, user_dids rows: %, active pointers set: %',
+  RAISE NOTICE '[migration] users active: %, with DID: %, user_dids rows: %, active pointers: %',
     user_count, user_with_did_count, user_did_count, active_pointer_count;
-
-  IF user_with_did_count <> user_did_count THEN
-    RAISE NOTICE '[migration] WARNING: user_with_did_count (%) != user_did_count (%). Some users with did_number did not get a user_dids row.',
-      user_with_did_count, user_did_count;
-  END IF;
-  IF user_with_did_count <> active_pointer_count THEN
-    RAISE NOTICE '[migration] WARNING: user_with_did_count (%) != active_pointer_count (%). Some users have a DID but no active pointer.',
-      user_with_did_count, active_pointer_count;
-  END IF;
+  RAISE NOTICE '[migration] calls       tagged: % / %', calls_tagged, calls_total;
+  RAISE NOTICE '[migration] messages    tagged: % / %', messages_tagged, messages_total;
+  RAISE NOTICE '[migration] voicemails  tagged: % / %', voicemails_tagged, voicemails_total;
 END $$;

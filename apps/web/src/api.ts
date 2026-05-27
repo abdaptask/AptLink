@@ -43,6 +43,16 @@ export interface LoginResponse {
   user: User;
 }
 
+// v0.10.0 Task 5 — Line-badge data shape attached to Call/Message/Voicemail
+// rows so the UI can render a colored "Main / Sales / Personal" pill
+// showing which of the user's DIDs the interaction landed on.
+export interface RowUserDid {
+  id: number;
+  label: string;
+  colorHex: string;
+  didNumber: string | null;
+}
+
 export interface CallRecord {
   id: number;
   telnyxCallId: string;
@@ -56,6 +66,7 @@ export interface CallRecord {
   durationSeconds: number;
   hangupCause: string | null;
   recordingUrl: string | null;
+  userDid?: RowUserDid | null;
 }
 
 export async function login(email: string, password: string): Promise<LoginResponse> {
@@ -77,6 +88,69 @@ export async function getMe(token: string): Promise<User> {
   });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return res.json();
+}
+
+// v0.10.0 — Multi-DID per user. The dialer header renders a dropdown of
+// these so a user with multiple numbers can switch which one is the
+// active outbound identity. Backend tracks the active selection in
+// User.activeUserDidId so it survives logout / device switch.
+export interface UserDidRow {
+  id: number;
+  didNumber: string;
+  label: string;
+  colorHex: string;
+  isDefault: boolean;
+  isActiveOutbound: boolean;
+  ringGroupId: number | null;
+  ivrMenuId: number | null;
+}
+export interface UserDidsResponse {
+  dids: UserDidRow[];
+}
+export async function getMyDids(token: string): Promise<UserDidRow[]> {
+  const res = await fetch(`${API_URL}/me/dids`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const body = (await res.json()) as UserDidsResponse;
+  return body.dids;
+}
+
+export interface SwitchActiveDidResult {
+  ok: boolean;
+  userDidId: number;
+  didNumber: string;
+  label: string;
+  telnyxUpdated: boolean;
+  warning?: string;
+  error?: string;
+}
+export async function switchActiveDid(
+  token: string,
+  userDidId: number,
+): Promise<SwitchActiveDidResult> {
+  const res = await fetch(`${API_URL}/me/active-did`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ userDidId }),
+  });
+  const body = (await res.json().catch(() => ({}))) as Partial<SwitchActiveDidResult> & {
+    error?: string;
+  };
+  if (!res.ok) {
+    return {
+      ok: false,
+      userDidId,
+      didNumber: '',
+      label: '',
+      telnyxUpdated: false,
+      error: body.error || `HTTP ${res.status}`,
+    };
+  }
+  return body as SwitchActiveDidResult;
 }
 
 // v0.9.13 — Fetch optional extra TURN servers (Cloudflare). Returns an
@@ -307,6 +381,7 @@ export interface VoicemailRecord {
   transcription: string | null;
   receivedAt: string;
   listenedAt: string | null;
+  userDid?: RowUserDid | null;
 }
 
 export async function getVoicemails(token: string): Promise<VoicemailRecord[]> {
@@ -484,6 +559,7 @@ export interface MessageRecord {
   sentAt: string | null;
   deliveredAt: string | null;
   createdAt: string;
+  userDid?: RowUserDid | null;
 }
 
 export interface ThreadSummary {
@@ -496,6 +572,7 @@ export interface ThreadSummary {
   mediaUrls: string[];
   status: string;
   createdAt: string;
+  userDid?: RowUserDid | null;
 }
 
 export async function getThreads(token: string): Promise<ThreadSummary[]> {

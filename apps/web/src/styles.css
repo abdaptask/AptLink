@@ -207,6 +207,262 @@ body {
 .sip-status-pill.ok { background: rgba(52, 199, 89, 0.16); color: #34c759; }
 .sip-status-pill.warn { background: rgba(255, 204, 0, 0.18); color: #ffc83c; }
 .sip-status-pill.err { background: rgba(255, 59, 48, 0.18); color: #ff6b6b; }
+
+/* ============================================================================
+   v0.10.0 — Multi-DID switcher (apps/web/src/components/DidSwitcher.tsx).
+   Renders next to the SIP status pill. For single-DID users it's a static
+   display visually similar to the old DID number that lived in the SIP
+   status pill; for multi-DID users it becomes an interactive pill +
+   popover dropdown.
+   ============================================================================ */
+.did-switcher {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+.did-switcher-static,
+.did-switcher-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.25rem 0.65rem;
+  border-radius: 999px;
+  background: rgba(118, 118, 128, 0.22);
+  font-size: 0.73rem;
+  font-weight: 500;
+  color: rgba(235, 235, 245, 0.92);
+  line-height: 1.2;
+  white-space: nowrap;
+  /* Static version inherits these but has no hover/cursor. Interactive
+     pill adds its own affordances below. */
+}
+/* Interactive (multi-DID) pill */
+.did-switcher-pill {
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+.did-switcher-pill:hover {
+  background: rgba(118, 118, 128, 0.32);
+  border-color: rgba(255, 255, 255, 0.08);
+}
+.did-switcher-pill.open {
+  background: rgba(118, 118, 128, 0.36);
+  border-color: rgba(255, 255, 255, 0.14);
+}
+.did-switcher-pill:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+
+.did-color-swatch {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  box-shadow: 0 0 0 1.5px rgba(255, 255, 255, 0.1);
+}
+.did-label {
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+.did-sep { opacity: 0.4; }
+.did-number {
+  font-variant-numeric: tabular-nums;
+}
+.did-caret {
+  opacity: 0.65;
+  transition: transform 0.15s ease;
+}
+.did-switcher-pill.open .did-caret { transform: rotate(180deg); }
+.did-spinner {
+  animation: did-spin 0.9s linear infinite;
+  opacity: 0.85;
+}
+@keyframes did-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Dropdown popover */
+.did-switcher-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  right: auto;
+  min-width: max(220px, 100%);
+  max-width: 320px;
+  background: var(--surface, #1a2233);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+  list-style: none;
+  margin: 0;
+  padding: 4px;
+  z-index: 50;
+  animation: did-menu-fade 0.12s ease-out;
+}
+@keyframes did-menu-fade {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.did-switcher-option {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.did-switcher-option-btn {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  background: none;
+  border: none;
+  color: rgba(235, 235, 245, 0.92);
+  cursor: pointer;
+  border-radius: 6px;
+  text-align: left;
+  font-size: 0.85rem;
+  transition: background 0.1s ease;
+}
+.did-switcher-option-btn:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+.did-switcher-option-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.did-switcher-option.active .did-switcher-option-btn {
+  background: rgba(59, 130, 246, 0.12);
+}
+.did-switcher-option-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.did-switcher-option-label {
+  font-weight: 600;
+}
+.did-switcher-option-number {
+  font-size: 0.78rem;
+  opacity: 0.75;
+  font-variant-numeric: tabular-nums;
+}
+.did-switcher-option-check {
+  color: #4ea1ff;
+  flex-shrink: 0;
+}
+.did-switcher-error {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  padding: 6px 10px;
+  background: rgba(255, 59, 48, 0.18);
+  color: #ff6b6b;
+  border-radius: 6px;
+  font-size: 0.75rem;
+  white-space: nowrap;
+  z-index: 49;
+}
+
+/* Light theme overrides */
+[data-theme="light"] .did-switcher-static,
+[data-theme="light"] .did-switcher-pill {
+  background: rgba(0, 0, 0, 0.06);
+  color: var(--text);
+}
+[data-theme="light"] .did-switcher-pill:hover {
+  background: rgba(0, 0, 0, 0.1);
+  border-color: rgba(0, 0, 0, 0.08);
+}
+[data-theme="light"] .did-switcher-pill.open {
+  background: rgba(0, 0, 0, 0.12);
+  border-color: rgba(0, 0, 0, 0.16);
+}
+[data-theme="light"] .did-switcher-menu {
+  background: var(--surface-2, #ffffff);
+  border-color: rgba(0, 0, 0, 0.1);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.18);
+}
+[data-theme="light"] .did-switcher-option-btn { color: var(--text); }
+[data-theme="light"] .did-switcher-option-btn:hover {
+  background: rgba(0, 0, 0, 0.04);
+}
+[data-theme="light"] .did-switcher-option.active .did-switcher-option-btn {
+  background: rgba(59, 130, 246, 0.08);
+}
+[data-theme="light"] .did-color-swatch {
+  box-shadow: 0 0 0 1.5px rgba(0, 0, 0, 0.06);
+}
+
+/* Mobile: hide the number when the screen is narrow so the pill fits.
+   The label + color swatch is still informative. */
+@media (max-width: 700px) {
+  .did-switcher-static .did-sep,
+  .did-switcher-static .did-number,
+  .did-switcher-pill .did-sep,
+  .did-switcher-pill .did-number {
+    display: none;
+  }
+}
+
+/* ============================================================================
+   v0.10.0 Task 5 — Line badge pill on Recents / Messages / Voicemail rows.
+   Indicates which of the user's DIDs an inbound/outbound interaction
+   touched. Hidden in the component when the user owns only 1 DID
+   (cluttering every row with "Main" adds no value).
+   ============================================================================ */
+.line-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: rgba(118, 118, 128, 0.16);
+  font-size: 0.66rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  line-height: 1.4;
+  white-space: nowrap;
+  color: rgba(235, 235, 245, 0.85);
+  vertical-align: middle;
+  flex-shrink: 0;
+}
+.line-badge-swatch {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.08);
+}
+.line-badge-label {
+  /* Truncate ridiculously long labels so the badge stays compact. */
+  max-width: 7rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.line-badge-sep { opacity: 0.5; }
+.line-badge-number { font-variant-numeric: tabular-nums; }
+
+.line-badge-header {
+  /* Slightly larger version for the Messages thread-detail header. */
+  font-size: 0.72rem;
+  padding: 2px 9px;
+}
+.line-badge-header .line-badge-swatch {
+  width: 7px;
+  height: 7px;
+}
+
+[data-theme="light"] .line-badge {
+  background: rgba(0, 0, 0, 0.06);
+  color: var(--text);
+}
+[data-theme="light"] .line-badge-swatch {
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.08);
+}
 .sip-status-dot {
   width: 6px;
   height: 6px;

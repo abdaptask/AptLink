@@ -42,6 +42,12 @@ export async function voicemailsRoutes(app: FastifyInstance) {
       where: { userId: user.sub },
       orderBy: { receivedAt: 'desc' },
       take: 100,
+      // v0.10.0 Task 5 — include UserDid for the line-badge tag.
+      include: {
+        userDid: {
+          select: { id: true, label: true, colorHex: true, didNumber: true },
+        },
+      },
     });
     return items;
   });

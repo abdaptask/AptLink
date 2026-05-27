@@ -214,6 +214,14 @@ export async function callsRoutes(app: FastifyInstance) {
       // Bumped from 100 -> 200 so dedupe (which collapses 2 legs into 1) still
       // leaves a healthy ~100-row history in the UI.
       take: 200,
+      // v0.10.0 Task 5 — include the UserDid for the line-badge tag.
+      // Only the fields the UI needs (id/label/colorHex); skip the
+      // sensitive cached telnyxNumberId + connectionId.
+      include: {
+        userDid: {
+          select: { id: true, label: true, colorHex: true, didNumber: true },
+        },
+      },
     });
     return dedupeCallLegs(calls);
   });
@@ -242,9 +250,35 @@ export async function callsRoutes(app: FastifyInstance) {
     const startedAt = body.startedAt ? new Date(body.startedAt) : new Date();
     const status = body.status ?? 'initiated';
 
+    // v0.10.0 Task 5 — Stamp userDidId on the row so the Recents line
+    // badge knows which of the user's DIDs this call belongs to.
+    // For OUTBOUND calls: match on fromNumber (the user called FROM
+    // that DID). For INBOUND (this endpoint is rarely used for inbound
+    // — the webhook normally handles those): match on toNumber.
+    const matchNumber = direction === 'outbound' ? body.fromNumber : body.toNumber;
+    let userDidId: number | null = null;
+    if (matchNumber) {
+      // Strip everything except digits, then keep last 10. Tolerates
+      // formatting drift between client (+1 prefix) and stored value.
+      const last10 = matchNumber.replace(/\D/g, '').slice(-10);
+      if (last10.length === 10) {
+        const candidates = await prisma.userDid.findMany({
+          where: { userId: user.sub },
+          select: { id: true, didNumber: true },
+        });
+        const match = candidates.find(
+          (d) => d.didNumber.replace(/\D/g, '').slice(-10) === last10,
+        );
+        if (match) userDidId = match.id;
+      }
+    }
+
     const call = await prisma.call.upsert({
       where: { telnyxCallId: body.telnyxCallId },
-      update: { status },
+      update: {
+        status,
+        ...(userDidId ? { userDidId } : {}),
+      },
       create: {
         userId: user.sub,
         telnyxCallId: body.telnyxCallId,
@@ -253,6 +287,7 @@ export async function callsRoutes(app: FastifyInstance) {
         toNumber: body.toNumber,
         status,
         startedAt,
+        userDidId,
       },
     });
 
