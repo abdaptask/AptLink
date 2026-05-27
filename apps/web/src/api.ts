@@ -125,6 +125,106 @@ export interface SwitchActiveDidResult {
   warning?: string;
   error?: string;
 }
+// v0.10.0 Task 27 — Admin: list a specific user's DIDs (read-only).
+export interface AdminUserDidRow {
+  id: number;
+  didNumber: string;
+  telnyxNumberId: string | null;
+  connectionId: string | null;
+  label: string;
+  colorHex: string;
+  isDefault: boolean;
+  createdAt: string;
+}
+export async function getAdminUserDids(token: string, userId: number): Promise<AdminUserDidRow[]> {
+  const res = await fetch(`${API_URL}/admin/users/${userId}/dids`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const body = await res.json();
+  return body.dids ?? [];
+}
+
+// v0.10.0 Task 27 — Admin: add a DID to an existing user.
+// Two modes: source='unassigned' (pick existing inventory) or
+// source='purchase' (buy a brand-new DID in the given area code — BILLABLE).
+export interface AddUserDidBody {
+  source: 'unassigned' | 'purchase';
+  didNumber?: string;             // required when source='unassigned'
+  purchaseAreaCode?: string;      // required when source='purchase' (3-digit US)
+  label?: string;
+  colorHex?: string;
+  isDefault?: boolean;
+}
+export interface AddUserDidResult {
+  ok: boolean;
+  userDid?: { id: number; didNumber: string; label: string; colorHex: string; isDefault: boolean };
+  purchased?: boolean;
+  purchasedNumber?: string | null;
+  error?: string;
+}
+export async function addUserDid(
+  token: string,
+  userId: number,
+  input: AddUserDidBody,
+): Promise<AddUserDidResult> {
+  const res = await fetch(`${API_URL}/admin/users/${userId}/dids`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify(input),
+  });
+  const body = await res.json().catch(() => ({})) as Partial<AddUserDidResult> & { error?: string };
+  if (!res.ok) {
+    return { ok: false, error: body.error || `HTTP ${res.status}` };
+  }
+  return body as AddUserDidResult;
+}
+
+// v0.10.0 Task 27 — Admin: edit a UserDid's label / color / default flag.
+export interface PatchUserDidBody {
+  label?: string;
+  colorHex?: string;
+  isDefault?: boolean;
+}
+export async function patchUserDid(
+  token: string,
+  userId: number,
+  userDidId: number,
+  input: PatchUserDidBody,
+): Promise<{ ok: boolean; error?: string }> {
+  const res = await fetch(`${API_URL}/admin/users/${userId}/dids/${userDidId}`, {
+    method: 'PATCH',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify(input),
+  });
+  const body = await res.json().catch(() => ({})) as { error?: string };
+  if (!res.ok) return { ok: false, error: body.error || `HTTP ${res.status}` };
+  return { ok: true };
+}
+
+// v0.10.0 Task 27 — Admin: remove a DID from a user. Refuses if it's
+// the only one. Telnyx-side: also unassigns the number so it returns
+// to the unassigned pool, where another user can pick it up.
+export async function removeUserDid(
+  token: string,
+  userId: number,
+  userDidId: number,
+): Promise<{ ok: boolean; telnyxUnassigned?: boolean; error?: string }> {
+  const res = await fetch(`${API_URL}/admin/users/${userId}/dids/${userDidId}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const body = await res.json().catch(() => ({})) as { telnyxUnassigned?: boolean; error?: string };
+  if (!res.ok) return { ok: false, error: body.error || `HTTP ${res.status}` };
+  return { ok: true, telnyxUnassigned: body.telnyxUnassigned };
+}
+
 export async function switchActiveDid(
   token: string,
   userDidId: number,

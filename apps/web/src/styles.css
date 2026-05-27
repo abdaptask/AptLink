@@ -145,6 +145,28 @@ body {
   backdrop-filter: blur(20px);
   font-size: 0.9rem;
 }
+
+/* v0.10.0 — Center column wrapper. SIP-status pill + DidSwitcher live
+   inside one flex container so they share the middle grid track.
+   Without this wrapper, adding DidSwitcher as a fourth direct child of
+   .app-header pushed the user-chip into an implicit second grid row. */
+.app-header-center {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  justify-self: center;
+  min-width: 0;
+}
+.app-header-center > .sip-status-pill {
+  justify-self: auto;
+}
+/* Mobile: tighten the gap a touch when the header gets narrow so the
+   user-chip on the right still has room. */
+@media (max-width: 700px) {
+  .app-header-center {
+    gap: 0.3rem;
+  }
+}
 .app-header .brand {
   font-weight: 600;
   color: #fff;
@@ -463,6 +485,301 @@ body {
 [data-theme="light"] .line-badge-swatch {
   box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.08);
 }
+
+/* ============================================================================
+   v0.10.0 Task 27 — Manage Lines admin modal.
+   Launched from Settings → Users tab → row dropdown → "Manage lines".
+   Lists a user's UserDid rows with per-row edit/remove actions, plus an
+   "Add line" sub-modal that lets admin pick between an unassigned Telnyx
+   number or buying a fresh one.
+   ============================================================================ */
+.lines-modal {
+  background: var(--surface, #11192a);
+  border-radius: 14px;
+  width: min(560px, 92vw);
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.55);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  animation: lines-modal-fade 0.14s ease-out;
+}
+.lines-add-modal {
+  background: var(--surface, #11192a);
+  border-radius: 14px;
+  width: min(480px, 92vw);
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.6);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  /* Stack above the parent .lines-modal */
+  position: relative;
+  z-index: 1;
+  animation: lines-modal-fade 0.14s ease-out;
+}
+@keyframes lines-modal-fade {
+  from { opacity: 0; transform: translateY(-6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.lines-modal-body {
+  overflow-y: auto;
+  padding: 16px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* List of existing lines */
+.lines-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.lines-row {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 12px;
+  align-items: center;
+  padding: 10px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.02);
+}
+.lines-row-swatch {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.16);
+  cursor: pointer;
+  padding: 0;
+  transition: transform 0.1s ease, border-color 0.1s ease;
+}
+.lines-row-swatch:hover {
+  transform: scale(1.08);
+  border-color: rgba(255, 255, 255, 0.35);
+}
+.lines-row-text {
+  min-width: 0;
+}
+.lines-row-label {
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.95);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.lines-row-default-pill {
+  font-size: 0.65rem;
+  font-weight: 600;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: rgba(59, 130, 246, 0.18);
+  color: #6bb4ff;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.lines-row-number {
+  font-size: 0.82rem;
+  color: rgba(255, 255, 255, 0.6);
+  font-variant-numeric: tabular-nums;
+  margin-top: 1px;
+}
+.lines-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.lines-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  font-size: 0.78rem;
+}
+.lines-action-remove {
+  color: #ff8a80;
+}
+.lines-action-remove:disabled {
+  color: rgba(255, 138, 128, 0.4);
+}
+/* Color palette popover that opens under a row when admin clicks the swatch */
+.lines-row-color-palette {
+  grid-column: 1 / -1;
+  display: flex;
+  gap: 6px;
+  padding-top: 8px;
+  margin-top: 4px;
+  border-top: 1px dashed rgba(255, 255, 255, 0.08);
+}
+.lines-color-palette-inline {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+}
+.lines-color-swatch {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  padding: 0;
+  transition: transform 0.1s ease, border-color 0.1s ease;
+}
+.lines-color-swatch:hover {
+  transform: scale(1.08);
+}
+.lines-color-swatch.active {
+  border-color: rgba(255, 255, 255, 0.85);
+}
+
+/* Add Line sub-modal — mode picker + form */
+.lines-mode-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 8px 0;
+}
+.lines-mode-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 14px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+  color: rgba(255, 255, 255, 0.92);
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.1s ease, border-color 0.1s ease, transform 0.1s ease;
+}
+.lines-mode-option:hover {
+  background: rgba(255, 255, 255, 0.07);
+  border-color: rgba(255, 255, 255, 0.22);
+}
+.lines-mode-icon {
+  flex-shrink: 0;
+  margin-top: 2px;
+  color: #6bb4ff;
+}
+.lines-mode-text {
+  flex: 1;
+  min-width: 0;
+}
+.lines-mode-title {
+  font-weight: 600;
+  font-size: 0.95rem;
+}
+.lines-mode-desc {
+  font-size: 0.82rem;
+  color: rgba(255, 255, 255, 0.65);
+  margin-top: 4px;
+  line-height: 1.4;
+}
+.lines-back-link {
+  background: none;
+  border: none;
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 0.85rem;
+  cursor: pointer;
+  padding: 0;
+  margin-bottom: 8px;
+  text-align: left;
+}
+.lines-back-link:hover { color: #fff; }
+
+.lines-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.lines-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.lines-field > span {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.7);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.lines-field input[type="text"],
+.lines-field select {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  color: #fff;
+  padding: 8px 10px;
+  font-size: 0.95rem;
+  font-family: inherit;
+}
+.lines-field input[type="text"]:focus,
+.lines-field select:focus {
+  outline: none;
+  border-color: #3b82f6;
+}
+.lines-field small.muted {
+  font-size: 0.75rem;
+  margin-top: 2px;
+}
+.lines-field-checkbox {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
+.lines-field-checkbox input { margin: 0; }
+.lines-field-checkbox > span {
+  text-transform: none;
+  font-weight: 500;
+  font-size: 0.9rem;
+  letter-spacing: normal;
+  color: rgba(255, 255, 255, 0.85);
+}
+
+/* Light theme overrides */
+[data-theme="light"] .lines-modal,
+[data-theme="light"] .lines-add-modal {
+  background: var(--surface-2, #ffffff);
+  border-color: rgba(0, 0, 0, 0.1);
+  color: var(--text);
+}
+[data-theme="light"] .lines-row {
+  background: rgba(0, 0, 0, 0.02);
+  border-color: rgba(0, 0, 0, 0.08);
+}
+[data-theme="light"] .lines-row-label { color: var(--text); }
+[data-theme="light"] .lines-row-number { color: rgba(0, 0, 0, 0.55); }
+[data-theme="light"] .lines-mode-option {
+  background: rgba(0, 0, 0, 0.03);
+  border-color: rgba(0, 0, 0, 0.1);
+  color: var(--text);
+}
+[data-theme="light"] .lines-mode-option:hover {
+  background: rgba(0, 0, 0, 0.06);
+  border-color: rgba(0, 0, 0, 0.2);
+}
+[data-theme="light"] .lines-mode-desc { color: rgba(0, 0, 0, 0.6); }
+[data-theme="light"] .lines-field > span { color: rgba(0, 0, 0, 0.6); }
+[data-theme="light"] .lines-field input[type="text"],
+[data-theme="light"] .lines-field select {
+  background: rgba(0, 0, 0, 0.03);
+  border-color: rgba(0, 0, 0, 0.12);
+  color: var(--text);
+}
+[data-theme="light"] .lines-field-checkbox > span { color: var(--text); }
+[data-theme="light"] .lines-back-link {
+  color: rgba(0, 0, 0, 0.6);
+}
+[data-theme="light"] .lines-back-link:hover { color: var(--text); }
 .sip-status-dot {
   width: 6px;
   height: 6px;
