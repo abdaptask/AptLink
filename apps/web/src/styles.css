@@ -145,6 +145,28 @@ body {
   backdrop-filter: blur(20px);
   font-size: 0.9rem;
 }
+
+/* v0.10.0 — Center column wrapper. SIP-status pill + DidSwitcher live
+   inside one flex container so they share the middle grid track.
+   Without this wrapper, adding DidSwitcher as a fourth direct child of
+   .app-header pushed the user-chip into an implicit second grid row. */
+.app-header-center {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  justify-self: center;
+  min-width: 0;
+}
+.app-header-center > .sip-status-pill {
+  justify-self: auto;
+}
+/* Mobile: tighten the gap a touch when the header gets narrow so the
+   user-chip on the right still has room. */
+@media (max-width: 700px) {
+  .app-header-center {
+    gap: 0.3rem;
+  }
+}
 .app-header .brand {
   font-weight: 600;
   color: #fff;

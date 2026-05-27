@@ -232,29 +232,30 @@ export default function Layout({ user, onLogout }: Props) {
           </div>
         </div>
 
-        <div className={`sip-status-pill ${sipPresentation.dot}`} role="status" title={`SIP: ${sipPresentation.label}`}>
-          <span className={`sip-status-dot ${sipPresentation.dot}`} />
-          <span className="sip-status-label">{sipPresentation.label}</span>
-        </div>
+        {/* v0.10.0 — Center column of the header. Wraps the SIP status
+            pill + DidSwitcher in a single flex container so they share
+            the middle grid column. Without this wrapper, adding
+            DidSwitcher as a fourth header child pushed the user-chip
+            into an implicit second grid row (visible as a "skewed"
+            layout). Keeping them together preserves the original 3-col
+            header grid (left brand · center status+did · right user). */}
+        <div className="app-header-center">
+          <div className={`sip-status-pill ${sipPresentation.dot}`} role="status" title={`SIP: ${sipPresentation.label}`}>
+            <span className={`sip-status-dot ${sipPresentation.dot}`} />
+            <span className="sip-status-label">{sipPresentation.label}</span>
+          </div>
 
-        {/* v0.10.0 — Multi-DID switcher. Renders the user's active phone
-            number (color swatch + label + formatted number) and a popover
-            dropdown to switch outbound caller ID when the user owns >1 DID.
-            For single-DID users, renders the same look as a static
-            display (no interactive affordance) so there's no UI change.
-            For zero-DID users (uncommon — migration backfill should have
-            populated everyone), renders nothing; the SIP status pill
-            above still indicates Online/Offline so the header isn't blank. */}
-        <DidSwitcher
-          onSwitch={(did) => {
-            // Outbound caller ID has been PATCHed on Telnyx via
-            // /me/active-did. Calls placed after this point use the new
-            // ani_override. SMS path reads User.activeUserDidId on every
-            // /messages POST, so nothing to wire client-side beyond this
-            // notification. Log purely for diagnostics.
-            console.log('[layout] active DID switched to', did.label, did.didNumber);
-          }}
-        />
+          <DidSwitcher
+            onSwitch={(did) => {
+              // Outbound caller ID has been PATCHed on Telnyx via
+              // /me/active-did. Calls placed after this point use the new
+              // ani_override. SMS path reads User.activeUserDidId on every
+              // /messages POST, so nothing to wire client-side beyond this
+              // notification. Log purely for diagnostics.
+              console.log('[layout] active DID switched to', did.label, did.didNumber);
+            }}
+          />
+        </div>
 
         <div className="header-user" ref={menuRef}>
           <button
