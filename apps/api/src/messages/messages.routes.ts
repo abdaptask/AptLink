@@ -130,7 +130,35 @@ export async function messagesRoutes(app: FastifyInstance) {
       }
 
       const to = toE164(body.to);
-      const fromNumber = config.pilotFromNumber;
+      // v0.9.14 — Use the authenticated user's assigned DID as the SMS
+      // `from` number. Pre-v0.9.14 every outbound SMS used config.pilot-
+      // FromNumber (+17322001305 — the template DID), so e.g. when Nilesh
+      // (7322014727) sent a text the recipient saw it as coming from the
+      // pilot user's number. Replies then landed in the pilot user's inbox,
+      // not the actual sender's.
+      //
+      // HARDENED v0.9.14: explicitly REFUSE to send if the user has no
+      // assigned DID. No silent fallback to pilot — that's the exact bug
+      // the admin asked us to make impossible. If a user somehow exists
+      // in the DB without a didNumber, the only acceptable behavior is
+      // to fail the send with a clear error so admin can fix the user's
+      // assignment via the Users tab. Better to break SMS for a misconfigured
+      // user than to silently leak the pilot DID to recipients.
+      const dbUser = await prisma.user.findUnique({
+        where: { id: user.sub },
+        select: { didNumber: true, email: true },
+      });
+      if (!dbUser?.didNumber) {
+        app.log.warn(
+          { userId: user.sub, email: dbUser?.email },
+          '[messages] outbound SMS refused: user has no assigned DID',
+        );
+        return reply.code(409).send({
+          error: 'no_did_assigned',
+          message: 'Your account has no phone number (DID) assigned. Ask an admin to assign one in Users → your row before sending SMS.',
+        });
+      }
+      const fromNumber = dbUser.didNumber;
       const text = body.body ?? '';
       const mediaUrls = body.mediaUrls ?? [];
 
@@ -141,9 +169,13 @@ export async function messagesRoutes(app: FastifyInstance) {
         text,
       };
       if (mediaUrls.length > 0) telnyxBody.media_urls = mediaUrls;
-      if (config.telnyxMessagingProfileId) {
-        telnyxBody.messaging_profile_id = config.telnyxMessagingProfileId;
-      }
+      // v0.9.14 — Deliberately DO NOT set messaging_profile_id. Telnyx routes
+      // the SMS via whatever profile the `from` DID is bound to. Passing
+      // messaging_profile_id alongside a specific `from` can confuse Telnyx's
+      // sender-selection (in some configs it substitutes from the profile's
+      // pool) — exactly the substitution that caused users' texts to arrive
+      // from the pilot DID instead of their own. The DID's own profile
+      // binding handles routing; we don't need to over-specify.
 
       let telnyxResponse: { id?: string; status?: string; errors?: unknown } = {};
       try {

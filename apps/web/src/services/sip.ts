@@ -418,6 +418,18 @@ export class SipService {
   updateExtraIceServers(extraIceServers: RTCIceServer[]): void {
     if (!this.lastConfig) return;
     this.lastConfig = { ...this.lastConfig, extraIceServers };
+    // v0.9.14 — log the full ice-servers payload after merging so we can
+    // verify Cloudflare's TURN URLs + credentials are reaching the browser
+    // intact. Without this, "cloudflare TURN added" prints true even when
+    // the response has empty urls or malformed credentials, and ICE fails
+    // silently at gathering time. Anything weird here (empty urls array,
+    // missing credential, wrong scheme like `turn:` vs `turns:`) jumps out.
+    try {
+      const merged = this.buildIceServers();
+      console.log('[sip] ice servers after Cloudflare merge:', JSON.stringify(merged, null, 2));
+    } catch (e) {
+      console.warn('[sip] failed to log merged ice servers', e);
+    }
   }
 
   private buildIceServers(): RTCIceServer[] {
