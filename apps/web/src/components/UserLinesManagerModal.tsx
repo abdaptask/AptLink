@@ -14,7 +14,7 @@
 // on a mode-picker screen and the admin selects which path before
 // seeing the actual form.
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { X, Plus, Trash2, Pencil, Check, ShoppingCart, ListChecks, Star, AlertCircle } from 'lucide-react';
 import {
   getAdminUserDids,
@@ -51,6 +51,8 @@ export default function UserLinesManagerModal({ userId, userLabel, onClose }: Pr
   const [showAdd, setShowAdd] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [busyId, setBusyId] = useState<number | null>(null);
+  // CLAUDE.md UI rule #2 — modal-body scrolls to top on open.
+  const bodyRef = useRef<HTMLDivElement | null>(null);
 
   function load() {
     const token = sessionStorage.getItem('ace_token');
@@ -64,8 +66,23 @@ export default function UserLinesManagerModal({ userId, userLabel, onClose }: Pr
   }
   useEffect(() => {
     load();
+    // CLAUDE.md UI rule #2 — reset modal body scroll on open. Fires
+    // both immediately and on a microtask follow-up so React's
+    // render → layout ordering doesn't leave the body half-scrolled.
+    const reset = () => bodyRef.current?.scrollTo({ top: 0 });
+    reset();
+    queueMicrotask(reset);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userId]);
+
+  // CLAUDE.md UI rule #1 — close on Escape key.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !showAdd) onClose();
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [onClose, showAdd]);
 
   async function handleSetDefault(row: AdminUserDidRow) {
     if (row.isDefault) return;
@@ -134,12 +151,16 @@ export default function UserLinesManagerModal({ userId, userLabel, onClose }: Pr
   }
 
   return (
-    <div className="compose-modal" onClick={onClose}>
+    <div
+      className={`compose-modal${showAdd ? ' compose-modal-dimmed' : ''}`}
+      onClick={onClose}
+    >
       <div
         className="lines-modal"
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-labelledby="lines-modal-title"
+        aria-modal="true"
       >
         <header className="modal-header">
           <h3 id="lines-modal-title">Manage lines for {userLabel}</h3>
@@ -153,7 +174,7 @@ export default function UserLinesManagerModal({ userId, userLabel, onClose }: Pr
           </button>
         </header>
 
-        <div className="modal-body lines-modal-body">
+        <div className="modal-body lines-modal-body" ref={bodyRef}>
           {error && (
             <div className="pending-error" role="alert">
               <AlertCircle size={14} /> {error}
@@ -307,6 +328,22 @@ function AddLineSubModal({ userId, onClose, onAdded }: AddLineProps) {
   const [isDefault, setIsDefault] = useState<boolean>(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // CLAUDE.md UI rule #2 — scroll-to-top on open + mode change.
+  const bodyRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const reset = () => bodyRef.current?.scrollTo({ top: 0 });
+    reset();
+    queueMicrotask(reset);
+  }, [mode]);
+
+  // CLAUDE.md UI rule #1 — close on Escape.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [onClose]);
 
   // Lazy-load the unassigned list only when the admin enters that mode.
   useEffect(() => {
@@ -350,15 +387,17 @@ function AddLineSubModal({ userId, onClose, onAdded }: AddLineProps) {
         className="lines-add-modal"
         onClick={(e) => e.stopPropagation()}
         role="dialog"
+        aria-modal="true"
+        aria-labelledby="lines-add-modal-title"
       >
         <header className="modal-header">
-          <h3>Add a line</h3>
-          <button type="button" className="modal-close" onClick={onClose}>
+          <h3 id="lines-add-modal-title">Add a line</h3>
+          <button type="button" className="modal-close" onClick={onClose} aria-label="Close">
             <X size={18} />
           </button>
         </header>
 
-        <div className="modal-body">
+        <div className="modal-body" ref={bodyRef}>
           {error && (
             <div className="pending-error" role="alert">
               <AlertCircle size={14} /> {error}

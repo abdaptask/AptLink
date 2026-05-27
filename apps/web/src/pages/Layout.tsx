@@ -111,6 +111,44 @@ export default function Layout({ user, onLogout }: Props) {
     else if (path.startsWith('/recents')) markTabVisited('recents' as TabKey);
     else if (path.startsWith('/voicemail')) markTabVisited('voicemail' as TabKey);
   }, [location.pathname]);
+
+  // CLAUDE.md UI rule #3 — page scroll-to-top on every route change.
+  // This was a recurring complaint (user flagged it 3+ times across the
+  // v0.9.x sprint). Locking it here at the Layout level means it can't
+  // get forgotten on any individual page. Fires immediately + on a
+  // microtask + on a paint frame to cover React's render → layout
+  // ordering quirks (some pages mount with content already rendered
+  // and ignore an immediate scrollTo).
+  useEffect(() => {
+    const resetAll = () => {
+      try {
+        window.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior });
+      } catch {
+        window.scrollTo(0, 0);
+      }
+      // Any internal scroll containers — settings pane body, main
+      // content area, generic .scroll-root — get reset too.
+      const selectors = [
+        '.app-content',
+        '.settings-pane-body',
+        '.scroll-root',
+        '[data-scroll-root]',
+      ];
+      for (const sel of selectors) {
+        document.querySelectorAll<HTMLElement>(sel).forEach((el) => {
+          el.scrollTop = 0;
+        });
+      }
+    };
+    resetAll();
+    queueMicrotask(resetAll);
+    const raf = requestAnimationFrame(resetAll);
+    const timeout = window.setTimeout(resetAll, 50);
+    return () => {
+      cancelAnimationFrame(raf);
+      window.clearTimeout(timeout);
+    };
+  }, [location.pathname]);
   const isElectron =
     typeof navigator !== 'undefined' &&
     /electron/i.test(navigator.userAgent);

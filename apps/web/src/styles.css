@@ -320,7 +320,12 @@ body {
   list-style: none;
   margin: 0;
   padding: 4px;
-  z-index: 50;
+  /* z-index 700 puts the dropdown above page content (header + body)
+     but still below modal backdrops at z-index 800 (compose-modal).
+     Original z-index 50 was too low — Settings table buttons and other
+     ui elements with their own stacking contexts could overlay on top
+     of it. */
+  z-index: 700;
   animation: did-menu-fade 0.12s ease-out;
 }
 @keyframes did-menu-fade {
@@ -721,11 +726,34 @@ body {
   padding: 8px 10px;
   font-size: 0.95rem;
   font-family: inherit;
+  /* color-scheme tells the browser to render native form widgets
+     (option list popup, scrollbars inside select) in the dark theme.
+     Without this, Chromium renders <option> on a white background
+     even though the closed <select> field is dark — looks white-on-
+     white until the user scrolls/hovers an item. */
+  color-scheme: dark;
 }
 .lines-field input[type="text"]:focus,
 .lines-field select:focus {
   outline: none;
   border-color: #3b82f6;
+}
+/* Explicit <option> styling — backup for browsers that don't fully
+   honor color-scheme. The popup list itself is OS-rendered and not
+   100% style-able, but background + color do work on Chromium-based
+   Electron and most current browsers. */
+.lines-field select option {
+  background: #11192a;
+  color: #fff;
+  padding: 6px 10px;
+}
+[data-theme="light"] .lines-field input[type="text"],
+[data-theme="light"] .lines-field select {
+  color-scheme: light;
+}
+[data-theme="light"] .lines-field select option {
+  background: #ffffff;
+  color: #111;
 }
 .lines-field small.muted {
   font-size: 0.75rem;
@@ -3887,13 +3915,123 @@ body {
 }
 
 .compose-modal {
+  /* CLAUDE.md UI rule #1 — modals are real overlays.
+     position: fixed + inset: 0 covers the entire viewport regardless
+     of page scroll. Backdrop opacity at 0.85 makes the page behind
+     unreadable (never below 0.7 per the rules). */
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.6);
+  background: rgba(0, 0, 0, 0.85);
   display: flex;
   align-items: center;
   justify-content: center;
   z-index: 800;
+  /* Add backdrop-filter blur so any residual bleed-through is also
+     softened — defense in depth against future transparency mishaps. */
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+  /* Smooth fade-in for the backdrop itself. */
+  animation: compose-modal-fade-in 0.15s ease-out;
+}
+@keyframes compose-modal-fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+/* CLAUDE.md UI rule #4 — stacked modals: when a sub-modal opens over
+   a modal, the parent's backdrop darkens further so there's no
+   ambiguity about which layer is interactive. Applied via JS adding
+   a .compose-modal-dimmed class to the parent when its child mounts.
+   Until we wire that, the child opens with its OWN .compose-modal
+   backdrop sitting on top of the parent's — that already produces
+   ~0.85 + ~0.85 cumulative dimming (close to full opaque). */
+.compose-modal-dimmed {
+  background: rgba(0, 0, 0, 0.95);
+}
+
+/* ----------------------------------------------------------------------
+   Generic .modal-header + .modal-close baseline (CLAUDE.md UI rule #1).
+   Older modals (pending-*) had these scoped to their specific class;
+   newer modals (lines-modal, lines-add-modal, did-switcher, etc.) use
+   the same class names but inherit nothing without an unscoped rule.
+   This ensures every future <header className="modal-header"> renders
+   consistently: title on the left, X close button on the right.
+   Specific modals can still override with higher-specificity selectors.
+   ---------------------------------------------------------------------- */
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 1rem 1.25rem 0.85rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  flex-shrink: 0;
+}
+.modal-header h3 {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.95);
+  flex: 1 1 auto;
+  min-width: 0;
+  /* Truncate excessively-long titles so the X button can't get pushed
+     out of the visible area. */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.modal-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border-radius: 8px;
+  border: none;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.7);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.1s ease, color 0.1s ease;
+}
+.modal-close:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+}
+[data-theme="light"] .modal-header {
+  border-bottom-color: rgba(0, 0, 0, 0.08);
+}
+[data-theme="light"] .modal-header h3 {
+  color: var(--text);
+}
+[data-theme="light"] .modal-close {
+  color: rgba(0, 0, 0, 0.55);
+}
+[data-theme="light"] .modal-close:hover {
+  background: rgba(0, 0, 0, 0.06);
+  color: var(--text);
+}
+
+/* Baseline .modal-body + .modal-footer too — same reasoning. */
+.modal-body {
+  padding: 1rem 1.25rem;
+  flex: 1 1 auto;
+  overflow-y: auto;
+  /* Smooth scrolling for the scroll-to-top reset. */
+  scroll-behavior: smooth;
+}
+.modal-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.6rem;
+  padding: 0.85rem 1.25rem 1rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  flex-shrink: 0;
+}
+[data-theme="light"] .modal-footer {
+  border-top-color: rgba(0, 0, 0, 0.08);
 }
 .compose-box {
   background: #111827;
