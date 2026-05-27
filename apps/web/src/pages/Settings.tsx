@@ -114,6 +114,7 @@ import {
 } from '../lib/userPrefs';
 import PendingUsersSection from '../components/PendingUsersSection';
 import UserLinesManagerModal from '../components/UserLinesManagerModal';
+import TeamsNotificationsSection from '../components/TeamsNotificationsSection';
 import { formatPhone } from '../lib/phone';
 
 interface AudioDevice {
@@ -139,6 +140,8 @@ const SECTIONS: SectionDef[] = [
   { key: 'microphone', category: 'Calling', label: 'Microphone', icon: Mic, blurb: 'Input device', Component: MicrophoneSection },
   { key: 'speaker', category: 'Calling', label: 'Speaker', icon: Volume2, blurb: 'Output device', Component: SpeakerSection },
   { key: 'notifications', category: 'Personal', label: 'Notifications', icon: Bell, blurb: 'Calls + SMS alerts', Component: NotificationsSection },
+  // v0.10.0 Pillar 2 — Teams notifications.
+  { key: 'teams', category: 'Personal', label: 'Teams notifications', icon: MessageSquare, blurb: 'Forward missed calls / SMS / voicemails to a Teams channel', Component: TeamsNotificationsSection },
   { key: 'quick-replies', category: 'Personal', label: 'Quick replies', icon: MessageSquare, blurb: 'SMS templates', Component: QuickRepliesSection },
   { key: 'hold-music', category: 'Calling', label: 'Hold music', icon: Music, blurb: 'Play music when on hold', Component: HoldMusicSection },
   { key: 'voicemail-greeting', category: 'Calling', label: 'Voicemail greeting', icon: Mic, blurb: 'Personal greeting (coming soon)', Component: VoicemailGreetingSection },

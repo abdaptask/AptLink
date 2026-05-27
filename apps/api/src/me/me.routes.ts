@@ -56,6 +56,21 @@ export interface UserDidPublic {
   ivrMenuId: number | null;
 }
 
+// v0.10.0 Pillar 2 — Teams notification config.
+//
+// Three event types the user can opt in/out of independently. Stored as
+// a comma-separated string in users.teams_notify_on (simpler than a
+// JSONB array for what's at most three values).
+const TEAMS_EVENT_TYPES = ['missed_call', 'sms', 'voicemail'] as const;
+type TeamsEventType = (typeof TEAMS_EVENT_TYPES)[number];
+
+const TeamsConfigSchema = z.object({
+  teamsWebhookUrl: z.string().url().nullable().optional(),
+  // Array on the wire — easier for the client form to handle as checkboxes.
+  // Convert to/from comma-separated string for storage.
+  events: z.array(z.enum(TEAMS_EVENT_TYPES)).optional(),
+});
+
 export async function meRoutes(app: FastifyInstance) {
   // ── GET /me/dids ──────────────────────────────────────────────────────
   app.get(
@@ -197,6 +212,184 @@ export async function meRoutes(app: FastifyInstance) {
         telnyxUpdated,
         ...(telnyxWarning ? { warning: telnyxWarning } : {}),
       };
+    },
+  );
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // v0.10.0 Pillar 2 — Microsoft Teams notification config (Task 6).
+  //
+  // Each user maintains their own personal Incoming Webhook URL pointing
+  // at a Teams channel of their choosing. We POST Adaptive Cards to it
+  // on missed call / inbound SMS / voicemail completed events. Per-user
+  // (not per-org) so each pilot user can route to their own DMs / a
+  // private team / wherever. They control the opt-in independently.
+  //
+  // Endpoints:
+  //   GET   /me/teams-config        — read current settings
+  //   PATCH /me/teams-config        — update URL and/or event opt-ins
+  //   POST  /me/teams-config/test   — send a sample card so the user
+  //                                    can verify the URL works before
+  //                                    relying on it for production
+  //                                    events.
+  // ═══════════════════════════════════════════════════════════════════════
+
+  app.get(
+    '/me/teams-config',
+    { onRequest: [app.authenticate] },
+    async (request: FastifyRequest) => {
+      const me = (request.user as JwtPayload).sub;
+      const user = await prisma.user.findUnique({
+        where: { id: me },
+        select: { teamsWebhookUrl: true, teamsNotifyOn: true },
+      });
+      const eventsCsv = user?.teamsNotifyOn ?? '';
+      const events = eventsCsv
+        .split(',')
+        .map((s) => s.trim())
+        .filter((s): s is TeamsEventType =>
+          (TEAMS_EVENT_TYPES as readonly string[]).includes(s),
+        );
+      return {
+        teamsWebhookUrl: user?.teamsWebhookUrl ?? null,
+        events,
+        availableEvents: TEAMS_EVENT_TYPES,
+      };
+    },
+  );
+
+  app.patch(
+    '/me/teams-config',
+    { onRequest: [app.authenticate] },
+    async (request: FastifyRequest, reply) => {
+      const me = (request.user as JwtPayload).sub;
+      const parsed = TeamsConfigSchema.safeParse(request.body);
+      if (!parsed.success) {
+        return reply.code(400).send({
+          error: 'Invalid input',
+          details: parsed.error.flatten(),
+        });
+      }
+      const { teamsWebhookUrl, events } = parsed.data;
+      const data: { teamsWebhookUrl?: string | null; teamsNotifyOn?: string | null } = {};
+      // Empty string → treat as null (cleared). Null literal → also null.
+      if (teamsWebhookUrl !== undefined) {
+        data.teamsWebhookUrl =
+          teamsWebhookUrl && teamsWebhookUrl.trim()
+            ? teamsWebhookUrl.trim()
+            : null;
+      }
+      if (events !== undefined) {
+        // Dedup + sort for stable storage.
+        const deduped = Array.from(new Set(events)).sort();
+        data.teamsNotifyOn = deduped.length > 0 ? deduped.join(',') : null;
+      }
+      // First-time opt-in convenience: when a user sets a webhook URL
+      // for the first time without explicitly listing events, default
+      // to all three (it's what they almost always want). If they
+      // already had events set, keep them.
+      if (data.teamsWebhookUrl && data.teamsNotifyOn === undefined) {
+        const current = await prisma.user.findUnique({
+          where: { id: me },
+          select: { teamsNotifyOn: true },
+        });
+        if (!current?.teamsNotifyOn) {
+          data.teamsNotifyOn = TEAMS_EVENT_TYPES.slice().sort().join(',');
+        }
+      }
+      await prisma.user.update({ where: { id: me }, data });
+      await recordAudit(me, 'user.teams_config_updated', me, {
+        configured: Boolean(data.teamsWebhookUrl ?? null),
+        events: data.teamsNotifyOn ?? null,
+      });
+      return { ok: true };
+    },
+  );
+
+  // Sends a sample Adaptive Card to the user's currently-configured
+  // webhook URL. Useful for proving the URL is reachable + correctly
+  // formatted BEFORE relying on it for production missed-call pings.
+  // Returns HTTP status from Teams so the UI can show success/failure.
+  app.post(
+    '/me/teams-config/test',
+    { onRequest: [app.authenticate] },
+    async (request: FastifyRequest, reply) => {
+      const me = (request.user as JwtPayload).sub;
+      const user = await prisma.user.findUnique({
+        where: { id: me },
+        select: {
+          firstName: true,
+          email: true,
+          teamsWebhookUrl: true,
+        },
+      });
+      if (!user?.teamsWebhookUrl) {
+        return reply.code(409).send({
+          error: 'No Teams webhook URL configured. Save one first.',
+        });
+      }
+      const card = {
+        type: 'message',
+        attachments: [
+          {
+            contentType: 'application/vnd.microsoft.card.adaptive',
+            content: {
+              $schema: 'http://adaptivecards.io/schemas/adaptive-card.json',
+              type: 'AdaptiveCard',
+              version: '1.4',
+              body: [
+                {
+                  type: 'TextBlock',
+                  text: '✅ ACE Dialer Teams notifications connected',
+                  size: 'Large',
+                  weight: 'Bolder',
+                },
+                {
+                  type: 'TextBlock',
+                  text: `Hello ${user.firstName ?? user.email}, this is a test card from ACE Dialer. You'll receive cards here when you have a missed call, a new SMS, or a voicemail (per your opt-ins).`,
+                  wrap: true,
+                  isSubtle: true,
+                },
+                {
+                  type: 'TextBlock',
+                  text: 'You can adjust opt-ins or remove the webhook in Settings → Account → Teams notifications.',
+                  wrap: true,
+                  isSubtle: true,
+                  spacing: 'Small',
+                },
+              ],
+            },
+          },
+        ],
+      };
+      try {
+        const res = await fetch(user.teamsWebhookUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(card),
+        });
+        const text = await res.text().catch(() => '');
+        if (!res.ok) {
+          request.log.warn(
+            { status: res.status, body: text.slice(0, 300) },
+            '[me/teams-config/test] webhook rejected card',
+          );
+          return reply.code(502).send({
+            ok: false,
+            status: res.status,
+            error:
+              res.status === 410
+                ? 'Webhook URL expired or deleted. Re-create the Incoming Webhook in Teams.'
+                : `Teams returned HTTP ${res.status}: ${text.slice(0, 200)}`,
+          });
+        }
+        return { ok: true, status: res.status };
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        return reply.code(502).send({
+          ok: false,
+          error: `Failed to reach Teams webhook: ${msg}`,
+        });
+      }
     },
   );
 }

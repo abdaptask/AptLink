@@ -125,6 +125,53 @@ export interface SwitchActiveDidResult {
   warning?: string;
   error?: string;
 }
+// v0.10.0 Pillar 2 — Microsoft Teams notification config.
+// Per-user Incoming Webhook URL + opt-ins for which event types ping.
+export type TeamsEventType = 'missed_call' | 'sms' | 'voicemail';
+export interface TeamsConfig {
+  teamsWebhookUrl: string | null;
+  events: TeamsEventType[];
+  availableEvents?: TeamsEventType[];
+}
+export async function getTeamsConfig(token: string): Promise<TeamsConfig> {
+  const res = await fetch(`${API_URL}/me/teams-config`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+export async function updateTeamsConfig(
+  token: string,
+  input: { teamsWebhookUrl?: string | null; events?: TeamsEventType[] },
+): Promise<{ ok: boolean; error?: string }> {
+  const res = await fetch(`${API_URL}/me/teams-config`, {
+    method: 'PATCH',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify(input),
+  });
+  const body = (await res.json().catch(() => ({}))) as { error?: string };
+  if (!res.ok) return { ok: false, error: body.error || `HTTP ${res.status}` };
+  return { ok: true };
+}
+export async function testTeamsConfig(
+  token: string,
+): Promise<{ ok: boolean; status?: number; error?: string }> {
+  const res = await fetch(`${API_URL}/me/teams-config/test`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const body = (await res.json().catch(() => ({}))) as {
+    ok?: boolean;
+    status?: number;
+    error?: string;
+  };
+  if (!res.ok) return { ok: false, error: body.error || `HTTP ${res.status}` };
+  return { ok: Boolean(body.ok), status: body.status };
+}
+
 // v0.10.0 Task 27 — Admin: list a specific user's DIDs (read-only).
 export interface AdminUserDidRow {
   id: number;

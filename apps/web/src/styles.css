@@ -6780,3 +6780,197 @@ body::-webkit-scrollbar { display: none; }
 /* Hard floor — if the table genuinely can't fit (very narrow window), let
    the wrap scroll horizontally instead of clipping the Invite button. */
 .pending-table-wrap { overflow-x: auto; }
+
+/* ============================================================================
+   v0.10.0 Pillar 2 / Task 6 — Teams notifications Settings section.
+   ============================================================================ */
+.teams-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+  max-width: 720px;
+}
+.teams-settings-intro {
+  font-size: 0.92rem;
+  line-height: 1.5;
+  margin: 0;
+}
+.teams-settings-help {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  padding: 12px 14px;
+  font-size: 0.88rem;
+}
+.teams-settings-help summary {
+  cursor: pointer;
+  font-weight: 600;
+  user-select: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #6bb4ff;
+}
+.teams-settings-help summary:hover { color: #8fc8ff; }
+.teams-settings-help ol {
+  margin: 10px 0 0;
+  padding-left: 1.4rem;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  color: rgba(255, 255, 255, 0.78);
+}
+.teams-settings-help code {
+  background: rgba(255, 255, 255, 0.08);
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: 0.82rem;
+  word-break: break-all;
+}
+[data-theme="light"] .teams-settings-help {
+  background: rgba(0, 0, 0, 0.03);
+  border-color: rgba(0, 0, 0, 0.08);
+}
+[data-theme="light"] .teams-settings-help summary { color: #2563eb; }
+[data-theme="light"] .teams-settings-help summary:hover { color: #1d4ed8; }
+[data-theme="light"] .teams-settings-help ol { color: rgba(0, 0, 0, 0.7); }
+[data-theme="light"] .teams-settings-help code { background: rgba(0, 0, 0, 0.05); }
+
+.teams-settings-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.teams-settings-field label {
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: rgba(255, 255, 255, 0.7);
+}
+.teams-settings-field input[type="url"] {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 8px;
+  padding: 10px 12px;
+  color: #fff;
+  font-size: 0.92rem;
+  font-family: inherit;
+  width: 100%;
+}
+.teams-settings-field input[type="url"]:focus {
+  outline: none;
+  border-color: #3b82f6;
+}
+[data-theme="light"] .teams-settings-field label { color: rgba(0, 0, 0, 0.65); }
+[data-theme="light"] .teams-settings-field input[type="url"] {
+  background: rgba(0, 0, 0, 0.03);
+  border-color: rgba(0, 0, 0, 0.12);
+  color: var(--text);
+}
+
+.teams-settings-events {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  border: none;
+}
+.teams-settings-events legend {
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: rgba(255, 255, 255, 0.7);
+  margin-bottom: 6px;
+  padding: 0;
+}
+[data-theme="light"] .teams-settings-events legend { color: rgba(0, 0, 0, 0.65); }
+
+.teams-settings-checkbox {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+.teams-settings-checkbox:hover {
+  background: rgba(255, 255, 255, 0.04);
+  border-color: rgba(255, 255, 255, 0.16);
+}
+.teams-settings-checkbox input[type="checkbox"] {
+  margin-top: 3px;
+  flex-shrink: 0;
+  accent-color: #3b82f6;
+}
+.teams-settings-checkbox > div {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.teams-settings-checkbox-label {
+  font-weight: 600;
+  font-size: 0.92rem;
+  color: rgba(255, 255, 255, 0.95);
+}
+.teams-settings-checkbox-desc {
+  font-size: 0.82rem;
+  color: rgba(255, 255, 255, 0.6);
+  line-height: 1.4;
+}
+[data-theme="light"] .teams-settings-checkbox {
+  border-color: rgba(0, 0, 0, 0.08);
+}
+[data-theme="light"] .teams-settings-checkbox:hover {
+  background: rgba(0, 0, 0, 0.03);
+  border-color: rgba(0, 0, 0, 0.16);
+}
+[data-theme="light"] .teams-settings-checkbox-label { color: var(--text); }
+[data-theme="light"] .teams-settings-checkbox-desc { color: rgba(0, 0, 0, 0.6); }
+
+.teams-settings-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.teams-settings-remove {
+  color: #ff8a80;
+  margin-left: auto;
+}
+.teams-settings-saved {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.82rem;
+  color: #34c759;
+  font-weight: 600;
+}
+.teams-settings-result {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  font-size: 0.88rem;
+  line-height: 1.4;
+}
+.teams-settings-result-ok {
+  background: rgba(52, 199, 89, 0.14);
+  border: 1px solid rgba(52, 199, 89, 0.3);
+  color: #34c759;
+}
+.teams-settings-result-err {
+  background: rgba(255, 59, 48, 0.14);
+  border: 1px solid rgba(255, 59, 48, 0.3);
+  color: #ff6b6b;
+}
+.teams-settings-result-ok svg,
+.teams-settings-result-err svg {
+  flex-shrink: 0;
+  margin-top: 1px;
+}
