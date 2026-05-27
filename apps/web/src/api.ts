@@ -79,6 +79,69 @@ export async function getMe(token: string): Promise<User> {
   return res.json();
 }
 
+// v0.10.0 — Multi-DID per user. The dialer header renders a dropdown of
+// these so a user with multiple numbers can switch which one is the
+// active outbound identity. Backend tracks the active selection in
+// User.activeUserDidId so it survives logout / device switch.
+export interface UserDidRow {
+  id: number;
+  didNumber: string;
+  label: string;
+  colorHex: string;
+  isDefault: boolean;
+  isActiveOutbound: boolean;
+  ringGroupId: number | null;
+  ivrMenuId: number | null;
+}
+export interface UserDidsResponse {
+  dids: UserDidRow[];
+}
+export async function getMyDids(token: string): Promise<UserDidRow[]> {
+  const res = await fetch(`${API_URL}/me/dids`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const body = (await res.json()) as UserDidsResponse;
+  return body.dids;
+}
+
+export interface SwitchActiveDidResult {
+  ok: boolean;
+  userDidId: number;
+  didNumber: string;
+  label: string;
+  telnyxUpdated: boolean;
+  warning?: string;
+  error?: string;
+}
+export async function switchActiveDid(
+  token: string,
+  userDidId: number,
+): Promise<SwitchActiveDidResult> {
+  const res = await fetch(`${API_URL}/me/active-did`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ userDidId }),
+  });
+  const body = (await res.json().catch(() => ({}))) as Partial<SwitchActiveDidResult> & {
+    error?: string;
+  };
+  if (!res.ok) {
+    return {
+      ok: false,
+      userDidId,
+      didNumber: '',
+      label: '',
+      telnyxUpdated: false,
+      error: body.error || `HTTP ${res.status}`,
+    };
+  }
+  return body as SwitchActiveDidResult;
+}
+
 // v0.9.13 — Fetch optional extra TURN servers (Cloudflare). Returns an
 // empty array when the backend isn't configured for Cloudflare TURN; the
 // SIP service already includes Telnyx TURN unconditionally, so callers
