@@ -1993,6 +1993,441 @@ export async function adminRoutes(app: FastifyInstance) {
     },
   );
 
+  // ═══════════════════════════════════════════════════════════════════════
+  // v0.10.0 Task 27 — Per-user DID management (additional lines).
+  //
+  // Lets admins add/remove/edit DIDs on an existing user without going
+  // through the full invite flow. Needed because the invite flow only
+  // assigns ONE DID per new user; multi-DID users need lines added
+  // after-the-fact.
+  //
+  // Endpoints:
+  //   GET    /admin/users/:id/dids                  list user's DIDs
+  //   POST   /admin/users/:id/dids                  add a DID
+  //   PATCH  /admin/users/:id/dids/:didId           edit label/color/default
+  //   DELETE /admin/users/:id/dids/:didId           remove a DID
+  // ═══════════════════════════════════════════════════════════════════════
+
+  // ── GET /admin/users/:id/dids ───────────────────────────────────────────
+  app.get<{ Params: { id: string } }>(
+    '/admin/users/:id/dids',
+    { onRequest: [app.authenticate, requireAdmin] },
+    async (request, reply) => {
+      const userId = Number(request.params.id);
+      if (!Number.isFinite(userId)) {
+        return reply.code(400).send({ error: 'Invalid user id' });
+      }
+      const target = await prisma.user.findUnique({
+        where: { id: userId },
+        select: { id: true },
+      });
+      if (!target) return reply.code(404).send({ error: 'User not found' });
+
+      const dids = await prisma.userDid.findMany({
+        where: { userId },
+        orderBy: [{ isDefault: 'desc' }, { createdAt: 'asc' }],
+        select: {
+          id: true,
+          didNumber: true,
+          telnyxNumberId: true,
+          connectionId: true,
+          label: true,
+          colorHex: true,
+          isDefault: true,
+          createdAt: true,
+        },
+      });
+      return { dids };
+    },
+  );
+
+  // ── POST /admin/users/:id/dids ──────────────────────────────────────────
+  // Adds an additional DID to an existing user. Two modes (mutually exclusive):
+  //
+  //   Mode A — UNASSIGNED inventory pick
+  //     { source: 'unassigned', didNumber: '+19735551234', ... }
+  //     The admin picked a DID we already own that's not currently
+  //     assigned to anyone. We just route it to the user's connection.
+  //
+  //   Mode B — PURCHASE a fresh DID
+  //     { source: 'purchase', purchaseAreaCode: '732', ... }
+  //     The admin wants a brand-new number. We search Telnyx availability
+  //     in the requested area code, pick the first hit, order it (billable),
+  //     then route to the user's connection same as Mode A.
+  //
+  // Both modes then:
+  //   1. Validate the user has an existing Credential Connection (from
+  //      their default UserDid). If not, we refuse — admin should
+  //      complete the invite flow first which creates the connection.
+  //   2. Assign the DID to that connection on Telnyx (voice routing).
+  //   3. Bind the DID to ACE's messaging profile (SMS routing).
+  //   4. Insert the UserDid row.
+  //   5. If isDefault=true, unset isDefault on the user's other UserDids.
+  const AddDidSchema = z.object({
+    source: z.enum(['unassigned', 'purchase']),
+    // unassigned mode: required
+    didNumber: z.string().min(8).max(20).optional(),
+    // purchase mode: required (3-digit US area code)
+    purchaseAreaCode: z.string().regex(/^\d{3}$/).optional(),
+    label: z.string().min(1).max(40).default('Line'),
+    colorHex: z.string().regex(/^#[0-9a-fA-F]{6}$/).default('#3b82f6'),
+    isDefault: z.boolean().optional().default(false),
+  }).refine(
+    (d) => (d.source === 'unassigned' ? !!d.didNumber : !!d.purchaseAreaCode),
+    {
+      message:
+        "source='unassigned' requires didNumber; source='purchase' requires purchaseAreaCode",
+    },
+  );
+  app.post<{ Params: { id: string } }>(
+    '/admin/users/:id/dids',
+    { onRequest: [app.authenticate, requireAdmin] },
+    async (request, reply) => {
+      const actor = request.user as JwtPayload;
+      const userId = Number(request.params.id);
+      if (!Number.isFinite(userId)) {
+        return reply.code(400).send({ error: 'Invalid user id' });
+      }
+      const parsed = AddDidSchema.safeParse(request.body);
+      if (!parsed.success) {
+        return reply.code(400).send({ error: 'Invalid input', details: parsed.error.flatten() });
+      }
+      const { source, label, colorHex, isDefault } = parsed.data;
+
+      const target = await prisma.user.findUnique({
+        where: { id: userId },
+        select: {
+          id: true,
+          email: true,
+          userDids: {
+            select: { id: true, didNumber: true, connectionId: true, isDefault: true },
+          },
+        },
+      });
+      if (!target) return reply.code(404).send({ error: 'User not found' });
+
+      // Find the user's Credential Connection — needed for routing the
+      // new DID. We pull it from the user's default UserDid.
+      const defaultDid = target.userDids.find((d) => d.isDefault) ?? target.userDids[0];
+      if (!defaultDid?.connectionId) {
+        return reply.code(409).send({
+          error: 'User has no existing Telnyx Credential Connection. Complete the invite flow first so a connection exists, then add additional DIDs.',
+        });
+      }
+      const connectionId = defaultDid.connectionId;
+
+      // Resolve { e164, telnyxNumberId } based on which mode we're in.
+      let e164: string;
+      let telnyxNumberId: string;
+      let purchased = false;
+      let purchasedNumber: string | null = null;
+
+      if (source === 'unassigned') {
+        // Mode A — admin picked an existing inventory number.
+        const didNumber = parsed.data.didNumber!;
+        const digits = didNumber.replace(/\D/g, '');
+        e164 = digits.startsWith('1') && digits.length === 11
+          ? `+${digits}`
+          : digits.length === 10
+            ? `+1${digits}`
+            : didNumber.startsWith('+') ? didNumber : `+${digits}`;
+
+        // Refuse if this DID is already in our UserDid table.
+        const existing = await prisma.userDid.findUnique({
+          where: { didNumber: e164 },
+          select: { id: true, userId: true },
+        });
+        if (existing) {
+          const isMine = existing.userId === userId;
+          return reply.code(409).send({
+            error: isMine
+              ? 'This DID is already assigned to this user.'
+              : 'This DID is already assigned to another user. Remove it from them first.',
+          });
+        }
+
+        const tn = await telnyx.findNumberByE164(e164);
+        if (!tn.ok) {
+          return reply.code(502).send({
+            error: 'Telnyx lookup failed', detail: tn.error,
+          });
+        }
+        if (!tn.data) {
+          return reply.code(404).send({
+            error: `Telnyx doesn't recognize ${e164}. Confirm we own this number in Numbers → My Numbers.`,
+          });
+        }
+        telnyxNumberId = tn.data.id;
+      } else {
+        // Mode B — purchase a fresh DID from Telnyx.
+        const areaCode = parsed.data.purchaseAreaCode!;
+
+        // 1. Search availability.
+        const search = await telnyx.searchAvailableLocal(areaCode, 5);
+        if (!search.ok) {
+          return reply.code(502).send({
+            error: 'Telnyx number search failed', detail: search.error,
+          });
+        }
+        const candidate = search.data?.data?.[0];
+        if (!candidate?.phone_number) {
+          return reply.code(404).send({
+            error: `No available local numbers in area code ${areaCode}. Try a different area code.`,
+          });
+        }
+
+        // 2. Place the order. This is BILLABLE.
+        const order = await telnyx.purchaseDid(candidate.phone_number, connectionId);
+        if (!order.ok) {
+          return reply.code(502).send({
+            error: 'Telnyx number purchase failed', detail: order.error,
+          });
+        }
+        const ordered = order.data?.data?.phone_numbers?.[0];
+        if (!ordered) {
+          return reply.code(502).send({
+            error: 'Telnyx returned no phone_numbers in the order response',
+            detail: order.data,
+          });
+        }
+        e164 = ordered.phone_number;
+        telnyxNumberId = ordered.id;
+        purchased = true;
+        purchasedNumber = e164;
+
+        request.log.info(
+          { userId, e164, telnyxNumberId, areaCode },
+          '[admin.user_dids.add] purchased new DID',
+        );
+        // Note: purchaseDid() above already passed connection_id at order
+        // time so the assignDidToConnection call below is a confirmatory
+        // PATCH (idempotent — Telnyx tolerates re-setting the same value).
+      }
+
+      // Assign the DID to the user's connection (voice routing).
+      // For purchase-mode this is a confirmation; for unassigned-mode it's
+      // the actual binding step.
+      const assign = await telnyx.assignDidToConnection(telnyxNumberId, connectionId);
+      if (!assign.ok) {
+        return reply.code(502).send({
+          error: 'Failed to assign DID to user\'s connection on Telnyx',
+          detail: assign.error,
+          purchased,
+          purchasedNumber,
+        });
+      }
+
+      // Bind to ACE's messaging profile (inbound SMS routing).
+      if (config.telnyxMessagingProfileId) {
+        const msg = await telnyx.assignNumberMessagingProfile(
+          telnyxNumberId,
+          config.telnyxMessagingProfileId,
+        );
+        if (!msg.ok) {
+          // Non-fatal — voice is wired; SMS may need manual portal fix.
+          // Log + continue.
+          request.log.warn(
+            { numberId: telnyxNumberId, error: msg.error },
+            '[admin.user_dids.add] messaging profile assignment failed',
+          );
+        }
+      }
+
+      // If admin marked this as the new default, unset isDefault on all
+      // existing UserDids for this user. Then insert the new row.
+      if (isDefault) {
+        await prisma.userDid.updateMany({
+          where: { userId },
+          data: { isDefault: false },
+        });
+      }
+      const created = await prisma.userDid.create({
+        data: {
+          userId,
+          didNumber: e164,
+          telnyxNumberId,
+          connectionId,
+          label,
+          colorHex,
+          isDefault,
+        },
+        select: {
+          id: true,
+          didNumber: true,
+          label: true,
+          colorHex: true,
+          isDefault: true,
+        },
+      });
+
+      // If this is now the user's default AND nothing was their default
+      // before, point activeUserDidId at the new row.
+      if (isDefault) {
+        await prisma.user.update({
+          where: { id: userId },
+          data: { activeUserDidId: created.id },
+        });
+      }
+
+      await recordAudit(actor.sub, 'user_did.added', userId, {
+        source,                  // 'unassigned' or 'purchase' (audit signal for billing review)
+        didNumber: e164,
+        label,
+        colorHex,
+        isDefault,
+        userDidId: created.id,
+        purchased,               // true if we billed Telnyx for a new DID
+        purchasedNumber,
+      });
+
+      return {
+        ok: true,
+        userDid: created,
+        purchased,
+        purchasedNumber,
+      };
+    },
+  );
+
+  // ── PATCH /admin/users/:id/dids/:didId ──────────────────────────────────
+  const PatchDidSchema = z.object({
+    label: z.string().min(1).max(40).optional(),
+    colorHex: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional(),
+    isDefault: z.boolean().optional(),
+  });
+  app.patch<{ Params: { id: string; didId: string } }>(
+    '/admin/users/:id/dids/:didId',
+    { onRequest: [app.authenticate, requireAdmin] },
+    async (request, reply) => {
+      const actor = request.user as JwtPayload;
+      const userId = Number(request.params.id);
+      const didId = Number(request.params.didId);
+      if (!Number.isFinite(userId) || !Number.isFinite(didId)) {
+        return reply.code(400).send({ error: 'Invalid id' });
+      }
+      const parsed = PatchDidSchema.safeParse(request.body);
+      if (!parsed.success) {
+        return reply.code(400).send({ error: 'Invalid input', details: parsed.error.flatten() });
+      }
+
+      const existing = await prisma.userDid.findFirst({
+        where: { id: didId, userId },
+        select: { id: true, didNumber: true, isDefault: true },
+      });
+      if (!existing) {
+        return reply.code(404).send({ error: 'UserDid not found for this user' });
+      }
+
+      // If we're flipping isDefault to true, unset the others first.
+      if (parsed.data.isDefault === true && !existing.isDefault) {
+        await prisma.userDid.updateMany({
+          where: { userId, id: { not: didId } },
+          data: { isDefault: false },
+        });
+        await prisma.user.update({
+          where: { id: userId },
+          data: { activeUserDidId: didId },
+        });
+      }
+
+      const updated = await prisma.userDid.update({
+        where: { id: didId },
+        data: parsed.data,
+        select: {
+          id: true, didNumber: true, label: true, colorHex: true, isDefault: true,
+        },
+      });
+
+      await recordAudit(actor.sub, 'user_did.updated', userId, {
+        userDidId: didId,
+        changes: parsed.data,
+      });
+
+      return { ok: true, userDid: updated };
+    },
+  );
+
+  // ── DELETE /admin/users/:id/dids/:didId ─────────────────────────────────
+  // Removes a DID from a user. Refuses if it's the user's only DID
+  // (would leave them un-callable). Also unassigns the DID on Telnyx so
+  // it returns to the pool — admin can re-use it on another user via
+  // the unassigned-numbers picker.
+  app.delete<{ Params: { id: string; didId: string } }>(
+    '/admin/users/:id/dids/:didId',
+    { onRequest: [app.authenticate, requireAdmin] },
+    async (request, reply) => {
+      const actor = request.user as JwtPayload;
+      const userId = Number(request.params.id);
+      const didId = Number(request.params.didId);
+      if (!Number.isFinite(userId) || !Number.isFinite(didId)) {
+        return reply.code(400).send({ error: 'Invalid id' });
+      }
+
+      const target = await prisma.userDid.findFirst({
+        where: { id: didId, userId },
+        select: {
+          id: true, didNumber: true, telnyxNumberId: true, isDefault: true,
+        },
+      });
+      if (!target) {
+        return reply.code(404).send({ error: 'UserDid not found for this user' });
+      }
+
+      const total = await prisma.userDid.count({ where: { userId } });
+      if (total <= 1) {
+        return reply.code(409).send({
+          error: 'Cannot remove the user\'s only DID. Assign another line first, or hard-delete the user from the Users tab.',
+        });
+      }
+
+      // Telnyx side: unassign so the number returns to the pool.
+      // Non-fatal — if Telnyx rejects, we still drop the UserDid row
+      // (admin can fix the Telnyx side later).
+      let telnyxUnassigned = false;
+      if (target.telnyxNumberId) {
+        const un = await telnyx.unassignNumber(target.telnyxNumberId);
+        telnyxUnassigned = un.ok;
+        if (!un.ok) {
+          request.log.warn(
+            { numberId: target.telnyxNumberId, error: un.error },
+            '[admin.user_dids.delete] Telnyx unassign failed',
+          );
+        }
+      }
+
+      // If we're removing the default, promote another UserDid to default.
+      // Pick the oldest remaining (most established line).
+      if (target.isDefault) {
+        const next = await prisma.userDid.findFirst({
+          where: { userId, id: { not: didId } },
+          orderBy: { createdAt: 'asc' },
+          select: { id: true },
+        });
+        if (next) {
+          await prisma.userDid.update({
+            where: { id: next.id },
+            data: { isDefault: true },
+          });
+          await prisma.user.update({
+            where: { id: userId },
+            data: { activeUserDidId: next.id },
+          });
+        }
+      }
+
+      await prisma.userDid.delete({ where: { id: didId } });
+
+      await recordAudit(actor.sub, 'user_did.removed', userId, {
+        userDidId: didId,
+        didNumber: target.didNumber,
+        wasDefault: target.isDefault,
+        telnyxUnassigned,
+      });
+
+      return { ok: true, telnyxUnassigned };
+    },
+  );
+
   // ── POST /admin/pending-users/import ────────────────────────────────────
   app.post(
     '/admin/pending-users/import',

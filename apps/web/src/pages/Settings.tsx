@@ -113,6 +113,7 @@ import {
   HOLD_MUSIC_MAX_BYTES,
 } from '../lib/userPrefs';
 import PendingUsersSection from '../components/PendingUsersSection';
+import UserLinesManagerModal from '../components/UserLinesManagerModal';
 import { formatPhone } from '../lib/phone';
 
 interface AudioDevice {
@@ -1693,6 +1694,8 @@ function UsersAdminSection() {
   const [search, setSearch] = useState('');
   // v0.9.8 — Hard-delete modal target. null = closed.
   const [hardDeleteTarget, setHardDeleteTarget] = useState<AdminUserRow | null>(null);
+  // v0.10.0 Task 27 — Manage Lines modal target. null = closed.
+  const [linesTarget, setLinesTarget] = useState<AdminUserRow | null>(null);
   // v0.9.9 — Hide deactivated users by default (so "delete" feels like
   // delete even when FK constraints force soft-deactivate). Admin can
   // toggle to see the full list.
@@ -1978,6 +1981,19 @@ function UsersAdminSection() {
                         Hard delete
                       </button>
 
+                      {/* v0.10.0 Task 27 — Manage user's DIDs (add/remove/edit). */}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setOpenMenuId(null);
+                          setLinesTarget(r);
+                        }}
+                        title="Add or remove phone numbers for this user"
+                      >
+                        <Phone size={14} />
+                        Manage lines
+                      </button>
+
                       {/* Set SIP password â€” for users imported without a password */}
                       <button
                         type="button"
@@ -2063,6 +2079,21 @@ function UsersAdminSection() {
           onDone={() => {
             setHardDeleteTarget(null);
             load();
+          }}
+        />
+      )}
+
+      {/* v0.10.0 Task 27 — Manage Lines modal */}
+      {linesTarget && (
+        <UserLinesManagerModal
+          userId={linesTarget.id}
+          userLabel={
+            [linesTarget.firstName, linesTarget.lastName].filter(Boolean).join(' ') ||
+            linesTarget.email
+          }
+          onClose={() => {
+            setLinesTarget(null);
+            load();  // refresh the table — userDid changes can affect didNumber column display
           }}
         />
       )}
