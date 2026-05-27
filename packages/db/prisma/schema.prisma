@@ -33,11 +33,23 @@ model User {
   /// Phase 5.7 (multi-user): the DID (E.164 phone number) assigned to this
   /// user. Used by the webhook handler to route inbound SMS/calls to the
   /// right user (matching on the called number).
+  ///
+  /// v0.10.0 (feature/multi-num-teams-routing): DEPRECATED in favor of the
+  /// UserDid relation below. Kept here for backwards compatibility — it
+  /// shadows the user's default UserDid.didNumber. Any new code should
+  /// look up via UserDid; reads of this column will be removed in v1.0.
   didNumber       String?   @unique @map("did_number")
-  /// Telnyx-side internal id for the DID. Avoids re-looking it up on every
-  /// call-forwarding save. Populated lazily by the API the first time the
-  /// user opens Settings → Call Forwarding (or via the create-user script).
+  /// DEPRECATED — see UserDid.telnyxNumberId. Same v0.10.0 plan as didNumber.
   telnyxNumberId  String?   @map("telnyx_number_id")
+  /// v0.10.0 — Pointer to the currently-selected outbound UserDid. When a
+  /// user has multiple DIDs and toggles between them via the dialer header
+  /// dropdown, this column tracks their choice server-side so it persists
+  /// across logins and devices. Outbound SMS reads UserDid.didNumber via
+  /// this pointer; outbound calls' caller ID is set by PATCHing the
+  /// matching Credential Connection's ani_override at switch time.
+  /// NULL = use whichever UserDid has isDefault=true.
+  activeUserDidId Int?      @map("active_user_did_id")
+  activeUserDid   UserDid?  @relation("UserActiveDid", fields: [activeUserDidId], references: [id])
   /// Call Forwarding (Pulse-pattern feature).
   /// - forwardingEnabled: toggle in Settings.
   /// - forwardingNumber: destination E.164.
@@ -72,8 +84,73 @@ model User {
   favorites          Favorite[]
   auditLogsAuthored  AuditLog[]        @relation("AuditLogActor")
   auditLogsTargeting AuditLog[]        @relation("AuditLogTarget")
+  /// v0.10.0 — Multi-DID support. Replaces the singular User.didNumber
+  /// column. Each row represents one phone number this user owns. The row
+  /// with isDefault=true is the user's primary line; activeUserDidId
+  /// (pointer above) tracks whichever they currently have selected in
+  /// the dialer header dropdown.
+  userDids        UserDid[] @relation("UserOwnedDids")
 
   @@map("users")
+}
+
+/// v0.10.0 — Per-user phone-number ownership.
+///
+/// Replaces User.didNumber + User.telnyxNumberId (those two columns are now
+/// deprecated and shadow the row that has isDefault=true; they'll be removed
+/// in v1.0). A user can own N DIDs; the dialer header dropdown lets them
+/// switch which one is the active outbound identity.
+///
+/// Future-proofing for ring groups + IVR: a DID can be bound either to a
+/// single human user (the common case), a RingGroup (inbound calls fork to
+/// multiple members), or an IvrMenu (inbound calls hit a TexML <Gather>
+/// menu). The three target fields — userId, ringGroupId, ivrMenuId — are
+/// mutually exclusive, enforced in application code at write time.
+model UserDid {
+  id              Int      @id @default(autoincrement())
+  /// Owner. NULL only for DIDs bound to a RingGroup or IvrMenu that
+  /// aren't tied to any specific admin user. Most DIDs have this set.
+  userId          Int?     @map("user_id")
+  user            User?    @relation("UserOwnedDids", fields: [userId], references: [id], onDelete: Cascade)
+  /// Reverse relation for User.activeUserDidId pointer.
+  activeFor       User[]   @relation("UserActiveDid")
+  /// E.164 phone number. Globally unique — Telnyx owns the namespace.
+  didNumber       String   @unique @map("did_number")
+  /// Telnyx-side internal id for this DID. Cached so we don't re-lookup
+  /// on every call-forwarding save / messaging-profile patch.
+  telnyxNumberId  String?  @map("telnyx_number_id")
+  /// Which Telnyx Credential Connection this DID's voice traffic is
+  /// bound to. Cached for the same reason as telnyxNumberId.
+  connectionId    String?  @map("connection_id")
+  /// Display label shown in the dialer dropdown + on inbound rows.
+  /// e.g. "Main", "Sales", "Personal". Defaults to "Line".
+  label           String   @default("Line")
+  /// Hex color for the inbound-DID tag pill that renders in Recents /
+  /// Messages / Voicemail. Default = ACE blue.
+  colorHex        String   @default("#3b82f6") @map("color_hex")
+  /// Exactly one UserDid per user should have isDefault=true. Enforced
+  /// in application code at the API layer.
+  isDefault       Boolean  @default(false) @map("is_default")
+  /// FUTURE (Pillar 3) — non-null binds this DID's inbound to a RingGroup
+  /// instead of routing to the user's SIP credential.
+  ringGroupId     Int?     @map("ring_group_id")
+  /// FUTURE (Pillar 4) — non-null binds this DID's inbound to an IVR menu.
+  /// Mutually exclusive with ringGroupId.
+  ivrMenuId       Int?     @map("ivr_menu_id")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt      @map("updated_at")
+
+  /// v0.10.0 Task 5 — reverse relations for inbound DID flagging.
+  /// Call/Message/Voicemail rows reference this UserDid via userDidId
+  /// to surface a "line badge" in Recents / Messages / Voicemail.
+  calls           Call[]
+  messages        Message[]
+  voicemails      Voicemail[]
+
+  @@index([userId])
+  @@index([ringGroupId])
+  @@index([ivrMenuId])
+  @@map("user_dids")
 }
 
 /// Per-user starred contacts. Used to power the Favorites tab and to show
@@ -139,10 +216,17 @@ model Call {
   hangupCause     String?   @map("hangup_cause")
   hangupSource    String?   @map("hangup_source")
   recordingUrl    String?   @map("recording_url")
+  /// v0.10.0 — Which of the user's DIDs this call landed on (inbound)
+  /// or was placed from (outbound). NULL for legacy rows pre-backfill
+  /// or for users that don't yet have any UserDid rows. Drives the line
+  /// badge ("Sales", "Main") rendered on Recents rows in the UI.
+  userDidId       Int?      @map("user_did_id")
+  userDid         UserDid?  @relation(fields: [userDidId], references: [id], onDelete: SetNull)
   createdAt       DateTime  @default(now()) @map("created_at")
   updatedAt       DateTime  @updatedAt      @map("updated_at")
 
   @@index([userId, startedAt])
+  @@index([userDidId])
   @@map("calls")
 }
 
@@ -164,11 +248,17 @@ model Message {
   errors           Json?
   sentAt           DateTime? @map("sent_at")
   deliveredAt      DateTime? @map("delivered_at")
+  /// v0.10.0 — Which of the user's DIDs this message landed on (inbound)
+  /// or was sent from (outbound). NULL for legacy rows pre-backfill.
+  /// See Call.userDidId for the design rationale.
+  userDidId        Int?      @map("user_did_id")
+  userDid          UserDid?  @relation(fields: [userDidId], references: [id], onDelete: SetNull)
   createdAt        DateTime  @default(now()) @map("created_at")
   updatedAt        DateTime  @updatedAt      @map("updated_at")
 
   @@index([userId, threadKey, createdAt])
   @@index([userId, createdAt])
+  @@index([userDidId])
   @@map("messages")
 }
 
@@ -189,10 +279,16 @@ model Voicemail {
   /// When the caller hung up after leaving the message.
   receivedAt      DateTime  @map("received_at")
   listenedAt      DateTime? @map("listened_at")
+  /// v0.10.0 — Which of the user's DIDs this voicemail came in on.
+  /// Voicemails are inbound-only by definition; we resolve via the
+  /// toNumber match. NULL for legacy rows pre-backfill.
+  userDidId       Int?      @map("user_did_id")
+  userDid         UserDid?  @relation(fields: [userDidId], references: [id], onDelete: SetNull)
   createdAt       DateTime  @default(now()) @map("created_at")
   updatedAt       DateTime  @updatedAt      @map("updated_at")
 
   @@index([userId, receivedAt])
+  @@index([userDidId])
   @@map("voicemails")
 }
 
