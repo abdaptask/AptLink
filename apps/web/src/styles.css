@@ -3273,6 +3273,12 @@ body {
 }
 .compose-input {
   flex: 1;
+  /* v0.9.15 — Chat uses <textarea> for multi-line support. <textarea>
+     defaults to font-family: monospace in every browser, which is what
+     made the Chat compose row look "horrible" in the screenshots —
+     placeholder rendered as Courier. Inherit the page's font stack
+     instead so the input matches the rest of the dialer. */
+  font-family: inherit;
   height: 38px;
   padding: 0 14px;
   border-radius: 999px;
@@ -3280,7 +3286,9 @@ body {
   background: #1f2937;
   color: #fff;
   font-size: 14px;
+  line-height: 1.4;
   outline: none;
+  resize: none;
 }
 .compose-input:focus { border-color: #3b82f6; }
 .send-btn {
@@ -3654,6 +3662,107 @@ button.call-pill-info:hover { background: rgba(255, 255, 255, 0.05); }
   flex-basis: 32px;
   font-size: 12px;
   margin-right: 8px;
+}
+
+/* v0.9.15 — Presence dots (Slack/Teams style overlay on avatars).
+   Wrap the avatar in .chat-avatar-wrap so the dot can be absolutely
+   positioned in the bottom-right corner over the avatar. Inline use
+   (just the dot, no avatar) is also supported for the section
+   headers — the dot renders inline-flex without an avatar parent. */
+.chat-avatar-wrap {
+  position: relative;
+  display: inline-flex;
+  flex: 0 0 40px;
+}
+.chat-avatar-wrap.small {
+  flex-basis: 32px;
+  margin-right: 8px;
+}
+.presence-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  display: inline-block;
+  flex-shrink: 0;
+  /* Subtle ring so the dot reads cleanly even on busy avatar gradients. */
+  box-shadow: 0 0 0 2px var(--surface, #11192a);
+}
+.presence-dot-overlay {
+  position: absolute;
+  bottom: -1px;
+  right: -1px;
+  /* Slightly larger ring when overlaying an avatar so contrast is visible
+     regardless of avatar hue. */
+  box-shadow: 0 0 0 2.5px var(--surface, #11192a);
+}
+.chat-avatar-wrap.small .presence-dot-overlay {
+  width: 8px;
+  height: 8px;
+}
+.presence-dot-oncall   { background: #ef4444; }  /* red — on a call */
+.presence-dot-online   { background: #22c55e; }  /* green — recently active */
+.presence-dot-away     { background: #eab308; }  /* yellow — semi-recent */
+.presence-dot-offline  { background: #6b7280; }  /* grey — idle / signed out */
+
+[data-theme="light"] .presence-dot { box-shadow: 0 0 0 2px var(--surface-2, #ffffff); }
+[data-theme="light"] .presence-dot-overlay { box-shadow: 0 0 0 2.5px var(--surface-2, #ffffff); }
+
+/* v0.9.15 — Section headers that group teammates by presence in the
+   "new chat" picker. Slack-style: clickable header with a status dot,
+   count, and a caret that rotates when collapsed. Section list reuses
+   .thread-row inside, so all the row styles apply transparently. */
+.chat-teammates-list { list-style: none; padding: 0; margin: 0; }
+.presence-section { list-style: none; margin: 0; padding: 0; }
+.presence-section-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 10px 16px 6px;
+  background: none;
+  border: none;
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  cursor: pointer;
+  text-align: left;
+}
+.presence-section-header:hover { color: #fff; }
+.presence-section-label { flex: 0 1 auto; }
+.presence-section-count {
+  font-weight: 500;
+  opacity: 0.6;
+  font-size: 11px;
+}
+.presence-section-caret {
+  margin-left: auto;
+  font-size: 12px;
+  opacity: 0.7;
+  transition: transform 0.15s ease;
+}
+.presence-section-caret.collapsed { transform: rotate(-90deg); }
+.presence-section-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+[data-theme="light"] .presence-section-header {
+  color: rgba(0, 0, 0, 0.55);
+}
+[data-theme="light"] .presence-section-header:hover { color: var(--text); }
+
+/* v0.9.15 — Presence text in the conversation header
+   (e.g. "Online · nileshd@aptask.com"). Inherits color from .thread-header-sub
+   and just gets a subtle weight bump so it's parseable at a glance. */
+.thread-header-presence {
+  font-weight: 600;
+  opacity: 0.9;
+}
+.thread-header-presence-sep {
+  opacity: 0.5;
 }
 
 /* The Chat thread-detail re-uses .msg-list as its scrolling bubble area;

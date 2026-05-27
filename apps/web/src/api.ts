@@ -778,11 +778,23 @@ export async function deleteFavoriteApi(token: string, id: number): Promise<void
 // Lives entirely in our DB; intended for short notes between teammates.
 // ─────────────────────────────────────────────────────────────────
 
+// v0.9.15 — presence: live status the Chat UI uses to sort and section
+// the teammates list. Same 4-state model as admin Presence dashboard:
+//   - 'on_call': teammate is on a phone call right now
+//   - 'active':  any dialer activity in last 10 min
+//   - 'recent':  activity within last 60 min
+//   - 'idle':    no activity in 60+ min (or never)
+// `presence` is optional in the type for backward compatibility with any
+// caller that hasn't been redeployed yet, but the production API always
+// returns it.
+export type ChatPresence = 'on_call' | 'active' | 'recent' | 'idle';
 export interface InternalChatUser {
   id: number;
   email: string;
   firstName: string | null;
   lastName: string | null;
+  presence?: ChatPresence;
+  lastActivity?: string | null;
 }
 
 export interface InternalChatThread {

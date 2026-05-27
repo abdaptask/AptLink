@@ -1,6 +1,6 @@
 {
   "name": "@ace/desktop",
-  "version": "0.9.14",
+  "version": "0.9.15",
   "private": true,
   "description": "ACE Dialer desktop app (Electron)",
   "author": "ApTask",

@@ -20,8 +20,33 @@ import {
   type InternalChatThread,
   type InternalChatMessage,
   type InternalChatUser,
+  type ChatPresence,
   getMe,
 } from '../api';
+
+// v0.9.15 — presence display + sort order.
+// Order: on_call (red) > active (green) > recent (yellow) > idle (grey).
+// The user explicitly asked for status-sorted teammates.
+const PRESENCE_ORDER: Record<ChatPresence, number> = {
+  on_call: 0,
+  active: 1,
+  recent: 2,
+  idle: 3,
+};
+const PRESENCE_LABEL: Record<ChatPresence, string> = {
+  on_call: 'On call',
+  active: 'Online',
+  recent: 'Away',
+  idle: 'Offline',
+};
+// CSS class names — defined in styles.css. Map presence → dot color class.
+const PRESENCE_DOT_CLASS: Record<ChatPresence, string> = {
+  on_call: 'presence-dot-oncall',
+  active: 'presence-dot-online',
+  recent: 'presence-dot-away',
+  idle: 'presence-dot-offline',
+};
+const ALL_PRESENCE: ChatPresence[] = ['on_call', 'active', 'recent', 'idle'];
 
 function displayName(u: InternalChatUser | null | undefined): string {
   if (!u) return 'Unknown user';
@@ -158,12 +183,33 @@ function ThreadDetail({ meId, other, otherId, onBack, onSent }: ThreadDetailProp
         >
           <ArrowLeft size={18} />
         </button>
-        <span className="chat-avatar small" style={avatarStyle(other)}>
-          {initials(other)}
+        <span className="chat-avatar-wrap small">
+          <span className="chat-avatar small" style={avatarStyle(other)}>
+            {initials(other)}
+          </span>
+          {other?.presence && (
+            <span
+              className={`presence-dot presence-dot-overlay ${PRESENCE_DOT_CLASS[other.presence]}`}
+              aria-hidden="true"
+              title={PRESENCE_LABEL[other.presence]}
+            />
+          )}
         </span>
         <div>
           <div className="thread-header-name">{displayName(other)}</div>
-          {other?.email && <div className="thread-header-sub">{other.email}</div>}
+          <div className="thread-header-sub">
+            {other?.presence && (
+              <span className="thread-header-presence">
+                {PRESENCE_LABEL[other.presence]}
+              </span>
+            )}
+            {other?.presence && other?.email && (
+              <span className="thread-header-presence-sep" aria-hidden="true">
+                {' · '}
+              </span>
+            )}
+            {other?.email}
+          </div>
         </div>
       </div>
 
@@ -225,6 +271,18 @@ export default function Chat() {
   const [error, setError] = useState<string | null>(null);
   const [showUserPicker, setShowUserPicker] = useState(false);
   const [search, setSearch] = useState('');
+  // v0.9.15 — collapsible sections by presence. Empty Set = all expanded
+  // (the default the user sees on first open). Members of this set are
+  // currently collapsed.
+  const [collapsedSections, setCollapsedSections] = useState<Set<ChatPresence>>(new Set());
+  const toggleSection = (p: ChatPresence) => {
+    setCollapsedSections((prev) => {
+      const next = new Set(prev);
+      if (next.has(p)) next.delete(p);
+      else next.add(p);
+      return next;
+    });
+  };
 
   useEffect(() => {
     const token = sessionStorage.getItem('ace_token');
@@ -253,9 +311,48 @@ export default function Chat() {
     loadThreads();
     loadUsers();
     // Soft poll while the threads pane is up.
-    const id = window.setInterval(loadThreads, 15000);
+    // v0.9.15 — also re-fetch users on each tick so presence stays fresh
+    // (otherwise a teammate would stay "Online" until next page reload
+    // even if they went idle 30 min ago).
+    const id = window.setInterval(() => {
+      loadThreads();
+      loadUsers();
+    }, 15000);
     return () => window.clearInterval(id);
   }, [loadThreads, loadUsers]);
+
+  // v0.9.15 — group filtered users by presence so the picker can render
+  // collapsible Slack-style sections (On call / Online / Away / Offline).
+  // Alphabetical within each section.
+  const groupedUsers = useMemo(() => {
+    const groups: Record<ChatPresence, InternalChatUser[]> = {
+      on_call: [], active: [], recent: [], idle: [],
+    };
+    for (const u of users) {
+      // Filter by search before grouping so an empty section disappears.
+      if (search.trim()) {
+        const q = search.toLowerCase();
+        const name = displayName(u).toLowerCase();
+        if (!name.includes(q) && !u.email.toLowerCase().includes(q)) continue;
+      }
+      const p = u.presence ?? 'idle';
+      groups[p].push(u);
+    }
+    for (const key of ALL_PRESENCE) {
+      groups[key].sort((a, b) => displayName(a).localeCompare(displayName(b)));
+    }
+    return groups;
+  }, [users, search]);
+
+  // v0.9.15 — quick lookup of presence by user id so the threads list
+  // can show a status dot on each chat's avatar without a second fetch.
+  const presenceByUserId = useMemo(() => {
+    const m = new Map<number, ChatPresence>();
+    for (const u of users) {
+      m.set(u.id, u.presence ?? 'idle');
+    }
+    return m;
+  }, [users]);
 
   const filteredThreads = useMemo(() => {
     if (!search.trim()) return threads;
@@ -268,14 +365,8 @@ export default function Chat() {
     });
   }, [threads, search]);
 
-  const filteredUsers = useMemo(() => {
-    if (!search.trim()) return users;
-    const q = search.toLowerCase();
-    return users.filter((u) => {
-      const name = displayName(u).toLowerCase();
-      return name.includes(q) || u.email.toLowerCase().includes(q);
-    });
-  }, [users, search]);
+  // v0.9.15 — filteredUsers removed; user-picker now uses groupedUsers
+  // which does its own per-section search filtering inline.
 
   return (
     <div className="messages">
@@ -329,31 +420,77 @@ export default function Chat() {
           {error && <div className="error" style={{ margin: '0 1rem 1rem' }}>{error}</div>}
 
           {showUserPicker ? (
-            <ul className="thread-list">
-              {filteredUsers.length === 0 && (
+            <ul className="thread-list chat-teammates-list">
+              {ALL_PRESENCE.every((p) => groupedUsers[p].length === 0) && (
                 <li className="empty-state muted">No teammates found.</li>
               )}
-              {filteredUsers.map((u) => (
-                <li key={u.id}>
-                  <button
-                    type="button"
-                    className="thread-row"
-                    onClick={() => {
-                      setShowUserPicker(false);
-                      setSearch('');
-                      setActive({ id: u.id, user: u });
-                    }}
-                  >
-                    <span className="chat-avatar" style={avatarStyle(u)}>
-                      {initials(u)}
-                    </span>
-                    <div className="thread-text">
-                      <div className="thread-name">{displayName(u)}</div>
-                      <div className="thread-preview">{u.email}</div>
-                    </div>
-                  </button>
-                </li>
-              ))}
+              {ALL_PRESENCE.map((p) => {
+                const list = groupedUsers[p];
+                if (list.length === 0) return null;
+                const collapsed = collapsedSections.has(p);
+                return (
+                  <li key={p} className="presence-section">
+                    <button
+                      type="button"
+                      className="presence-section-header"
+                      onClick={() => toggleSection(p)}
+                      aria-expanded={!collapsed}
+                    >
+                      <span
+                        className={`presence-dot ${PRESENCE_DOT_CLASS[p]}`}
+                        aria-hidden="true"
+                      />
+                      <span className="presence-section-label">
+                        {PRESENCE_LABEL[p]}
+                      </span>
+                      <span className="presence-section-count">
+                        {list.length}
+                      </span>
+                      <span
+                        className={`presence-section-caret${collapsed ? ' collapsed' : ''}`}
+                        aria-hidden="true"
+                      >
+                        ▾
+                      </span>
+                    </button>
+                    {!collapsed && (
+                      <ul className="presence-section-list">
+                        {list.map((u) => (
+                          <li key={u.id}>
+                            <button
+                              type="button"
+                              className="thread-row"
+                              onClick={() => {
+                                setShowUserPicker(false);
+                                setSearch('');
+                                setActive({ id: u.id, user: u });
+                              }}
+                            >
+                              <span className="chat-avatar-wrap">
+                                <span
+                                  className="chat-avatar"
+                                  style={avatarStyle(u)}
+                                >
+                                  {initials(u)}
+                                </span>
+                                <span
+                                  className={`presence-dot presence-dot-overlay ${PRESENCE_DOT_CLASS[p]}`}
+                                  aria-hidden="true"
+                                  title={PRESENCE_LABEL[p]}
+                                />
+                              </span>
+                              <div className="thread-text">
+                                <div className="thread-name">{displayName(u)}</div>
+                                <div className="thread-preview">{u.email}</div>
+                              </div>
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </li>
+                );
+              })}
             </ul>
           ) : (
             <>
@@ -372,31 +509,56 @@ export default function Chat() {
               )}
 
               <ul className="thread-list">
-                {filteredThreads.map((t) => {
-                  const isUnread = t.unreadCount > 0;
-                  return (
-                    <li key={t.otherId}>
-                      <button
-                        type="button"
-                        className={`thread-row${isUnread ? ' unread' : ''}`}
-                        onClick={() => setActive({ id: t.otherId, user: t.otherUser })}
-                      >
-                        <span className="chat-avatar" style={avatarStyle(t.otherUser)}>
-                          {initials(t.otherUser)}
-                        </span>
-                        <div className="thread-text">
-                          <div className="thread-name">{displayName(t.otherUser)}</div>
-                          <div className="thread-preview">
-                            {t.lastSenderId === meId ? 'You: ' : ''}
-                            {t.lastMessage || (t.mediaUrl ? '📎 attachment' : '…')}
+                {filteredThreads
+                  // v0.9.15 — sort chats by other-party presence so the
+                  // ones you can actually reach right now float to the top.
+                  // Within the same presence group, newest activity first.
+                  .slice()
+                  .sort((a, b) => {
+                    const pa = presenceByUserId.get(a.otherId) ?? 'idle';
+                    const pb = presenceByUserId.get(b.otherId) ?? 'idle';
+                    const orderDiff =
+                      PRESENCE_ORDER[pa] - PRESENCE_ORDER[pb];
+                    if (orderDiff !== 0) return orderDiff;
+                    return b.lastAt.localeCompare(a.lastAt);
+                  })
+                  .map((t) => {
+                    const isUnread = t.unreadCount > 0;
+                    const otherPresence =
+                      presenceByUserId.get(t.otherId) ?? 'idle';
+                    return (
+                      <li key={t.otherId}>
+                        <button
+                          type="button"
+                          className={`thread-row${isUnread ? ' unread' : ''}`}
+                          onClick={() => setActive({ id: t.otherId, user: t.otherUser })}
+                        >
+                          <span className="chat-avatar-wrap">
+                            <span
+                              className="chat-avatar"
+                              style={avatarStyle(t.otherUser)}
+                            >
+                              {initials(t.otherUser)}
+                            </span>
+                            <span
+                              className={`presence-dot presence-dot-overlay ${PRESENCE_DOT_CLASS[otherPresence]}`}
+                              aria-hidden="true"
+                              title={PRESENCE_LABEL[otherPresence]}
+                            />
+                          </span>
+                          <div className="thread-text">
+                            <div className="thread-name">{displayName(t.otherUser)}</div>
+                            <div className="thread-preview">
+                              {t.lastSenderId === meId ? 'You: ' : ''}
+                              {t.lastMessage || (t.mediaUrl ? '📎 attachment' : '…')}
+                            </div>
                           </div>
-                        </div>
-                        <div className="thread-time">{formatRelative(t.lastAt)}</div>
-                        {isUnread && <span className="thread-unread-dot" aria-hidden="true" />}
-                      </button>
-                    </li>
-                  );
-                })}
+                          <div className="thread-time">{formatRelative(t.lastAt)}</div>
+                          {isUnread && <span className="thread-unread-dot" aria-hidden="true" />}
+                        </button>
+                      </li>
+                    );
+                  })}
               </ul>
             </>
           )}

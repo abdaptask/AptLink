@@ -35,7 +35,18 @@ const SendSchema = z.object({
 });
 
 export async function internalChatRoutes(app: FastifyInstance) {
-  // List other users — basics only, no SIP creds. Excludes the caller.
+  // List other users — basics + live presence so the Chat UI can sort
+  // and section by status. Excludes the caller. No SIP credentials.
+  //
+  // v0.9.15 — added `presence` field. Same 4-state model as
+  // /admin/reports/presence (#211):
+  //   - 'on_call': has an open Call row right now
+  //   - 'active': any call/SMS activity within last 10 min
+  //   - 'recent': activity within last 60 min
+  //   - 'idle':   no activity in last 60 min (or never)
+  // We deliberately do NOT try to track SIP REGISTER state directly —
+  // that would need Telnyx Status webhooks. Activity-proxy is good
+  // enough for "is this teammate around to chat right now."
   app.get(
     '/internal-chat/users',
     { onRequest: [app.authenticate] },
@@ -51,7 +62,72 @@ export async function internalChatRoutes(app: FastifyInstance) {
         },
         orderBy: [{ firstName: 'asc' }, { email: 'asc' }],
       });
-      return users;
+
+      // Compute presence per user. Mirrors /admin/reports/presence logic
+      // but trimmed to the fields the Chat UI needs.
+      const now = new Date();
+      const tenMinAgo = new Date(now.getTime() - 10 * 60 * 1000);
+      const oneHourAgo = new Date(now.getTime() - 60 * 60 * 1000);
+      const last24h = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+      const fourHoursAgo = new Date(now.getTime() - 4 * 60 * 60 * 1000);
+
+      const userIds = users.map((u) => u.id);
+
+      // Open calls (anything mid-flight in the last 4 hours).
+      const openCalls = await prisma.call.findMany({
+        where: {
+          userId: { in: userIds },
+          endedAt: null,
+          startedAt: { gte: fourHoursAgo },
+          status: { in: ['ringing', 'answered', 'initiated', 'connected'] },
+        },
+        select: { userId: true },
+      });
+      const onCallSet = new Set<number>(openCalls.map((c) => c.userId));
+
+      // Most-recent call OR message in the last 24h, per user.
+      const [lastCalls, lastMsgs] = await Promise.all([
+        prisma.call.groupBy({
+          by: ['userId'],
+          _max: { startedAt: true },
+          where: { userId: { in: userIds }, startedAt: { gte: last24h } },
+        }),
+        prisma.message.groupBy({
+          by: ['userId'],
+          _max: { createdAt: true },
+          where: { userId: { in: userIds }, createdAt: { gte: last24h } },
+        }),
+      ]);
+      const lastByUser = new Map<number, Date>();
+      for (const r of lastCalls) {
+        if (r._max.startedAt) lastByUser.set(r.userId, r._max.startedAt);
+      }
+      for (const r of lastMsgs) {
+        if (!r._max.createdAt) continue;
+        const prev = lastByUser.get(r.userId);
+        if (!prev || r._max.createdAt > prev) {
+          lastByUser.set(r.userId, r._max.createdAt);
+        }
+      }
+
+      type Presence = 'on_call' | 'active' | 'recent' | 'idle';
+      return users.map((u) => {
+        let presence: Presence = 'idle';
+        if (onCallSet.has(u.id)) presence = 'on_call';
+        else {
+          const last = lastByUser.get(u.id);
+          if (last && last >= tenMinAgo) presence = 'active';
+          else if (last && last >= oneHourAgo) presence = 'recent';
+        }
+        return {
+          id: u.id,
+          email: u.email,
+          firstName: u.firstName,
+          lastName: u.lastName,
+          presence,
+          lastActivity: lastByUser.get(u.id)?.toISOString() ?? null,
+        };
+      });
     },
   );
 
