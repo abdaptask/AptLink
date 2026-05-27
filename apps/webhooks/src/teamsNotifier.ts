@@ -1,0 +1,407 @@
+// v0.10.0 Pillar 2 Task 8 — Teams notification service.
+//
+// One function per event type. Each:
+//   1. Loads the user's Teams config (webhook URL + opt-ins).
+//   2. Checks the user has opted into this event.
+//   3. Pulls the source row from DB to populate the card.
+//   4. Decides if the line label should be included (multi-DID only).
+//   5. Builds the Adaptive Card via the Task-7 builders.
+//   6. POSTs to the user's webhook URL via `postToTeams`.
+//
+// `postToTeams` does ONE retry after 2s on 5xx / network error.
+// 4xx responses (400 bad payload, 404/410 expired webhook) DO NOT
+// retry — the URL is permanently broken and we just log.
+//
+// Failures never throw. Every entry point is fire-and-forget from
+// the perspective of the webhook handler (which has already returned
+// 200 to Telnyx). We log every outcome with structured fields so
+// production triage is easy: `[teams] sent / failed / skipped` plus
+// userId + eventType + sourceId.
+//
+// Dedup:
+//   - Voicemail cards have an in-memory Set guard so the
+//     "transcription completed" path and the 30s timeout fallback
+//     don't double-fire for the same voicemail row.
+//   - Missed-call cards have a 30s scheduled fire that bails out
+//     if a Voicemail row for the same telnyx_call_id exists at
+//     fire time (voicemail card supersedes — design decision Q3).
+
+import { prisma } from '@ace/db';
+import {
+  buildInboundSmsCard,
+  buildMissedCallCard,
+  buildVoicemailCard,
+  type TeamsMessage,
+} from './teamsCards/index.js';
+
+// ─────────────────────────────────────────────────────────────────
+// Internal: HTTP POST with 1 retry.
+// ─────────────────────────────────────────────────────────────────
+
+type LogFn = (obj: Record<string, unknown>, msg: string) => void;
+const consoleLog: LogFn = (obj, msg) => console.info(msg, obj);
+const consoleWarn: LogFn = (obj, msg) => console.warn(msg, obj);
+
+interface PostResult {
+  ok: boolean;
+  status?: number;
+  error?: string;
+}
+
+async function postOnce(url: string, payload: TeamsMessage): Promise<PostResult> {
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (res.ok) return { ok: true, status: res.status };
+    const text = await res.text().catch(() => '');
+    return {
+      ok: false,
+      status: res.status,
+      error: `HTTP ${res.status}: ${text.slice(0, 200)}`,
+    };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+/** POST with one 2s-delayed retry on 5xx / network. 4xx bails immediately. */
+async function postToTeams(url: string, payload: TeamsMessage): Promise<PostResult> {
+  const first = await postOnce(url, payload);
+  if (first.ok) return first;
+  // Don't retry on 4xx — permanent failures (bad payload, expired URL).
+  if (first.status && first.status >= 400 && first.status < 500) return first;
+  // 5xx or network error → wait 2s and try once more.
+  await new Promise((r) => setTimeout(r, 2000));
+  return postOnce(url, payload);
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Opt-in lookup.
+// ─────────────────────────────────────────────────────────────────
+
+type EventType = 'missed_call' | 'sms' | 'voicemail';
+
+interface TeamsConfig {
+  url: string;
+  events: Set<EventType>;
+}
+
+async function loadTeamsConfig(userId: number): Promise<TeamsConfig | null> {
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { teamsWebhookUrl: true, teamsNotifyOn: true },
+  });
+  if (!user?.teamsWebhookUrl) return null;
+  const events = new Set<EventType>(
+    (user.teamsNotifyOn ?? '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter((s): s is EventType =>
+        s === 'missed_call' || s === 'sms' || s === 'voicemail',
+      ),
+  );
+  if (events.size === 0) return null;
+  return { url: user.teamsWebhookUrl, events };
+}
+
+/**
+ * Decide if we should include "on your X line" context. Only useful
+ * when the user has more than one DID; otherwise it's noise.
+ */
+async function resolveLineLabel(
+  userId: number,
+  userDidId: number | null,
+): Promise<string | null> {
+  if (!userDidId) return null;
+  const count = await prisma.userDid.count({ where: { userId } });
+  if (count <= 1) return null;
+  const did = await prisma.userDid.findUnique({
+    where: { id: userDidId },
+    select: { label: true },
+  });
+  return did?.label ?? null;
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Public: notify*
+// ─────────────────────────────────────────────────────────────────
+
+/**
+ * v0.10.0 — Missed-call card.
+ *
+ * Called from the call.hangup handler when an INBOUND call ended
+ * without being answered. Scheduled with a 30s delay so we can
+ * suppress the card if a voicemail comes in for the same call (the
+ * voicemail card is richer and supersedes — Q3 design call).
+ */
+export function scheduleMissedCallNotification(opts: {
+  userId: number;
+  callDbId: number;
+  telnyxCallId: string;
+}): void {
+  // 30s grace for voicemail to arrive.
+  setTimeout(() => {
+    void notifyMissedCall(opts).catch((e) =>
+      consoleWarn(
+        { err: e instanceof Error ? e.message : String(e), ...opts },
+        '[teams] missed-call scheduler threw',
+      ),
+    );
+  }, 30_000);
+}
+
+async function notifyMissedCall(opts: {
+  userId: number;
+  callDbId: number;
+  telnyxCallId: string;
+}): Promise<void> {
+  // Suppress if a voicemail exists for this call — the voicemail card
+  // covers the same notification need with richer content.
+  const vm = await prisma.voicemail.findFirst({
+    where: { telnyxCallId: opts.telnyxCallId },
+    select: { id: true },
+  });
+  if (vm) {
+    consoleLog(
+      { userId: opts.userId, callDbId: opts.callDbId, voicemailId: vm.id },
+      '[teams] missed-call suppressed (voicemail card will fire instead)',
+    );
+    return;
+  }
+
+  const cfg = await loadTeamsConfig(opts.userId);
+  if (!cfg) return; // not configured
+  if (!cfg.events.has('missed_call')) {
+    consoleLog(
+      { userId: opts.userId, eventType: 'missed_call' },
+      '[teams] skipped — user opted out',
+    );
+    return;
+  }
+
+  const call = await prisma.call.findUnique({
+    where: { id: opts.callDbId },
+    select: {
+      fromNumber: true,
+      userDidId: true,
+      startedAt: true,
+      status: true,
+      direction: true,
+    },
+  });
+  if (!call) return;
+
+  // Safety: only inbound + missed-style status produces a missed-call card.
+  if (call.direction !== 'inbound') return;
+  if (call.status !== 'no_answer' && call.status !== 'rejected') return;
+
+  const lineLabel = await resolveLineLabel(opts.userId, call.userDidId);
+
+  const card = buildMissedCallCard({
+    fromNumber: call.fromNumber,
+    toLineLabel: lineLabel,
+    occurredAt: call.startedAt ?? new Date(),
+  });
+
+  const result = await postToTeams(cfg.url, card);
+  if (result.ok) {
+    consoleLog(
+      { userId: opts.userId, callDbId: opts.callDbId, status: result.status },
+      '[teams] missed-call sent',
+    );
+  } else {
+    consoleWarn(
+      {
+        userId: opts.userId,
+        callDbId: opts.callDbId,
+        status: result.status,
+        error: result.error,
+      },
+      '[teams] missed-call POST failed',
+    );
+  }
+}
+
+/** v0.10.0 — Inbound SMS card. Fired immediately on message.received. */
+export async function notifyInboundSms(opts: {
+  userId: number;
+  messageDbId: number;
+}): Promise<void> {
+  const cfg = await loadTeamsConfig(opts.userId);
+  if (!cfg) return;
+  if (!cfg.events.has('sms')) {
+    consoleLog(
+      { userId: opts.userId, eventType: 'sms' },
+      '[teams] skipped — user opted out',
+    );
+    return;
+  }
+
+  const msg = await prisma.message.findUnique({
+    where: { id: opts.messageDbId },
+    select: {
+      fromNumber: true,
+      body: true,
+      userDidId: true,
+      sentAt: true,
+      direction: true,
+    },
+  });
+  if (!msg || msg.direction !== 'inbound') return;
+
+  const lineLabel = await resolveLineLabel(opts.userId, msg.userDidId);
+
+  const card = buildInboundSmsCard({
+    fromNumber: msg.fromNumber,
+    body: msg.body ?? '',
+    toLineLabel: lineLabel,
+    occurredAt: msg.sentAt ?? new Date(),
+  });
+
+  const result = await postToTeams(cfg.url, card);
+  if (result.ok) {
+    consoleLog(
+      { userId: opts.userId, messageDbId: opts.messageDbId, status: result.status },
+      '[teams] sms sent',
+    );
+  } else {
+    consoleWarn(
+      {
+        userId: opts.userId,
+        messageDbId: opts.messageDbId,
+        status: result.status,
+        error: result.error,
+      },
+      '[teams] sms POST failed',
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Voicemail — two-path firing with in-memory dedup.
+// ─────────────────────────────────────────────────────────────────
+//
+// Two events can trigger a voicemail card:
+//   (a) Deepgram finishes transcription and updates the row → we
+//       want to fire the card with transcript filled in.
+//   (b) The 30s timeout fallback fires regardless of transcription
+//       state, so the user still gets a card if Deepgram is down.
+// We want exactly ONE card per voicemail, so we track which
+// voicemail IDs we've already sent for in a module-level Set.
+
+const sentVoicemailCards = new Set<number>();
+
+/** v0.10.0 — Voicemail card. Called from two places (see header). */
+export async function notifyVoicemail(opts: {
+  userId: number;
+  voicemailId: number;
+  reason: 'transcribed' | 'timeout';
+}): Promise<void> {
+  if (sentVoicemailCards.has(opts.voicemailId)) {
+    consoleLog(
+      { voicemailId: opts.voicemailId, reason: opts.reason },
+      '[teams] voicemail card already sent — skipping duplicate',
+    );
+    return;
+  }
+  // Reserve immediately to avoid a race between transcribed + timeout.
+  sentVoicemailCards.add(opts.voicemailId);
+
+  try {
+    const cfg = await loadTeamsConfig(opts.userId);
+    if (!cfg) return;
+    if (!cfg.events.has('voicemail')) {
+      consoleLog(
+        { userId: opts.userId, eventType: 'voicemail' },
+        '[teams] skipped — user opted out',
+      );
+      return;
+    }
+
+    const vm = await prisma.voicemail.findUnique({
+      where: { id: opts.voicemailId },
+      select: {
+        fromNumber: true,
+        userDidId: true,
+        receivedAt: true,
+        durationSeconds: true,
+        transcription: true,
+      },
+    });
+    if (!vm) return;
+
+    const lineLabel = await resolveLineLabel(opts.userId, vm.userDidId);
+
+    const card = buildVoicemailCard({
+      voicemailId: opts.voicemailId,
+      fromNumber: vm.fromNumber,
+      toLineLabel: lineLabel,
+      occurredAt: vm.receivedAt ?? new Date(),
+      durationSec: vm.durationSeconds,
+      transcript: vm.transcription,
+    });
+
+    const result = await postToTeams(cfg.url, card);
+    if (result.ok) {
+      consoleLog(
+        {
+          userId: opts.userId,
+          voicemailId: opts.voicemailId,
+          reason: opts.reason,
+          hasTranscript: Boolean(vm.transcription),
+          status: result.status,
+        },
+        '[teams] voicemail sent',
+      );
+    } else {
+      // Release the reservation on hard failure so a retry path could
+      // attempt again. (We don't have a retry path today, but this
+      // avoids permanently silencing a user if Teams blips at the
+      // exact moment we fire.)
+      sentVoicemailCards.delete(opts.voicemailId);
+      consoleWarn(
+        {
+          userId: opts.userId,
+          voicemailId: opts.voicemailId,
+          reason: opts.reason,
+          status: result.status,
+          error: result.error,
+        },
+        '[teams] voicemail POST failed',
+      );
+    }
+  } catch (e) {
+    // On unexpected error, also release the reservation.
+    sentVoicemailCards.delete(opts.voicemailId);
+    consoleWarn(
+      {
+        userId: opts.userId,
+        voicemailId: opts.voicemailId,
+        err: e instanceof Error ? e.message : String(e),
+      },
+      '[teams] voicemail handler threw',
+    );
+  }
+}
+
+/**
+ * Convenience: schedule the 30s timeout fallback. If transcription
+ * finishes first and fires `notifyVoicemail({reason:'transcribed'})`,
+ * the dedup Set ensures the timeout call is a no-op.
+ */
+export function scheduleVoicemailTimeoutFallback(opts: {
+  userId: number;
+  voicemailId: number;
+}): void {
+  setTimeout(() => {
+    void notifyVoicemail({ ...opts, reason: 'timeout' }).catch((e) =>
+      consoleWarn(
+        { err: e instanceof Error ? e.message : String(e), ...opts },
+        '[teams] voicemail timeout scheduler threw',
+      ),
+    );
+  }, 30_000);
+}

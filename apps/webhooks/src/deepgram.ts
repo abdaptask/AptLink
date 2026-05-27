@@ -34,6 +34,7 @@
 // never throw — voicemail capture itself is more important than the
 // transcript.
 import { prisma } from '@ace/db';
+import { notifyVoicemail } from './teamsNotifier.js';
 
 const DEEPGRAM_API_URL = 'https://api.deepgram.com/v1/listen';
 
@@ -172,6 +173,13 @@ export async function transcribeRecording(recordingUrl: string): Promise<string 
 export async function transcribeAndUpdateVoicemail(
   voicemailId: number,
   recordingUrl: string,
+  // v0.10.0 Task 8 — userId is OPTIONAL for backwards compat (any
+  // legacy caller without it just won't trigger a Teams card; the
+  // 30s timeout fallback in main.ts will still cover that case).
+  // When supplied, we fire the Teams notification with reason
+  // 'transcribed' after the row is updated. The notifier's dedup
+  // Set prevents the parallel 30s timeout from sending a 2nd card.
+  userId?: number,
 ): Promise<void> {
   try {
     const text = await transcribeRecording(recordingUrl);
@@ -184,6 +192,16 @@ export async function transcribeAndUpdateVoicemail(
       data: { transcription: text },
     });
     console.info(`[deepgram] voicemail ${voicemailId} transcribed (${text.length} chars)`);
+
+    if (userId) {
+      void notifyVoicemail({ userId, voicemailId, reason: 'transcribed' }).catch(
+        (e) =>
+          console.warn(
+            `[deepgram] notifyVoicemail(${voicemailId}) threw`,
+            e instanceof Error ? e.message : e,
+          ),
+      );
+    }
   } catch (e) {
     console.warn(`[deepgram] transcribeAndUpdateVoicemail(${voicemailId}) failed`, e);
   }

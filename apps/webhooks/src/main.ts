@@ -5,6 +5,11 @@ import cors from '@fastify/cors';
 import formbody from '@fastify/formbody';
 import { prisma } from '@ace/db';
 import { transcribeAndUpdateVoicemail } from './deepgram.js';
+import {
+  notifyInboundSms,
+  scheduleMissedCallNotification,
+  scheduleVoicemailTimeoutFallback,
+} from './teamsNotifier.js';
 
 const SERVICE_NAME = 'ace-dialer-webhooks';
 const START_TIME = new Date().toISOString();
@@ -486,6 +491,31 @@ app.post('/webhooks/telnyx/calls', async (request) => {
           });
         }
 
+        // v0.10.0 Task 8 — Teams missed-call notification. Only for
+        // inbound calls that ended with a missed-style status, and
+        // only when the row isn't 'blocked' (those are user-initiated
+        // suppressions, not real missed calls). Scheduled with a 30s
+        // delay so we can suppress the card if a voicemail comes in
+        // for the same call_control_id (voicemail card supersedes).
+        const finalStatus = preserveStatus ? existing?.status : status;
+        if (
+          direction === 'inbound' &&
+          (finalStatus === 'no_answer' || finalStatus === 'rejected')
+        ) {
+          // Look up the call row's id + userId for the scheduler.
+          const row = await prisma.call.findUnique({
+            where: { telnyxCallId: callId },
+            select: { id: true, userId: true },
+          });
+          if (row?.userId) {
+            scheduleMissedCallNotification({
+              userId: row.userId,
+              callDbId: row.id,
+              telnyxCallId: callId,
+            });
+          }
+        }
+
         break;
       }
 
@@ -600,8 +630,23 @@ app.post('/webhooks/telnyx/calls', async (request) => {
           // the row when done (~2-5 sec for short voicemails). UI polls
           // until the transcription field populates.
           if (!telnyxText) {
-            void transcribeAndUpdateVoicemail(created.id, recordingUrl);
+            void transcribeAndUpdateVoicemail(created.id, recordingUrl, ownerUserId);
           }
+
+          // v0.10.0 Task 8 — Teams voicemail card.
+          // Two firing paths (deduped in the notifier's in-memory Set):
+          //   - Deepgram path: transcribeAndUpdateVoicemail calls
+          //     notifyVoicemail({reason:'transcribed'}) after writing
+          //     the transcript. Richest card (transcript filled in).
+          //   - Timeout fallback (scheduled here): if Deepgram hasn't
+          //     fired within 30s — or we already had a Telnyx
+          //     transcript and skipped Deepgram — send the card with
+          //     whatever transcript exists. Dedup Set guarantees only
+          //     one card per voicemail row.
+          scheduleVoicemailTimeoutFallback({
+            userId: ownerUserId,
+            voicemailId: created.id,
+          });
         } catch (e) {
           app.log.error({ err: e }, '[vm] failed to write Voicemail row');
         }
@@ -681,7 +726,7 @@ app.post('/webhooks/telnyx/sms', async (request) => {
           break;
         }
 
-        await prisma.message.upsert({
+        const upsertedMessage = await prisma.message.upsert({
           where: { telnyxMessageId },
           update: { status: 'received' },
           create: {
@@ -697,7 +742,21 @@ app.post('/webhooks/telnyx/sms', async (request) => {
             sentAt: payload.received_at ? new Date(payload.received_at) : new Date(),
             userDidId,
           },
+          select: { id: true, direction: true },
         });
+
+        // v0.10.0 Task 8 — Teams notification. Fire-and-forget so we
+        // still return 200 to Telnyx promptly. We only notify for
+        // freshly-inbound messages (skip the update branch where an
+        // already-stored message is just receiving a status update).
+        if (upsertedMessage.direction === 'inbound') {
+          void notifyInboundSms({
+            userId: ownerUserId,
+            messageDbId: upsertedMessage.id,
+          }).catch((e) =>
+            app.log.warn({ err: e }, '[teams] notifyInboundSms threw'),
+          );
+        }
         break;
       }
 
