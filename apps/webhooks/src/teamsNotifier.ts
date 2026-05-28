@@ -217,10 +217,20 @@ async function resolveLineLabel(
  * but neither is missed. Acceptable trade-off vs. the previous
  * "scheduler died, user got nothing" failure mode.
  *
- * If we ever want strict dedup again, the right architecture is a
- * persistent job queue (e.g. a `scheduled_notifications` DB table
- * with a polling worker), not in-process setTimeout.
+ * v0.10.3 — Added in-memory dedup. Telnyx sometimes fires call.hangup
+ * multiple times for the same call (once per leg, retries on slow
+ * acks, etc.). Without dedup, each event re-fired the card → user
+ * saw duplicate missed-call cards. The in-memory Set is per-process
+ * so it gets wiped on Render hibernation cycles — that's an
+ * acceptable hole; the common case (multiple events in the same
+ * minute) is fully covered.
+ *
+ * If we ever want strict cross-restart dedup, the right architecture
+ * is a `teams_notified_at` column on the Call row with an atomic
+ * conditional update — out of scope for v0.10.x.
  */
+const sentMissedCallCards = new Set<number>();
+
 export function scheduleMissedCallNotification(opts: {
   userId: number;
   callDbId: number;
@@ -239,6 +249,18 @@ async function notifyMissedCall(opts: {
   callDbId: number;
   telnyxCallId: string;
 }): Promise<void> {
+  // Dedup — skip if we've already sent a card for this call row in
+  // this process lifetime. See file header for the full rationale.
+  if (sentMissedCallCards.has(opts.callDbId)) {
+    consoleLog(
+      { userId: opts.userId, callDbId: opts.callDbId },
+      '[teams] missed-call already sent — skipping duplicate',
+    );
+    return;
+  }
+  // Reserve immediately to avoid a race when Telnyx fires two
+  // call.hangup events back-to-back.
+  sentMissedCallCards.add(opts.callDbId);
   // Suppress if a voicemail exists for this call — the voicemail card
   // covers the same notification need with richer content.
   const vm = await prisma.voicemail.findFirst({

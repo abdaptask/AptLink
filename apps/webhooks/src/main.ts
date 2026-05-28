@@ -744,36 +744,54 @@ app.post('/webhooks/telnyx/sms', async (request) => {
           break;
         }
 
-        const upsertedMessage = await prisma.message.upsert({
+        // v0.10.3 — Don't use upsert here. Telnyx retries the
+        // message.received webhook on any non-2xx response and
+        // sometimes even on slow 2xx responses. Upsert would update
+        // the existing row, and our old code then re-fired the Teams
+        // notification each retry → duplicate cards. Fix: explicit
+        // findUnique → create-or-update branch, fire notification ONLY
+        // on first-time create.
+        const existingMessage = await prisma.message.findUnique({
           where: { telnyxMessageId },
-          update: { status: 'received' },
-          create: {
-            userId: ownerUserId,
-            telnyxMessageId,
-            threadKey,
-            direction: 'inbound',
-            fromNumber,
-            toNumber,
-            body: text,
-            mediaUrls,
-            status: 'received',
-            sentAt: payload.received_at ? new Date(payload.received_at) : new Date(),
-            userDidId,
-          },
-          select: { id: true, direction: true },
+          select: { id: true },
         });
 
-        // v0.10.0 Task 8 — Teams notification. Fire-and-forget so we
-        // still return 200 to Telnyx promptly. We only notify for
-        // freshly-inbound messages (skip the update branch where an
-        // already-stored message is just receiving a status update).
-        if (upsertedMessage.direction === 'inbound') {
-          void notifyInboundSms({
-            userId: ownerUserId,
-            messageDbId: upsertedMessage.id,
-          }).catch((e) =>
-            app.log.warn({ err: e }, '[teams] notifyInboundSms threw'),
+        if (existingMessage) {
+          // Retry / re-delivery — just refresh status, don't re-notify.
+          await prisma.message.update({
+            where: { telnyxMessageId },
+            data: { status: 'received' },
+          });
+          app.log.info(
+            { telnyxMessageId, messageId: existingMessage.id },
+            '[sms] retry / duplicate webhook — refreshed status, no card sent',
           );
+        } else {
+          const created = await prisma.message.create({
+            data: {
+              userId: ownerUserId,
+              telnyxMessageId,
+              threadKey,
+              direction: 'inbound',
+              fromNumber,
+              toNumber,
+              body: text,
+              mediaUrls,
+              status: 'received',
+              sentAt: payload.received_at ? new Date(payload.received_at) : new Date(),
+              userDidId,
+            },
+            select: { id: true, direction: true },
+          });
+          // First-time inbound delivery — fire Teams card.
+          if (created.direction === 'inbound') {
+            void notifyInboundSms({
+              userId: ownerUserId,
+              messageDbId: created.id,
+            }).catch((e) =>
+              app.log.warn({ err: e }, '[teams] notifyInboundSms threw'),
+            );
+          }
         }
         break;
       }
