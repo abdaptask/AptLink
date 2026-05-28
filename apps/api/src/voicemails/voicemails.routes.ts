@@ -71,6 +71,94 @@ export async function voicemailsRoutes(app: FastifyInstance) {
     return { count };
   });
 
+  // v0.10.2 Task 9 — single voicemail metadata for the playback page.
+  // Used by /voicemail/:id/play to render caller info + transcript.
+  // Guards on userId so a user can't fetch someone else's voicemail.
+  app.get('/voicemails/:id', { onRequest: [app.authenticate] }, async (request, reply) => {
+    const user = request.user as JwtPayload;
+    const { id } = request.params as { id: string };
+    const vmId = Number(id);
+    if (!Number.isFinite(vmId)) {
+      return reply.code(400).send({ error: 'Invalid id' });
+    }
+    const vm = await prisma.voicemail.findFirst({
+      where: { id: vmId, userId: user.sub },
+      include: {
+        userDid: {
+          select: { id: true, label: true, colorHex: true, didNumber: true },
+        },
+      },
+    });
+    if (!vm) return reply.code(404).send({ error: 'Not found' });
+    return vm;
+  });
+
+  // v0.10.2 Task 9 — audio proxy. Telnyx hosted-voicemail recordings
+  // live behind a Bearer-auth-protected URL on api.telnyx.com — the
+  // browser can't fetch them directly. We proxy: authenticate the
+  // requesting user via JWT, verify they own the voicemail, fetch the
+  // upstream MP3 with our Telnyx API key, stream the bytes back with
+  // an audio Content-Type so the HTML5 <audio> tag plays it.
+  //
+  // We DON'T cache the upstream URL — it's tied to our Telnyx account
+  // and rotating credentials means a stale URL would 401 anyway. Each
+  // playback fetches fresh.
+  app.get(
+    '/voicemails/:id/audio',
+    { onRequest: [app.authenticate] },
+    async (request, reply) => {
+      const user = request.user as JwtPayload;
+      const { id } = request.params as { id: string };
+      const vmId = Number(id);
+      if (!Number.isFinite(vmId)) {
+        return reply.code(400).send({ error: 'Invalid id' });
+      }
+      const vm = await prisma.voicemail.findFirst({
+        where: { id: vmId, userId: user.sub },
+        select: { id: true, recordingUrl: true },
+      });
+      if (!vm) return reply.code(404).send({ error: 'Not found' });
+      if (!vm.recordingUrl) {
+        return reply.code(404).send({ error: 'No recording available' });
+      }
+      const telnyxKey = process.env.TELNYX_API_KEY;
+      try {
+        const headers: Record<string, string> = {};
+        // Only attach Telnyx Bearer when the URL is actually on
+        // api.telnyx.com. Some legacy rows might point at signed S3
+        // URLs from older test setups — sending Bearer on those is
+        // harmless but explicit-gating avoids leaking the key.
+        if (telnyxKey && /(^|\.)telnyx\.com\//.test(vm.recordingUrl)) {
+          headers.Authorization = `Bearer ${telnyxKey}`;
+        }
+        const upstream = await fetch(vm.recordingUrl, { method: 'GET', headers });
+        if (!upstream.ok) {
+          request.log.warn(
+            { voicemailId: vm.id, status: upstream.status },
+            '[voicemail] upstream audio fetch failed',
+          );
+          return reply.code(502).send({
+            error: `Failed to fetch audio: HTTP ${upstream.status}`,
+          });
+        }
+        const buf = Buffer.from(await upstream.arrayBuffer());
+        // Telnyx recordings are MP3. Set explicit Content-Type so the
+        // browser's <audio> element plays without guessing. Allow
+        // caching since the recording itself is immutable.
+        reply
+          .header('Content-Type', upstream.headers.get('content-type') ?? 'audio/mpeg')
+          .header('Content-Length', String(buf.length))
+          .header('Cache-Control', 'private, max-age=3600')
+          .header('Accept-Ranges', 'bytes');
+        return reply.send(buf);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        request.log.error({ err: msg }, '[voicemail] audio proxy error');
+        return reply.code(502).send({ error: `Audio proxy error: ${msg}` });
+      }
+    },
+  );
+
   // PATCH /voicemails/:id  { listened?: boolean }
   app.patch('/voicemails/:id', { onRequest: [app.authenticate] }, async (request, reply) => {
     const user = request.user as JwtPayload;

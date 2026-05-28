@@ -544,6 +544,34 @@ export async function getVoicemails(token: string): Promise<VoicemailRecord[]> {
   return res.json();
 }
 
+// v0.10.2 Task 9 — single voicemail metadata + audio for the playback page.
+export async function getVoicemail(token: string, id: number): Promise<VoicemailRecord> {
+  const res = await fetch(`${API_URL}/voicemails/${id}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
+/** Fetches the voicemail audio as a Blob URL so an HTML5 <audio> element
+ *  can play it. The audio endpoint requires JWT auth (Bearer header), and
+ *  <audio src> can't carry headers — Blob URL is the standard workaround.
+ *  Caller is responsible for URL.revokeObjectURL on cleanup. */
+export async function getVoicemailAudioBlob(
+  token: string,
+  id: number,
+): Promise<string> {
+  const res = await fetch(`${API_URL}/voicemails/${id}/audio`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(text || `HTTP ${res.status}`);
+  }
+  const blob = await res.blob();
+  return URL.createObjectURL(blob);
+}
+
 export async function getUnreadVoicemailCount(token: string): Promise<number> {
   const res = await fetch(`${API_URL}/voicemails/unread/count`, {
     headers: { Authorization: `Bearer ${token}` },

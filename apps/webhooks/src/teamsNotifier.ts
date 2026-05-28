@@ -258,15 +258,20 @@ async function notifyMissedCall(opts: {
       fromNumber: true,
       userDidId: true,
       startedAt: true,
+      answeredAt: true,
       status: true,
       direction: true,
     },
   });
   if (!call) return;
 
-  // Safety: only inbound + missed-style status produces a missed-call card.
+  // v0.10.2 — defensive duplicate of the scheduler's gate. An inbound
+  // call is "missed" if it was never answered, regardless of the
+  // hangup-cause classifier (which collapses originator_cancel into
+  // 'completed'). We also skip blocklisted rows (user-suppressed).
   if (call.direction !== 'inbound') return;
-  if (call.status !== 'no_answer' && call.status !== 'rejected') return;
+  if (call.answeredAt) return; // actually picked up — not missed
+  if (call.status === 'blocked') return;
 
   const lineLabel = await resolveLineLabel(opts.userId, call.userDidId);
 

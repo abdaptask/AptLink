@@ -491,29 +491,47 @@ app.post('/webhooks/telnyx/calls', async (request) => {
           });
         }
 
-        // v0.10.0 Task 8 — Teams missed-call notification. Only for
-        // inbound calls that ended with a missed-style status, and
-        // only when the row isn't 'blocked' (those are user-initiated
-        // suppressions, not real missed calls). Scheduled with a 30s
-        // delay so we can suppress the card if a voicemail comes in
-        // for the same call_control_id (voicemail card supersedes).
-        const finalStatus = preserveStatus ? existing?.status : status;
+        // v0.10.0 Task 8 / v0.10.2 fix — Teams missed-call notification.
+        //
+        // Semantics: an inbound call is "missed" whenever it ENDED
+        // WITHOUT BEING ANSWERED, regardless of hangup_cause. That
+        // means:
+        //   - no_answer / no_user_response  → missed
+        //   - rejected / user_busy          → missed
+        //   - originator_cancel              → missed (caller hung up before pickup)
+        //   - normal_clearing on unanswered → missed
+        //   - normal_clearing on answered   → NOT missed (was answered)
+        //
+        // Earlier we gated this on status string mapping, but the
+        // status-classifier collapses originator_cancel into 'completed'
+        // which then SKIPPED the scheduler. Result: when a caller cancels
+        // before pickup, the user got no notification.
+        //
+        // Correct gate: direction === 'inbound' AND answeredAt IS NULL.
+        // We also still skip 'blocked' rows (user-initiated suppression).
+        // The 30s grace window in scheduleMissedCallNotification handles
+        // suppression when a voicemail arrives for the same call.
+        const row = await prisma.call.findUnique({
+          where: { telnyxCallId: callId },
+          select: {
+            id: true,
+            userId: true,
+            direction: true,
+            answeredAt: true,
+            status: true,
+          },
+        });
         if (
-          direction === 'inbound' &&
-          (finalStatus === 'no_answer' || finalStatus === 'rejected')
+          row?.userId &&
+          row.direction === 'inbound' &&
+          !row.answeredAt &&
+          row.status !== 'blocked'
         ) {
-          // Look up the call row's id + userId for the scheduler.
-          const row = await prisma.call.findUnique({
-            where: { telnyxCallId: callId },
-            select: { id: true, userId: true },
+          scheduleMissedCallNotification({
+            userId: row.userId,
+            callDbId: row.id,
+            telnyxCallId: callId,
           });
-          if (row?.userId) {
-            scheduleMissedCallNotification({
-              userId: row.userId,
-              callDbId: row.id,
-              telnyxCallId: callId,
-            });
-          }
         }
 
         break;

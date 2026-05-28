@@ -7,6 +7,8 @@ import Dialpad from './pages/Dialpad';
 import InCall from './pages/InCall';
 import Recents from './pages/Recents';
 import Voicemail from './pages/Voicemail';
+import VoicemailPlay from './pages/VoicemailPlay';
+import AutoRoute from './pages/AutoRoute';
 import Contacts from './pages/Contacts';
 import Favorites from './pages/Favorites';
 import Messages from './pages/Messages';
@@ -69,7 +71,20 @@ export default function App() {
     // Pull favorites for the freshly-logged-in user, so their universal
     // contact list is ready before they land on /keypad. (Phase 6.11)
     void loadFavoritesFromServer(newToken);
-    navigate('/keypad');
+    // v0.10.2 — returnTo support. If the user was redirected to /login
+    // from a deep link (e.g. a Teams voicemail card → /voicemail/123/play),
+    // bring them back to that URL after SSO instead of dumping them on
+    // /keypad. ace_return_to is set by the route guard below when an
+    // unauthenticated request hits a protected URL.
+    let target = '/keypad';
+    try {
+      const returnTo = sessionStorage.getItem('ace_return_to');
+      if (returnTo && returnTo !== '/login' && returnTo !== '/') {
+        target = returnTo;
+        sessionStorage.removeItem('ace_return_to');
+      }
+    } catch { /* sessionStorage can throw in private mode — fall back to /keypad */ }
+    navigate(target);
   }
 
   function handleLogout() {
@@ -115,7 +130,23 @@ export default function App() {
       />
       <Route
         path="/"
-        element={user ? <Layout user={user} onLogout={handleLogout} /> : <Navigate to="/login" />}
+        element={
+          user
+            ? <Layout user={user} onLogout={handleLogout} />
+            : (() => {
+                // v0.10.2 — stash the requested URL so handleLoginSuccess
+                // can bounce the user back here after MS SSO. Without this
+                // a Teams card click → SSO → /keypad dumps the user away
+                // from the voicemail they were trying to play.
+                try {
+                  const here = window.location.pathname + window.location.search;
+                  if (here && here !== '/login') {
+                    sessionStorage.setItem('ace_return_to', here);
+                  }
+                } catch { /* sessionStorage can throw in private mode */ }
+                return <Navigate to="/login" />;
+              })()
+        }
       >
         <Route index element={<Navigate to="/keypad" replace />} />
         <Route path="keypad" element={<Dialpad />} />
@@ -126,6 +157,9 @@ export default function App() {
         <Route path="recents" element={<Recents />} />
         <Route path="contacts" element={<Contacts />} />
         <Route path="voicemail" element={<Voicemail />} />
+        <Route path="voicemail/:id/play" element={<VoicemailPlay />} />
+        <Route path="auto/call" element={<AutoRoute action="call" />} />
+        <Route path="auto/sms" element={<AutoRoute action="sms" />} />
         <Route path="settings" element={<Settings />} />
         <Route path="settings/:section" element={<Settings />} />
       </Route>
