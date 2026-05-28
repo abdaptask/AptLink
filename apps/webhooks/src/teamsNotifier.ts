@@ -203,24 +203,35 @@ async function resolveLineLabel(
  * v0.10.0 — Missed-call card.
  *
  * Called from the call.hangup handler when an INBOUND call ended
- * without being answered. Scheduled with a 30s delay so we can
- * suppress the card if a voicemail comes in for the same call (the
- * voicemail card is richer and supersedes — Q3 design call).
+ * without being answered.
+ *
+ * v0.10.2 — DROPPED the 30s setTimeout grace window. It was meant to
+ * suppress the missed-call card when a voicemail came in for the
+ * same call (voicemail card supersedes — richer content). Problem:
+ * Render's hibernating service tier kills the in-process timer when
+ * the service idles after the call.hangup event, so the notification
+ * never fired at all.
+ *
+ * New approach: fire immediately. If a voicemail then arrives a few
+ * seconds later, the voicemail card ALSO fires — user gets two cards
+ * but neither is missed. Acceptable trade-off vs. the previous
+ * "scheduler died, user got nothing" failure mode.
+ *
+ * If we ever want strict dedup again, the right architecture is a
+ * persistent job queue (e.g. a `scheduled_notifications` DB table
+ * with a polling worker), not in-process setTimeout.
  */
 export function scheduleMissedCallNotification(opts: {
   userId: number;
   callDbId: number;
   telnyxCallId: string;
 }): void {
-  // 30s grace for voicemail to arrive.
-  setTimeout(() => {
-    void notifyMissedCall(opts).catch((e) =>
-      consoleWarn(
-        { err: e instanceof Error ? e.message : String(e), ...opts },
-        '[teams] missed-call scheduler threw',
-      ),
-    );
-  }, 30_000);
+  void notifyMissedCall(opts).catch((e) =>
+    consoleWarn(
+      { err: e instanceof Error ? e.message : String(e), ...opts },
+      '[teams] missed-call scheduler threw',
+    ),
+  );
 }
 
 async function notifyMissedCall(opts: {
