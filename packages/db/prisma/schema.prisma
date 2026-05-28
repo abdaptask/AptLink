@@ -71,16 +71,18 @@ model User {
   /// Which auth provider the user signs in with. "microsoft" is the
   /// default for new ApTask SSO users; "local" is the break-glass model.
   provider        String    @default("microsoft")
-  /// v0.10.0 Pillar 2 — Microsoft Teams personal-channel webhook URL.
-  /// User pastes this from Teams (Channel → Connectors → Incoming Webhook,
-  /// or via Power Automate). NULL = user hasn't opted into Teams pings.
-  /// We POST Adaptive Cards here on missed call / inbound SMS / voicemail.
+  /// v0.10.0 Pillar 2 — DEPRECATED in v0.10.1.
+  /// Was the user's personal Teams Incoming Webhook URL. Replaced by a
+  /// tenant-wide Power Automate flow (TEAMS_TENANT_WEBHOOK_URL env var)
+  /// so users don't have to do any per-user setup. Column kept nullable
+  /// for now — notifier no longer reads it.
   teamsWebhookUrl String?   @map("teams_webhook_url")
-  /// v0.10.0 Pillar 2 — Comma-separated opt-in list for which events
+  /// v0.10.1 Pillar 2 — Comma-separated opt-in list for which events
   /// trigger a Teams card. Values: 'missed_call', 'sms', 'voicemail'.
-  /// Defaults to all three when teamsWebhookUrl is first set.
-  /// User edits via Settings → Account → Teams notifications.
-  teamsNotifyOn   String?   @map("teams_notify_on")
+  /// DB default = all three so every new user starts opted-in. User
+  /// edits via Settings → Personal → Teams notifications. Empty string
+  /// = explicit opt-out of all events (we never auto-fill back).
+  teamsNotifyOn   String?   @default("missed_call,sms,voicemail") @map("teams_notify_on")
   lastLoginAt     DateTime? @map("last_login_at")
   createdAt       DateTime  @default(now()) @map("created_at")
   updatedAt       DateTime  @updatedAt      @map("updated_at")

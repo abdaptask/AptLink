@@ -90,9 +90,14 @@ export async function blockedRoutes(app: FastifyInstance) {
   app.delete(
     '/blocked-numbers/:id',
     { onRequest: [app.authenticate] },
-    async (request: FastifyRequest<{ Params: { id: string } }>, reply) => {
+    // Cast params at point-of-use instead of typing the FastifyRequest
+    // generic — Fastify's RouteHandlerMethod can't unify the Params
+    // generic with the route registration without a full schema object,
+    // and current @types/fastify rejects the inline form.
+    async (request: FastifyRequest, reply) => {
       const u = request.user as JwtPayload;
-      const id = Number(request.params.id);
+      const params = request.params as { id?: string };
+      const id = Number(params.id);
       if (!Number.isFinite(id)) {
         return reply.code(400).send({ error: 'Invalid id' });
       }

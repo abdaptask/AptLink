@@ -126,10 +126,15 @@ export interface SwitchActiveDidResult {
   error?: string;
 }
 // v0.10.0 Pillar 2 — Microsoft Teams notification config.
-// Per-user Incoming Webhook URL + opt-ins for which event types ping.
+// v0.10.1 — Switched to tenant-wide Power Automate flow. Users no longer
+// manage a webhook URL; the admin configures one tenant URL (env var
+// TEAMS_TENANT_WEBHOOK_URL on the API + webhooks services). Users only
+// pick which event types they want cards for.
 export type TeamsEventType = 'missed_call' | 'sms' | 'voicemail';
 export interface TeamsConfig {
-  teamsWebhookUrl: string | null;
+  /** True when TEAMS_TENANT_WEBHOOK_URL is set on the API service.
+   *  When false the UI shows an "ask your admin" empty state. */
+  tenantConfigured: boolean;
   events: TeamsEventType[];
   availableEvents?: TeamsEventType[];
 }
@@ -142,7 +147,7 @@ export async function getTeamsConfig(token: string): Promise<TeamsConfig> {
 }
 export async function updateTeamsConfig(
   token: string,
-  input: { teamsWebhookUrl?: string | null; events?: TeamsEventType[] },
+  input: { events?: TeamsEventType[] },
 ): Promise<{ ok: boolean; error?: string }> {
   const res = await fetch(`${API_URL}/me/teams-config`, {
     method: 'PATCH',

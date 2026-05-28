@@ -64,8 +64,13 @@ export interface UserDidPublic {
 const TEAMS_EVENT_TYPES = ['missed_call', 'sms', 'voicemail'] as const;
 type TeamsEventType = (typeof TEAMS_EVENT_TYPES)[number];
 
+// v0.10.1 — switched from per-user webhook URL to a tenant-wide Power
+// Automate flow (TEAMS_TENANT_WEBHOOK_URL env var on the webhooks
+// service). Users no longer manage a URL; they just toggle which event
+// types they want cards for. The teamsWebhookUrl column stays in DB
+// as nullable / unused for now to avoid a destructive migration —
+// the notifier doesn't read it anymore.
 const TeamsConfigSchema = z.object({
-  teamsWebhookUrl: z.string().url().nullable().optional(),
   // Array on the wire — easier for the client form to handle as checkboxes.
   // Convert to/from comma-separated string for storage.
   events: z.array(z.enum(TEAMS_EVENT_TYPES)).optional(),
@@ -240,7 +245,7 @@ export async function meRoutes(app: FastifyInstance) {
       const me = (request.user as JwtPayload).sub;
       const user = await prisma.user.findUnique({
         where: { id: me },
-        select: { teamsWebhookUrl: true, teamsNotifyOn: true },
+        select: { teamsNotifyOn: true },
       });
       const eventsCsv = user?.teamsNotifyOn ?? '';
       const events = eventsCsv
@@ -249,8 +254,12 @@ export async function meRoutes(app: FastifyInstance) {
         .filter((s): s is TeamsEventType =>
           (TEAMS_EVENT_TYPES as readonly string[]).includes(s),
         );
+      // v0.10.1 — tenantConfigured tells the UI whether to show the
+      // event toggles at all. When the env var isn't set, Teams notifs
+      // are effectively disabled tenant-wide and the UI shows an
+      // "ask your admin to enable Teams notifications" empty state.
       return {
-        teamsWebhookUrl: user?.teamsWebhookUrl ?? null,
+        tenantConfigured: Boolean((process.env.TEAMS_TENANT_WEBHOOK_URL ?? '').trim()),
         events,
         availableEvents: TEAMS_EVENT_TYPES,
       };
@@ -269,116 +278,103 @@ export async function meRoutes(app: FastifyInstance) {
           details: parsed.error.flatten(),
         });
       }
-      const { teamsWebhookUrl, events } = parsed.data;
-      const data: { teamsWebhookUrl?: string | null; teamsNotifyOn?: string | null } = {};
-      // Empty string → treat as null (cleared). Null literal → also null.
-      if (teamsWebhookUrl !== undefined) {
-        data.teamsWebhookUrl =
-          teamsWebhookUrl && teamsWebhookUrl.trim()
-            ? teamsWebhookUrl.trim()
-            : null;
-      }
+      const { events } = parsed.data;
+      const data: { teamsNotifyOn?: string | null } = {};
       if (events !== undefined) {
         // Dedup + sort for stable storage.
         const deduped = Array.from(new Set(events)).sort();
         data.teamsNotifyOn = deduped.length > 0 ? deduped.join(',') : null;
       }
-      // First-time opt-in convenience: when a user sets a webhook URL
-      // for the first time without explicitly listing events, default
-      // to all three (it's what they almost always want). If they
-      // already had events set, keep them.
-      if (data.teamsWebhookUrl && data.teamsNotifyOn === undefined) {
-        const current = await prisma.user.findUnique({
-          where: { id: me },
-          select: { teamsNotifyOn: true },
-        });
-        if (!current?.teamsNotifyOn) {
-          data.teamsNotifyOn = TEAMS_EVENT_TYPES.slice().sort().join(',');
-        }
-      }
       await prisma.user.update({ where: { id: me }, data });
       await recordAudit(me, 'user.teams_config_updated', me, {
-        configured: Boolean(data.teamsWebhookUrl ?? null),
         events: data.teamsNotifyOn ?? null,
       });
       return { ok: true };
     },
   );
 
-  // Sends a sample Adaptive Card to the user's currently-configured
-  // webhook URL. Useful for proving the URL is reachable + correctly
-  // formatted BEFORE relying on it for production missed-call pings.
-  // Returns HTTP status from Teams so the UI can show success/failure.
+  // v0.10.1 — Sends a sample Adaptive Card via the TENANT-WIDE Power
+  // Automate flow (TEAMS_TENANT_WEBHOOK_URL env var). The flow reads
+  // recipientEmail from the body and DMs the calling user via Flow bot.
+  // Useful for the user to confirm they can receive cards in Teams
+  // before relying on it for production missed-call / SMS / voicemail
+  // events. Returns HTTP status from Teams so the UI can show
+  // success/failure.
   app.post(
     '/me/teams-config/test',
     { onRequest: [app.authenticate] },
     async (request: FastifyRequest, reply) => {
       const me = (request.user as JwtPayload).sub;
+      const tenantUrl = (process.env.TEAMS_TENANT_WEBHOOK_URL ?? '').trim();
+      if (!tenantUrl) {
+        return reply.code(503).send({
+          error:
+            'Teams notifications are not configured at the org level. Ask your admin to set TEAMS_TENANT_WEBHOOK_URL.',
+        });
+      }
       const user = await prisma.user.findUnique({
         where: { id: me },
         select: {
           firstName: true,
           email: true,
-          teamsWebhookUrl: true,
         },
       });
-      if (!user?.teamsWebhookUrl) {
+      if (!user?.email) {
         return reply.code(409).send({
-          error: 'No Teams webhook URL configured. Save one first.',
+          error: 'Your account has no email on file; cannot route a Teams card.',
         });
       }
+      // Bare AdaptiveCard — the Power Automate flow's "Post adaptive
+      // card" action wants the card body directly, not a Teams "message"
+      // envelope. Matches the shape the notifier sends for real events.
       const card = {
-        type: 'message',
-        attachments: [
+        $schema: 'http://adaptivecards.io/schemas/adaptive-card.json',
+        type: 'AdaptiveCard',
+        version: '1.4',
+        body: [
           {
-            contentType: 'application/vnd.microsoft.card.adaptive',
-            content: {
-              $schema: 'http://adaptivecards.io/schemas/adaptive-card.json',
-              type: 'AdaptiveCard',
-              version: '1.4',
-              body: [
-                {
-                  type: 'TextBlock',
-                  text: '✅ ACE Dialer Teams notifications connected',
-                  size: 'Large',
-                  weight: 'Bolder',
-                },
-                {
-                  type: 'TextBlock',
-                  text: `Hello ${user.firstName ?? user.email}, this is a test card from ACE Dialer. You'll receive cards here when you have a missed call, a new SMS, or a voicemail (per your opt-ins).`,
-                  wrap: true,
-                  isSubtle: true,
-                },
-                {
-                  type: 'TextBlock',
-                  text: 'You can adjust opt-ins or remove the webhook in Settings → Account → Teams notifications.',
-                  wrap: true,
-                  isSubtle: true,
-                  spacing: 'Small',
-                },
-              ],
-            },
+            type: 'TextBlock',
+            text: '✅ ACE Dialer Teams notifications connected',
+            size: 'Large',
+            weight: 'Bolder',
+          },
+          {
+            type: 'TextBlock',
+            text: `Hello ${user.firstName ?? user.email}, this is a test card from ACE Dialer. You'll receive cards here when you have a missed call, a new SMS, or a voicemail (per your opt-ins).`,
+            wrap: true,
+            isSubtle: true,
+          },
+          {
+            type: 'TextBlock',
+            text: 'Use the toggles in Settings → Personal → Teams notifications to mute event types you don\'t want.',
+            wrap: true,
+            isSubtle: true,
+            spacing: 'Small',
           },
         ],
       };
       try {
-        const res = await fetch(user.teamsWebhookUrl, {
+        const res = await fetch(tenantUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(card),
+          body: JSON.stringify({
+            recipientEmail: user.email,
+            eventType: 'test',
+            card,
+          }),
         });
         const text = await res.text().catch(() => '');
         if (!res.ok) {
           request.log.warn(
             { status: res.status, body: text.slice(0, 300) },
-            '[me/teams-config/test] webhook rejected card',
+            '[me/teams-config/test] tenant webhook rejected card',
           );
           return reply.code(502).send({
             ok: false,
             status: res.status,
             error:
               res.status === 410
-                ? 'Webhook URL expired or deleted. Re-create the Incoming Webhook in Teams.'
+                ? 'Tenant webhook URL expired or deleted. Admin should re-create the Power Automate flow.'
                 : `Teams returned HTTP ${res.status}: ${text.slice(0, 200)}`,
           });
         }

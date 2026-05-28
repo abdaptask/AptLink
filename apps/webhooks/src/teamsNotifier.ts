@@ -37,6 +37,23 @@ import {
 // ─────────────────────────────────────────────────────────────────
 // Internal: HTTP POST with 1 retry.
 // ─────────────────────────────────────────────────────────────────
+//
+// v0.10.1 — switched from per-user webhook URLs to a SINGLE tenant-wide
+// Power Automate flow. The env var TEAMS_TENANT_WEBHOOK_URL points at a
+// flow that accepts JSON of shape:
+//
+//   { recipientEmail: string,
+//     eventType:      'missed_call' | 'sms' | 'voicemail',
+//     card:           <AdaptiveCard JSON, NOT the Teams "message"
+//                       envelope — Power Automate's "Post adaptive
+//                       card" action wants the bare card body> }
+//
+// The flow's "Post adaptive card in a chat or channel" action reads
+// recipientEmail (dynamic) and DMs that user via Flow bot with the
+// supplied card. No per-user setup; users just start seeing cards in
+// Teams chat with "Flow bot". They can still mute event types via the
+// per-event opt-in checkboxes in their Dialer Settings (we honor
+// teamsNotifyOn on a per-user basis at notify time).
 
 type LogFn = (obj: Record<string, unknown>, msg: string) => void;
 const consoleLog: LogFn = (obj, msg) => console.info(msg, obj);
@@ -48,7 +65,28 @@ interface PostResult {
   error?: string;
 }
 
-async function postOnce(url: string, payload: TeamsMessage): Promise<PostResult> {
+type EventType = 'missed_call' | 'sms' | 'voicemail';
+
+interface TenantPostBody {
+  recipientEmail: string;
+  eventType: EventType;
+  /** The bare AdaptiveCard (NOT the Teams `{type:'message', attachments:...}`
+   *  envelope). Power Automate's "Post adaptive card" action expects this. */
+  card: Record<string, unknown>;
+}
+
+/** Pull the AdaptiveCard content out of the Teams envelope our card
+ *  builders return. The envelope is `{type:'message', attachments:[
+ *  {contentType, content: <AdaptiveCard>}]}`; we want `attachments[0].content`. */
+function extractAdaptiveCard(envelope: TeamsMessage): Record<string, unknown> {
+  const card = envelope?.attachments?.[0]?.content;
+  // Cast: builders always produce an AdaptiveCard shape here, but we
+  // surface it as Record<string, unknown> for JSON-stringification
+  // purposes (the flow doesn't care about TS typing).
+  return (card as unknown as Record<string, unknown>) ?? {};
+}
+
+async function postOnce(url: string, payload: TenantPostBody): Promise<PostResult> {
   try {
     const res = await fetch(url, {
       method: 'POST',
@@ -56,6 +94,9 @@ async function postOnce(url: string, payload: TeamsMessage): Promise<PostResult>
       body: JSON.stringify(payload),
     });
     if (res.ok) return { ok: true, status: res.status };
+    // Power Automate returns 202 Accepted with a Location header on
+    // async runs — fetch treats 2xx as ok so we're fine. 200/202 both
+    // mean "queued; flow will execute".
     const text = await res.text().catch(() => '');
     return {
       ok: false,
@@ -68,7 +109,7 @@ async function postOnce(url: string, payload: TeamsMessage): Promise<PostResult>
 }
 
 /** POST with one 2s-delayed retry on 5xx / network. 4xx bails immediately. */
-async function postToTeams(url: string, payload: TeamsMessage): Promise<PostResult> {
+async function postToTeams(url: string, payload: TenantPostBody): Promise<PostResult> {
   const first = await postOnce(url, payload);
   if (first.ok) return first;
   // Don't retry on 4xx — permanent failures (bad payload, expired URL).
@@ -82,19 +123,48 @@ async function postToTeams(url: string, payload: TeamsMessage): Promise<PostResu
 // Opt-in lookup.
 // ─────────────────────────────────────────────────────────────────
 
-type EventType = 'missed_call' | 'sms' | 'voicemail';
-
 interface TeamsConfig {
-  url: string;
+  /** The tenant-wide Power Automate flow URL. Same for every user. */
+  tenantUrl: string;
+  /** Where to deliver this user's card (their work email — the flow
+   *  uses it to find the Teams account to DM). */
+  email: string;
+  /** Which event types this user opted into. */
   events: Set<EventType>;
 }
 
+/** Load the tenant URL from env + the per-user email + per-user opt-ins.
+ *  Returns null when there's nothing to send (missing tenant URL,
+ *  user has no email, or all events opted out). */
 async function loadTeamsConfig(userId: number): Promise<TeamsConfig | null> {
+  const tenantUrl = process.env.TEAMS_TENANT_WEBHOOK_URL?.trim() || '';
+  if (!tenantUrl) {
+    // Configuration not deployed yet — log once per call, don't spam.
+    consoleLog(
+      { userId },
+      '[teams] TEAMS_TENANT_WEBHOOK_URL not set; skipping notification',
+    );
+    return null;
+  }
+
   const user = await prisma.user.findUnique({
     where: { id: userId },
-    select: { teamsWebhookUrl: true, teamsNotifyOn: true },
+    select: { email: true, teamsNotifyOn: true, isActive: true },
   });
-  if (!user?.teamsWebhookUrl) return null;
+  if (!user) return null;
+  if (!user.isActive) return null; // tombstoned / deactivated user
+  if (!user.email) {
+    consoleWarn(
+      { userId },
+      '[teams] user has no email; cannot route Teams notification',
+    );
+    return null;
+  }
+
+  // Parse the CSV of opted-in events. Empty string / null = nothing
+  // opted in. We don't auto-fill defaults here — that's done at the
+  // schema level (DB default = "missed_call,sms,voicemail") so every
+  // new user starts opted-in to all three.
   const events = new Set<EventType>(
     (user.teamsNotifyOn ?? '')
       .split(',')
@@ -104,7 +174,7 @@ async function loadTeamsConfig(userId: number): Promise<TeamsConfig | null> {
       ),
   );
   if (events.size === 0) return null;
-  return { url: user.teamsWebhookUrl, events };
+  return { tenantUrl, email: user.email, events };
 }
 
 /**
@@ -200,16 +270,25 @@ async function notifyMissedCall(opts: {
 
   const lineLabel = await resolveLineLabel(opts.userId, call.userDidId);
 
-  const card = buildMissedCallCard({
+  const envelope = buildMissedCallCard({
     fromNumber: call.fromNumber,
     toLineLabel: lineLabel,
     occurredAt: call.startedAt ?? new Date(),
   });
 
-  const result = await postToTeams(cfg.url, card);
+  const result = await postToTeams(cfg.tenantUrl, {
+    recipientEmail: cfg.email,
+    eventType: 'missed_call',
+    card: extractAdaptiveCard(envelope),
+  });
   if (result.ok) {
     consoleLog(
-      { userId: opts.userId, callDbId: opts.callDbId, status: result.status },
+      {
+        userId: opts.userId,
+        callDbId: opts.callDbId,
+        recipient: cfg.email,
+        status: result.status,
+      },
       '[teams] missed-call sent',
     );
   } else {
@@ -217,6 +296,7 @@ async function notifyMissedCall(opts: {
       {
         userId: opts.userId,
         callDbId: opts.callDbId,
+        recipient: cfg.email,
         status: result.status,
         error: result.error,
       },
@@ -254,17 +334,26 @@ export async function notifyInboundSms(opts: {
 
   const lineLabel = await resolveLineLabel(opts.userId, msg.userDidId);
 
-  const card = buildInboundSmsCard({
+  const envelope = buildInboundSmsCard({
     fromNumber: msg.fromNumber,
     body: msg.body ?? '',
     toLineLabel: lineLabel,
     occurredAt: msg.sentAt ?? new Date(),
   });
 
-  const result = await postToTeams(cfg.url, card);
+  const result = await postToTeams(cfg.tenantUrl, {
+    recipientEmail: cfg.email,
+    eventType: 'sms',
+    card: extractAdaptiveCard(envelope),
+  });
   if (result.ok) {
     consoleLog(
-      { userId: opts.userId, messageDbId: opts.messageDbId, status: result.status },
+      {
+        userId: opts.userId,
+        messageDbId: opts.messageDbId,
+        recipient: cfg.email,
+        status: result.status,
+      },
       '[teams] sms sent',
     );
   } else {
@@ -272,6 +361,7 @@ export async function notifyInboundSms(opts: {
       {
         userId: opts.userId,
         messageDbId: opts.messageDbId,
+        recipient: cfg.email,
         status: result.status,
         error: result.error,
       },
@@ -335,7 +425,7 @@ export async function notifyVoicemail(opts: {
 
     const lineLabel = await resolveLineLabel(opts.userId, vm.userDidId);
 
-    const card = buildVoicemailCard({
+    const envelope = buildVoicemailCard({
       voicemailId: opts.voicemailId,
       fromNumber: vm.fromNumber,
       toLineLabel: lineLabel,
@@ -344,12 +434,17 @@ export async function notifyVoicemail(opts: {
       transcript: vm.transcription,
     });
 
-    const result = await postToTeams(cfg.url, card);
+    const result = await postToTeams(cfg.tenantUrl, {
+      recipientEmail: cfg.email,
+      eventType: 'voicemail',
+      card: extractAdaptiveCard(envelope),
+    });
     if (result.ok) {
       consoleLog(
         {
           userId: opts.userId,
           voicemailId: opts.voicemailId,
+          recipient: cfg.email,
           reason: opts.reason,
           hasTranscript: Boolean(vm.transcription),
           status: result.status,
