@@ -49,42 +49,39 @@ export default function AutoRoute({ action }: AutoRouteProps) {
       return;
     }
 
-    // Step 1: fire the custom protocol. On Windows + Mac, this opens
-    // the desktop app if installed; on mobile / unsupported, the
-    // browser silently fails and we fall through to step 2.
+    // v0.10.6 — switched from a hidden-iframe protocol launch to
+    // window.location.href. Modern Chrome / Edge block iframe-driven
+    // custom-protocol launches as a silent-redirect security measure,
+    // which made the previous implementation always fall back to web
+    // even when the desktop app was installed.
     //
-    // We use a hidden iframe rather than window.location.href so the
-    // current page isn't replaced — that way the fallback Navigate
-    // below still works after the timer fires. Some browsers also
-    // show a confirmation dialog on top-level location changes that
-    // we'd rather avoid.
+    // window.location.href is the standard pattern (Slack/Zoom/Teams
+    // all use it). The browser shows a native "Open <app>?" dialog
+    // on first launch; once the user clicks Allow + checks
+    // "Always allow", subsequent clicks open the desktop directly
+    // with no prompt. If the user clicks Cancel, the browser stays
+    // on this page and the 3s fallback timer below kicks in.
+    //
+    // We bump the fallback delay to 3s (was 1.2s) so the user has
+    // time to interact with the browser dialog before we navigate
+    // away. If the protocol handler takes over, the desktop app is
+    // already focused — the residual navigation in this tab is
+    // harmless background noise.
     const url = `ace-dialer://${action}?to=${encodeURIComponent(to)}`;
     try {
-      const iframe = document.createElement('iframe');
-      iframe.style.display = 'none';
-      iframe.src = url;
-      document.body.appendChild(iframe);
-      // Clean up after a moment — the OS has either intercepted by
-      // now or it's not going to.
-      setTimeout(() => {
-        if (iframe.parentNode) iframe.parentNode.removeChild(iframe);
-      }, 1500);
+      window.location.href = url;
     } catch {
       /* harmless — we'll just rely on the fallback */
     }
     setProtocolTried(true);
 
-    // Step 2: 1.2s later, fall back to the in-browser dialer page.
-    // If the desktop took the action, the user is already in the
-    // app — the in-browser navigation is harmless background noise
-    // for that tab.
     const timer = setTimeout(() => {
       const webRoute =
         action === 'call'
           ? `/keypad?to=${encodeURIComponent(to)}`
           : `/messages?to=${encodeURIComponent(to)}`;
       navigate(webRoute, { replace: true });
-    }, 1200);
+    }, 3000);
 
     return () => clearTimeout(timer);
   }, [to, action, navigate]);
