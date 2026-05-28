@@ -51,6 +51,13 @@ export default function UserLinesManagerModal({ userId, userLabel, onClose }: Pr
   const [showAdd, setShowAdd] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [busyId, setBusyId] = useState<number | null>(null);
+  // v0.10.8 — inline label editor. Was using window.prompt() which
+  // Electron silently disables (no dialog appears, returns null). Now
+  // the pencil button toggles an <input> in place of the label text.
+  // Enter saves, Escape cancels, blur saves (matches what users expect
+  // from native inline-edit patterns like Finder / File Explorer).
+  const [editingLabelId, setEditingLabelId] = useState<number | null>(null);
+  const [editingLabelValue, setEditingLabelValue] = useState<string>('');
   // CLAUDE.md UI rule #2 — modal-body scrolls to top on open.
   const bodyRef = useRef<HTMLDivElement | null>(null);
 
@@ -98,10 +105,16 @@ export default function UserLinesManagerModal({ userId, userLabel, onClose }: Pr
     load();
   }
 
-  async function handleEditLabel(row: AdminUserDidRow) {
-    const next = window.prompt(`New label for ${formatPhone(row.didNumber)}:`, row.label);
-    if (next === null) return;
-    const trimmed = next.trim();
+  function handleEditLabel(row: AdminUserDidRow) {
+    // v0.10.8 — open the inline editor. The actual save happens in
+    // commitLabelEdit when the user hits Enter / blurs the input.
+    setEditingLabelId(row.id);
+    setEditingLabelValue(row.label);
+  }
+
+  async function commitLabelEdit(row: AdminUserDidRow) {
+    const trimmed = editingLabelValue.trim();
+    setEditingLabelId(null);
     if (!trimmed || trimmed === row.label) return;
     const token = sessionStorage.getItem('ace_token');
     if (!token) return;
@@ -204,11 +217,36 @@ export default function UserLinesManagerModal({ userId, userLabel, onClose }: Pr
                     />
                     <div className="lines-row-text">
                       <div className="lines-row-label">
-                        {row.label}
-                        {row.isDefault && (
-                          <span className="lines-row-default-pill" title="Default outbound line">
-                            Default
-                          </span>
+                        {editingLabelId === row.id ? (
+                          <input
+                            type="text"
+                            className="lines-row-label-input"
+                            value={editingLabelValue}
+                            autoFocus
+                            onChange={(e) => setEditingLabelValue(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                e.preventDefault();
+                                void commitLabelEdit(row);
+                              } else if (e.key === 'Escape') {
+                                e.preventDefault();
+                                setEditingLabelId(null);
+                              }
+                            }}
+                            onBlur={() => void commitLabelEdit(row)}
+                            disabled={isBusy}
+                            maxLength={32}
+                            aria-label="Line label"
+                          />
+                        ) : (
+                          <>
+                            {row.label}
+                            {row.isDefault && (
+                              <span className="lines-row-default-pill" title="Default outbound line">
+                                Default
+                              </span>
+                            )}
+                          </>
                         )}
                       </div>
                       <div className="lines-row-number">{formatPhone(row.didNumber)}</div>

@@ -462,6 +462,17 @@ body {
 [data-theme="light"] .did-color-swatch {
   box-shadow: 0 0 0 1.5px rgba(0, 0, 0, 0.06);
 }
+/* v0.10.8 — The base .did-switcher-option-label / .number hardcode
+   white colors. Without these overrides, light-mode renders the
+   DID switcher dropdown items as white-on-white — first row appears
+   faintly visible because of the .active background tint, second
+   row appears completely blank except for the color swatch. */
+[data-theme="light"] .did-switcher-option-label {
+  color: var(--text);
+}
+[data-theme="light"] .did-switcher-option-number {
+  color: var(--text-muted);
+}
 
 /* Mobile: hide the number when the screen is narrow so the pill fits.
    The label + color swatch is still informative. */
@@ -627,6 +638,38 @@ body {
   color: #6bb4ff;
   letter-spacing: 0.04em;
   text-transform: uppercase;
+}
+/* v0.10.8 — Inline label editor (replaces window.prompt which Electron
+   silently disables). Renders in place of the static label when the
+   pencil icon is clicked. Subtle border so the user knows it's
+   editable; Enter saves, Escape cancels, blur saves. */
+.lines-row-label-input {
+  font: inherit;
+  font-weight: 600;
+  color: inherit;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 6px;
+  padding: 3px 8px;
+  width: 100%;
+  max-width: 220px;
+  outline: none;
+  appearance: none;
+  -webkit-appearance: none;
+}
+.lines-row-label-input:focus {
+  border-color: #4ea1ff;
+  background: rgba(78, 161, 255, 0.08);
+}
+[data-theme="light"] .lines-row-label-input {
+  background: #fff;
+  border-color: rgba(0, 0, 0, 0.15);
+  color: var(--text);
+}
+[data-theme="light"] .lines-row-label-input:focus {
+  border-color: #0a84ff;
+  background: #fff;
+  box-shadow: 0 0 0 3px rgba(10, 132, 255, 0.12);
 }
 .lines-row-number {
   font-size: 0.82rem;
