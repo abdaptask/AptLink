@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
-import { useNavigate, useLocation } from 'react-router-dom';
+import { useNavigate, useLocation, useSearchParams } from 'react-router-dom';
 import { Phone, Delete, BookUser, Clock, X } from 'lucide-react';
 import { AsYouType, parsePhoneNumberFromString, getCountryCallingCode } from 'libphonenumber-js/min';
 import type { CountryCode } from 'libphonenumber-js/min';
@@ -173,9 +173,28 @@ export default function Dialpad() {
   const { sipState, callState, call, addCall } = useSip();
   const navigate = useNavigate();
   const location = useLocation();
+  const [searchParams, setSearchParams] = useSearchParams();
   const isAddCall =
     !!(location.state as DialpadLocationState | null)?.addCall &&
     callState.state !== 'idle';
+
+  // v0.10.4 Task 10 — Prefill dialer from `?to=` query param. This is
+  // how Teams card "Call back" buttons funnel a recipient into the
+  // dialer (via the /auto/call page → /keypad?to=...). We populate the
+  // number but DON'T auto-dial — per the design decision the user
+  // confirms by clicking Call. After prefilling, strip the param from
+  // the URL so a page reload doesn't reset the number to a stale value.
+  useEffect(() => {
+    const to = searchParams.get('to');
+    if (to && !number) {
+      setNumber(smartNormalize(to) || to);
+      // Remove the param so refreshes don't override the user's edits.
+      const next = new URLSearchParams(searchParams);
+      next.delete('to');
+      setSearchParams(next, { replace: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
 
   // Inline status for Add Call. While we wait for Telnyx to register the
   // active leg (so we have a callControlId to bridge with), we show this

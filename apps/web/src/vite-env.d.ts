@@ -19,6 +19,11 @@ interface AceElectronBridge {
   openExternal: (url: string) => Promise<boolean>;
   onSsoCallback: (cb: (url: string) => void) => () => void;
   notifyReadyForSso: () => void;
+  // v0.10.4 Task 10 — Deep-link bridge (Teams card buttons)
+  onDeepLink?: (
+    cb: (data: { action: 'call' | 'sms'; to: string }) => void,
+  ) => () => void;
+  notifyReadyForDeepLink?: () => void;
   // Phase 7.1 — silent auto-update bridge
   onUpdateAvailable?: (cb: (info: { version: string | null }) => void) => () => void;
   onUpdateProgress?: (cb: (info: { percent: number }) => void) => () => void;

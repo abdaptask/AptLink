@@ -68,6 +68,22 @@ contextBridge.exposeInMainWorld('ace', {
   // first launch's argv).
   notifyReadyForSso: () => ipcRenderer.send('ace:sso-ready'),
 
+  // ── Deep-link bridge (v0.10.4 Task 10) ──
+  // For ace-dialer://call?to=+1... and ace-dialer://sms?to=+1...
+  // triggered when a user clicks a Teams card button. The web /auto/call
+  // and /auto/sms pages fire the protocol; the OS forwards to this app
+  // via 'second-instance' / 'open-url'; main parses the URL and emits
+  // 'ace:deep-link' with the action + recipient.
+  onDeepLink: (cb: (data: { action: 'call' | 'sms'; to: string }) => void) => {
+    const handler = (_e: unknown, data: { action: 'call' | 'sms'; to: string }) =>
+      cb(data);
+    ipcRenderer.on('ace:deep-link', handler);
+    return () => ipcRenderer.removeListener('ace:deep-link', handler);
+  },
+  // Tell main "I'm mounted, flush any cold-start deep link you buffered."
+  // Mirrors notifyReadyForSso.
+  notifyReadyForDeepLink: () => ipcRenderer.send('ace:deep-link-ready'),
+
   // ── Silent auto-update bridge (Phase 7.1) ──
   // Renderer subscribes so UpdateBanner can show a "Restart to install"
   // button once electron-updater has downloaded the new version in the

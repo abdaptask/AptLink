@@ -38,6 +38,16 @@ let isQuittingForReal = false;
  *  it once the renderer is ready to receive. */
 let pendingSsoUrl: string | null = null;
 
+/** v0.10.4 — Same pattern for deep links (call / sms from Teams cards).
+ *  When the OS launches us cold from `ace-dialer://call?to=...`, we
+ *  buffer the action here until the renderer signals it's ready via
+ *  'ace:deep-link-ready'. */
+interface PendingDeepLink {
+  action: 'call' | 'sms';
+  to: string;
+}
+let pendingDeepLink: PendingDeepLink | null = null;
+
 /** Find an ace-dialer:// URL in an argv array. Windows passes it as the
  *  last positional argument when the OS launches us from a protocol click. */
 function findProtocolUrl(argv: readonly string[]): string | null {
@@ -58,6 +68,60 @@ function handleSsoCallback(url: string) {
     pendingSsoUrl = null;
   } else {
     pendingSsoUrl = url;
+  }
+}
+
+/** v0.10.4 Task 10 — Deliver a deep-link action to the renderer. Mirrors
+ *  handleSsoCallback's pattern. Used for ace-dialer://call?to=...
+ *  and ace-dialer://sms?to=... events triggered from Teams card
+ *  buttons (via the /auto/call and /auto/sms web pages). */
+function handleDeepLink(action: 'call' | 'sms', to: string) {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    if (!mainWindow.isVisible()) mainWindow.show();
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.focus();
+    mainWindow.webContents.send('ace:deep-link', { action, to });
+    pendingDeepLink = null;
+  } else {
+    pendingDeepLink = { action, to };
+  }
+}
+
+/** v0.10.4 Task 10 — Route a protocol URL by its path / host segment.
+ *  ace-dialer://auth/callback?code=...   → SSO callback (existing)
+ *  ace-dialer://call?to=+1...            → focus dialer + prefill (NEW)
+ *  ace-dialer://sms?to=+1...             → focus composer + prefill (NEW)
+ *  Anything else → no-op (log only).
+ *
+ *  URL parser quirk: for ace-dialer://call?to=..., the WHATWG URL
+ *  parser treats "call" as the HOST. For ace-dialer://auth/callback
+ *  it treats "auth" as the host and "/callback" as the path. So our
+ *  router checks hostname first, falling through to a substring
+ *  match for the SSO case (defensive against parsing differences). */
+function routeProtocolUrl(url: string) {
+  try {
+    // SSO callback uses a sub-path so URL parsing puts "auth" in
+    // hostname; we explicitly match the substring for robustness
+    // across platforms (Windows vs macOS sometimes hand us slightly
+    // different normalized strings).
+    if (url.includes('auth/callback')) {
+      handleSsoCallback(url);
+      return;
+    }
+    const parsed = new URL(url);
+    const action = parsed.hostname;
+    if (action === 'call' || action === 'sms') {
+      const to = parsed.searchParams.get('to') ?? '';
+      if (!to) {
+        console.warn('[deep-link] missing ?to= param', url);
+        return;
+      }
+      handleDeepLink(action, to);
+      return;
+    }
+    console.warn('[deep-link] unrecognised action', { url, host: action });
+  } catch (e) {
+    console.warn('[deep-link] failed to parse', url, e instanceof Error ? e.message : e);
   }
 }
 
@@ -454,7 +518,7 @@ if (!gotLock) {
 } else {
   app.on('second-instance', (_event, argv) => {
     const url = findProtocolUrl(argv);
-    if (url) handleSsoCallback(url);
+    if (url) routeProtocolUrl(url);
     // Always surface the main window when launched-again
     if (mainWindow) {
       if (!mainWindow.isVisible()) mainWindow.show();
@@ -467,7 +531,7 @@ if (!gotLock) {
 // macOS routes protocol launches through 'open-url' instead of argv.
 app.on('open-url', (event, url) => {
   event.preventDefault();
-  if (url.startsWith('ace-dialer://')) handleSsoCallback(url);
+  if (url.startsWith('ace-dialer://')) routeProtocolUrl(url);
 });
 
 // Cold-start: Windows passes the protocol URL in our own argv when the
@@ -475,13 +539,28 @@ app.on('open-url', (event, url) => {
 // soon as the renderer signals it's ready.
 {
   const url = findProtocolUrl(process.argv);
-  if (url) pendingSsoUrl = url;
+  if (url) {
+    // Route directly — if it's SSO it'll set pendingSsoUrl; if it's a
+    // deep link it'll set pendingDeepLink. The renderer flushes whichever
+    // is present when it signals ready.
+    routeProtocolUrl(url);
+  }
 }
 
 // Renderer says "I'm ready to receive SSO callbacks" — flush anything
 // we buffered during cold-start.
 ipcMain.on('ace:sso-ready', () => {
   if (pendingSsoUrl) handleSsoCallback(pendingSsoUrl);
+});
+
+// v0.10.4 Task 10 — Renderer says "I'm ready to receive deep-link
+// actions" (call / sms from Teams cards). Flush any buffered cold-start
+// deep link. Listening separately from SSO so the renderer can decide
+// when it has the UI mounted vs. just the auth flow ready.
+ipcMain.on('ace:deep-link-ready', () => {
+  if (pendingDeepLink) {
+    handleDeepLink(pendingDeepLink.action, pendingDeepLink.to);
+  }
 });
 
 // Renderer asks us to open the Microsoft authorize URL in the system

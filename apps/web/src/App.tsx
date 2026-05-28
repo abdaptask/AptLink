@@ -98,6 +98,29 @@ export default function App() {
     navigate('/login');
   }
 
+  // v0.10.4 Task 10 — Desktop deep-link handler. When the OS hands us an
+  // ace-dialer://call?to=... or ace-dialer://sms?to=... URL (originating
+  // from a Teams Adaptive Card button via the /auto/call page), the main
+  // process forwards via IPC. We navigate to the matching in-app page
+  // with the recipient prefilled. The web fallback (AutoRoute.tsx) handles
+  // the same flow for browser-only users; this hook is the desktop-fast
+  // path that avoids the AutoRoute redirect step.
+  useEffect(() => {
+    if (!window.ace?.onDeepLink) return;
+    const unsub = window.ace.onDeepLink((data) => {
+      if (!data?.to) return;
+      const route =
+        data.action === 'call'
+          ? `/keypad?to=${encodeURIComponent(data.to)}`
+          : `/messages?to=${encodeURIComponent(data.to)}`;
+      navigate(route);
+    });
+    // Tell main to flush any cold-start deep link buffered before mount.
+    window.ace.notifyReadyForDeepLink?.();
+    return unsub;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Listen for session-expired events from the fetch interceptor (401 from
   // any API call) or the SIP watchdog (SipContext stayed 'failed' too long).
   // Both routes converge here so the user can't end up on a stale screen

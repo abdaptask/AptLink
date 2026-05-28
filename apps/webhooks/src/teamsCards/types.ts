@@ -123,25 +123,39 @@ export function formatTimeForDisplay(d: Date | string | number): string {
   }) + ' ET';
 }
 
-/** Build a deep-link URL that the desktop app's custom protocol
- *  handler picks up. `pad` strips formatting so the desktop just
- *  has clean digits to dial. The `to` value is forwarded as-is to
- *  the dialer/composer when the app focuses. */
+/** v0.10.4 — Build call / SMS action URLs for Teams card buttons.
+ *
+ * Earlier these returned `ace-dialer://...` deep links, which only
+ * worked on desktop machines with the Electron app installed AND
+ * the OS protocol handler registered. Teams Web (browser) didn't
+ * fire them, mobile Teams ignored them entirely, and even desktop
+ * Teams sometimes blocked the protocol.
+ *
+ * New approach: return web URLs pointing at /auto/call and /auto/sms.
+ * Those pages (apps/web/src/pages/AutoRoute.tsx) try the
+ * `ace-dialer://` protocol via a hidden iframe — on desktop with the
+ * app installed this hands off the action — and after ~1.2s fall
+ * back to the in-browser dialer / composer. Result: card buttons
+ * Just Work everywhere (desktop with app, desktop browser, mobile).
+ *
+ * `WEB_BASE_URL` is the public Vercel origin. Fall back to a
+ * sensible default; production env MUST set it correctly. */
+function webBase(): string {
+  return (process.env.WEB_BASE_URL ?? 'https://ace-dialer.vercel.app').replace(/\/+$/, '');
+}
+
 export function buildCallDeepLink(toNumber: string): string {
   const cleaned = encodeURIComponent(toNumber.trim());
-  return `ace-dialer://call?to=${cleaned}`;
+  return `${webBase()}/auto/call?to=${cleaned}`;
 }
 
 export function buildSmsDeepLink(toNumber: string, prefillText?: string): string {
   const cleaned = encodeURIComponent(toNumber.trim());
   const t = prefillText ? `&body=${encodeURIComponent(prefillText)}` : '';
-  return `ace-dialer://sms?to=${cleaned}${t}`;
+  return `${webBase()}/auto/sms?to=${cleaned}${t}`;
 }
 
-/** Build a web URL for voicemail playback. `WEB_BASE_URL` is the
- *  public Vercel origin; we fall back to a sensible default but the
- *  env should be set in production for correctness. */
+/** Voicemail playback URL — already a web route. Same base. */
 export function buildVoicemailPlaybackUrl(voicemailId: number): string {
-  const base = (process.env.WEB_BASE_URL ?? 'https://ace-dialer.vercel.app').replace(/\/+$/, '');
-  return `${base}/voicemail/${voicemailId}/play`;
+  return `${webBase()}/voicemail/${voicemailId}/play`;
 }
