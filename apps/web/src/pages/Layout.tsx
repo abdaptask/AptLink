@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from 'react';
 import { NavLink, Outlet, useNavigate, useLocation } from 'react-router-dom';
 import {
   MessageSquare,
-  MessageCircle,
   Clock,
   User as UserIcon,
   Grid3x3,
@@ -400,27 +399,22 @@ export default function Layout({ user, onLogout }: Props) {
         <NavLink to="/favorites" className={({ isActive }) => (isActive ? 'tab active' : 'tab')}>
           <Star size={22} /><span>Favorites</span>
         </NavLink>
-        <NavLink to="/messages" className={({ isActive }) => (isActive ? 'tab active' : 'tab')}>
+        {/* v0.10.13 — Merged tab. Messages now lists BOTH SMS conversations
+            (external phone numbers) and internal chats with teammates.
+            Unread badge sums both event types so users see one number for
+            "people waiting on me to reply". Old /chat route still exists
+            as a deep link target; clicking a chat row in the Messages list
+            navigates there. */}
+        <NavLink to="/messages" className={({ isActive }) => (isActive || window.location.pathname.startsWith('/chat') ? 'tab active' : 'tab')}>
           <span className="tab-icon-wrap">
             <MessageSquare size={22} />
-            {unread.messages > 0 && (
-              <span className="tab-badge" aria-label={`${unread.messages} unread messages`}>
-                {unread.messages > 99 ? '99+' : unread.messages}
+            {(unread.messages + unread.chat) > 0 && (
+              <span className="tab-badge" aria-label={`${unread.messages + unread.chat} unread messages`}>
+                {(unread.messages + unread.chat) > 99 ? '99+' : (unread.messages + unread.chat)}
               </span>
             )}
           </span>
           <span>Messages</span>
-        </NavLink>
-        <NavLink to="/chat" className={({ isActive }) => (isActive ? 'tab active' : 'tab')}>
-          <span className="tab-icon-wrap">
-            <MessageCircle size={22} />
-            {unread.chat > 0 && (
-              <span className="tab-badge" aria-label={`${unread.chat} unread chats`}>
-                {unread.chat > 99 ? '99+' : unread.chat}
-              </span>
-            )}
-          </span>
-          <span>Chat</span>
         </NavLink>
         <NavLink to="/recents" className={({ isActive }) => (isActive ? 'tab active' : 'tab')}>
           <span className="tab-icon-wrap">

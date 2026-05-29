@@ -10,6 +10,7 @@
 // .compose-input, .send-btn). That gives us dark/light theme support for
 // free. Only a few extra avatar classes are added to styles.css.
 import { useEffect, useState, useCallback, useRef, useMemo } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { Send, ArrowLeft, RefreshCcw, Search, X, Users, MessageCircle } from 'lucide-react';
 import {
   getInternalChatThreads,
@@ -263,10 +264,26 @@ function ThreadDetail({ meId, other, otherId, onBack, onSent }: ThreadDetailProp
 
 // ─── Top-level page ──────────────────────────────────────────────────
 export default function Chat() {
+  const [searchParams] = useSearchParams();
   const [meId, setMeId] = useState<number | null>(null);
   const [threads, setThreads] = useState<InternalChatThread[]>([]);
   const [users, setUsers] = useState<InternalChatUser[]>([]);
   const [active, setActive] = useState<{ id: number; user: InternalChatUser | null } | null>(null);
+
+  // v0.10.13 — When entry is via `/chat?with=<userId>` (from the unified
+  // Messages list), auto-open that user's chat thread instead of showing
+  // the index list. We watch searchParams + the loaded users list so the
+  // auto-open fires once users have arrived.
+  useEffect(() => {
+    const withId = searchParams.get('with');
+    if (!withId) return;
+    const id = Number(withId);
+    if (!Number.isFinite(id)) return;
+    if (active && active.id === id) return; // already open
+    const user = users.find((u) => u.id === id) ?? null;
+    setActive({ id, user });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams, users]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showUserPicker, setShowUserPicker] = useState(false);

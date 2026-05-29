@@ -10,10 +10,14 @@ import {
   uploadMedia,
   getContactHistory,
   addBlockedNumber,
+  // v0.10.13 — pull in the internal chat thread API so the unified
+  // Messages tab can list teammate conversations alongside SMS threads.
+  getInternalChatThreads,
   type ThreadSummary,
   type MessageRecord,
   type ContactHistory,
   type ContactTimelineEntry,
+  type InternalChatThread,
 } from '../api';
 import { useJobDivaContact, getCachedJobDivaName } from '../hooks/useJobDivaContact';
 import { useSip } from '../contexts/SipContext';
@@ -53,8 +57,17 @@ function formatRelative(iso: string): string {
   return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
 }
 
+// v0.10.13 — Discriminated row type for the unified list. SMS rows
+// come from the SMS messages table; chat rows come from internal-chat.
+// We merge both into one sorted list in the Messages view.
+type UnifiedRow =
+  | { kind: 'sms'; sms: ThreadSummary; lastAt: string; preview: string }
+  | { kind: 'chat'; chat: InternalChatThread; lastAt: string; preview: string };
+
 export default function Messages() {
   const [threads, setThreads] = useState<ThreadSummary[]>([]);
+  // v0.10.13 — internal chat threads merged into the same list.
+  const [chatThreads, setChatThreads] = useState<InternalChatThread[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [active, setActive] = useState<string | null>(null);
@@ -84,9 +97,22 @@ export default function Messages() {
     if (!token) return;
     setLoading(true);
     setError(null);
-    getThreads(token)
-      .then(setThreads)
-      .catch((e) => setError(e.message ?? 'Failed to load'))
+    // v0.10.13 — fetch SMS + internal chat in parallel, render both as
+    // one unified list. Either source can fail independently; we only
+    // surface a hard error if BOTH fail.
+    Promise.allSettled([
+      getThreads(token),
+      getInternalChatThreads(token),
+    ])
+      .then(([smsRes, chatRes]) => {
+        if (smsRes.status === 'fulfilled') setThreads(smsRes.value);
+        else setThreads([]);
+        if (chatRes.status === 'fulfilled') setChatThreads(chatRes.value);
+        else setChatThreads([]);
+        if (smsRes.status === 'rejected' && chatRes.status === 'rejected') {
+          setError('Failed to load conversations');
+        }
+      })
       .finally(() => setLoading(false));
   }, []);
 
@@ -116,6 +142,37 @@ export default function Messages() {
       return false;
     });
   }, [threads, search]);
+
+  // v0.10.13 — Unified list: SMS threads + internal chat threads merged
+  // and sorted by most-recent activity. Each row carries a 'kind'
+  // discriminator so the row renderer can show the right avatar + label
+  // and clicks route to the right detail view.
+  const unifiedRows = useMemo<UnifiedRow[]>(() => {
+    const smsRows: UnifiedRow[] = filteredThreads.map((sms) => ({
+      kind: 'sms' as const,
+      sms,
+      lastAt: sms.createdAt,
+      preview: sms.body ?? '',
+    }));
+    const q = search.trim().toLowerCase();
+    const chatFiltered = chatThreads.filter((c) => {
+      if (!q) return true;
+      const name = c.otherUser
+        ? `${c.otherUser.firstName ?? ''} ${c.otherUser.lastName ?? ''} ${c.otherUser.email ?? ''}`.toLowerCase()
+        : '';
+      if (name.includes(q)) return true;
+      if ((c.lastMessage ?? '').toLowerCase().includes(q)) return true;
+      return false;
+    });
+    const chatRows: UnifiedRow[] = chatFiltered.map((chat) => ({
+      kind: 'chat' as const,
+      chat,
+      lastAt: chat.lastAt,
+      preview: chat.lastMessage ?? '',
+    }));
+    // Merge + sort by lastAt descending (newest first).
+    return [...smsRows, ...chatRows].sort((a, b) => b.lastAt.localeCompare(a.lastAt));
+  }, [filteredThreads, chatThreads, search]);
 
   return (
     <div className="messages">
@@ -172,20 +229,35 @@ export default function Messages() {
             </div>
           )}
 
-          {!loading && threads.length > 0 && filteredThreads.length === 0 && (
+          {!loading && (threads.length + chatThreads.length) > 0 && unifiedRows.length === 0 && (
             <div className="empty-state">
               <p>No conversations match “{search}”.</p>
             </div>
           )}
 
           <ul className="thread-list">
-            {filteredThreads.map((t) => (
-              <ThreadRow
-                key={t.id}
-                thread={t}
-                onOpen={() => setActive(otherParty(t))}
-              />
-            ))}
+            {unifiedRows.map((row) => {
+              if (row.kind === 'sms') {
+                return (
+                  <ThreadRow
+                    key={`sms-${row.sms.id}`}
+                    thread={row.sms}
+                    onOpen={() => setActive(otherParty(row.sms))}
+                  />
+                );
+              }
+              // v0.10.13 — chat row. Renders with same .thread-row styling
+              // but uses the teammate's initials + name. Click navigates
+              // to /chat (Chat page handles the detail view since it
+              // already has presence, typing indicators, etc. wired up).
+              return (
+                <ChatRowInList
+                  key={`chat-${row.chat.otherId}`}
+                  chat={row.chat}
+                  onOpen={() => navigate(`/chat?with=${row.chat.otherId}`)}
+                />
+              );
+            })}
           </ul>
         </div>
       ) : (
@@ -938,6 +1010,55 @@ function ThreadRow({
         </div>
       </div>
       <div className="thread-time">{formatRelative(thread.createdAt)}</div>
+    </li>
+  );
+}
+
+// v0.10.13 — Internal-chat row rendered inside the unified Messages list.
+// Visually mirrors ThreadRow so the user sees a single coherent list, but
+// the avatar shows initials of the teammate (not a phone-style icon) and
+// clicks navigate to /chat?with=<userId> where the real-time chat detail
+// view takes over (presence, typing indicators, WebSocket push). Read-state
+// is communicated via the unreadCount on the InternalChatThread row.
+interface ChatRowInListProps {
+  chat: InternalChatThread;
+  onOpen: () => void;
+}
+function ChatRowInList({ chat, onOpen }: ChatRowInListProps) {
+  const unread = chat.unreadCount > 0;
+  const u = chat.otherUser;
+  const display =
+    u
+      ? ([u.firstName, u.lastName].filter(Boolean).join(' ').trim() || u.email || `User ${chat.otherId}`)
+      : `User ${chat.otherId}`;
+  const initials = u
+    ? (`${u.firstName?.[0] ?? ''}${u.lastName?.[0] ?? ''}`.toUpperCase() || (u.email?.[0]?.toUpperCase() ?? '?'))
+    : '?';
+  return (
+    <li
+      className={`thread-row${unread ? ' unread' : ''}`}
+      onClick={onOpen}
+      role="button"
+      tabIndex={0}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          onOpen();
+        }
+      }}
+    >
+      <div className="chat-row-avatar" aria-hidden="true">{initials}</div>
+      <div className="thread-text">
+        <div className="thread-name">
+          {display}
+          <span className="thread-kind-chip" title="Internal chat with teammate">team</span>
+        </div>
+        <div className="thread-preview">
+          {chat.lastSenderId && u && chat.lastSenderId !== u.id ? 'You: ' : ''}
+          {chat.lastMessage || (chat.mediaUrl ? '\u{1F4CE} attachment' : '…')}
+        </div>
+      </div>
+      <div className="thread-time">{formatRelative(chat.lastAt)}</div>
     </li>
   );
 }

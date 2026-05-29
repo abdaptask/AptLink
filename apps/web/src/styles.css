@@ -3965,6 +3965,40 @@ body {
 }
 .thread-time { font-size: 12px; opacity: 0.5; }
 
+/* v0.10.13 — Internal-chat row in the unified Messages list. The
+   avatar is a colored circle with the teammate's initials so users
+   can distinguish chat rows from SMS rows at a glance. The "team"
+   chip next to the name reinforces the distinction. */
+.chat-row-avatar {
+  flex: 0 0 auto;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #6366f1, #8b5cf6);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 14px;
+  letter-spacing: 0.02em;
+}
+.thread-kind-chip {
+  margin-left: 8px;
+  padding: 1px 7px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border-radius: 999px;
+  background: rgba(99, 102, 241, 0.18);
+  color: #a5b4fc;
+}
+[data-theme="light"] .thread-kind-chip {
+  background: rgba(99, 102, 241, 0.12);
+  color: #4f46e5;
+}
+
 /* Per-thread unread state — when the latest inbound message arrived
    after the user's last visit to this specific thread. Renders a small
    blue dot on the left and bolds the name + preview so it stands out.
