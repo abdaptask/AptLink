@@ -635,13 +635,28 @@ export class SipService {
       }
       // Connection is healthy — clear the disconnect counter.
       this.consecutiveDisconnectedReadings = 0;
-      try {
-        this.ua.register();
-      } catch (e) {
-        console.warn(`[sip] ${reason}: register() threw`, e);
-      }
+      // v0.10.17 — Only force a REGISTER when we're NOT already
+      // registered. Previously the heartbeat called ua.register() on
+      // every tick (every 10s) regardless of state. JsSIP ALSO does
+      // its own register_expires-driven refresh internally. When both
+      // hit Telnyx close together, Telnyx replies 491 Request Pending
+      // (concurrent REGISTER transactions for the same SIP user),
+      // which our code surfaces as "registrationFailed (cause: SIP
+      // Failure Code)" → triggers our retry-with-backoff → causes
+      // more racing → infinite flap loop. Reported by 689-227-8275.
+      //
+      // New behaviour: heartbeat ONLY recovers (calls register) when
+      // we've slipped out of the registered state. Otherwise leave
+      // JsSIP to manage its own refresh. Sockets dead → reconnect()
+      // (existing branch above). Socket alive + registered → do
+      // nothing. Socket alive + NOT registered → register.
       if (!isRegistered) {
         console.log(`[sip] ${reason}: was unregistered, forcing register`);
+        try {
+          this.ua.register();
+        } catch (e) {
+          console.warn(`[sip] ${reason}: register() threw`, e);
+        }
       }
     } catch (e) {
       console.warn(`[sip] ${reason}: refresh error`, e);
