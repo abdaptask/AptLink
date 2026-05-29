@@ -131,12 +131,21 @@ interface SectionDef {
   icon: typeof Mic;
   blurb: string;
   Component: React.FC;
+  // v0.10.11 — hide this section entirely from non-admin users.
+  // - Telnyx: SIP credentials, security risk if a user edits/screenshots
+  // - Data: backup/restore, power-user feature
+  // - Cost / Live ops / Presence: fleet-view reports that don't translate
+  //   to per-user scope (Cost = billing info, Live + Presence = cross-user)
+  // - Admin category: every section in it is admin-only (already filtered
+  //   by category in SettingsNav, but adminOnly:true on the def is the
+  //   canonical signal for the main route filter too)
+  adminOnly?: boolean;
 }
 
 const SECTIONS: SectionDef[] = [
   { key: 'account', category: 'Personal', label: 'Account', icon: UserCircle, blurb: 'Name, DID, SIP', Component: AccountSection },
   { key: 'appearance', category: 'Personal', label: 'Appearance', icon: Palette, blurb: 'Light / dark / system', Component: AppearanceSection },
-  { key: 'telnyx', category: 'Calling', label: 'Telnyx', icon: Phone, blurb: 'SIP credentials', Component: TelnyxSection },
+  { key: 'telnyx', category: 'Calling', label: 'Telnyx', icon: Phone, blurb: 'SIP credentials', Component: TelnyxSection, adminOnly: true },
   { key: 'microphone', category: 'Calling', label: 'Microphone', icon: Mic, blurb: 'Input device', Component: MicrophoneSection },
   { key: 'speaker', category: 'Calling', label: 'Speaker', icon: Volume2, blurb: 'Output device', Component: SpeakerSection },
   { key: 'notifications', category: 'Personal', label: 'Notifications', icon: Bell, blurb: 'Calls + SMS alerts', Component: NotificationsSection },
@@ -147,19 +156,23 @@ const SECTIONS: SectionDef[] = [
   { key: 'voicemail-greeting', category: 'Calling', label: 'Voicemail greeting', icon: Mic, blurb: 'Personal greeting (coming soon)', Component: VoicemailGreetingSection },
   { key: 'call-forwarding', category: 'Calling', label: 'Call forwarding', icon: PhoneForwarded, blurb: 'Forward calls to another number', Component: CallForwardingSection },
   { key: 'blocked-numbers', category: 'Calling', label: 'Blocked numbers', icon: ShieldOff, blurb: 'Reject calls & SMS from specific numbers', Component: BlockedNumbersSection },
-  { key: 'data', category: 'Personal', label: 'Data', icon: Database, blurb: 'Backup & restore', Component: DataSection },
-  // Admin-only. Components themselves show an "Admin access required"
-  // empty state for non-admins so the nav nav-items don't dead-link.
-  { key: 'live-ops', category: 'Reports', label: 'Live ops', icon: Activity, blurb: 'Real-time dashboard (admin only)', Component: LiveOpsSection },
-  { key: 'presence', category: 'Reports', label: 'Presence', icon: Radio, blurb: 'Who is on call right now (admin only)', Component: PresenceSection },
-  { key: 'usage', category: 'Reports', label: 'Usage', icon: TrendingUp, blurb: 'Per-user volume + talk time (admin only)', Component: UsageSection },
-  { key: 'quality', category: 'Reports', label: 'Quality', icon: AlertTriangle, blurb: 'Missed rate + hangup causes (admin only)', Component: QualitySection },
-  { key: 'cost', category: 'Reports', label: 'Cost', icon: DollarSign, blurb: 'Telnyx spend per user + projection (admin only)', Component: CostSection },
-  { key: 'recruiter', category: 'Reports', label: 'Recruiter', icon: Target, blurb: 'Reach + conversation rate (admin only)', Component: RecruiterSection },
-  { key: 'alerts', category: 'Reports', label: 'Alerts', icon: Siren, blurb: 'Health & anomaly alerts (admin only)', Component: AlertsSection },
-  { key: 'users', category: 'Admin', label: 'Users', icon: Users, blurb: 'Invite, promote, deactivate (admin only)', Component: UsersAdminSection },
-  { key: 'pending-users', category: 'Admin', label: 'Pending Users', icon: UserPlus, blurb: 'Stage + invite Pulse users to ACE (admin only)', Component: PendingUsersSection },
-  { key: 'audit-log', category: 'Admin', label: 'Audit log', icon: ScrollText, blurb: 'Recent admin actions (admin only)', Component: AuditLogSection },
+  { key: 'data', category: 'Personal', label: 'Data', icon: Database, blurb: 'Backup & restore', Component: DataSection, adminOnly: true },
+  // v0.10.11 — Reports.
+  // All 7 marked adminOnly for now. Per-user self-views for Usage /
+  // Quality / Recruiter / Alerts are planned as a follow-up commit
+  // — backend /me/reports/* endpoints + frontend section updates land
+  // together to avoid misleading users with section labels that don't
+  // match what the page actually shows.
+  { key: 'live-ops', category: 'Reports', label: 'Live ops', icon: Activity, blurb: 'Real-time dashboard (admin only)', Component: LiveOpsSection, adminOnly: true },
+  { key: 'presence', category: 'Reports', label: 'Presence', icon: Radio, blurb: 'Who is on call right now (admin only)', Component: PresenceSection, adminOnly: true },
+  { key: 'usage', category: 'Reports', label: 'Usage', icon: TrendingUp, blurb: 'Per-user volume + talk time (admin only)', Component: UsageSection, adminOnly: true },
+  { key: 'quality', category: 'Reports', label: 'Quality', icon: AlertTriangle, blurb: 'Missed rate + hangup causes (admin only)', Component: QualitySection, adminOnly: true },
+  { key: 'cost', category: 'Reports', label: 'Cost', icon: DollarSign, blurb: 'Telnyx spend per user + projection (admin only)', Component: CostSection, adminOnly: true },
+  { key: 'recruiter', category: 'Reports', label: 'Recruiter', icon: Target, blurb: 'Reach + conversation rate (admin only)', Component: RecruiterSection, adminOnly: true },
+  { key: 'alerts', category: 'Reports', label: 'Alerts', icon: Siren, blurb: 'Health & anomaly alerts (admin only)', Component: AlertsSection, adminOnly: true },
+  { key: 'users', category: 'Admin', label: 'Users', icon: Users, blurb: 'Invite, promote, deactivate (admin only)', Component: UsersAdminSection, adminOnly: true },
+  { key: 'pending-users', category: 'Admin', label: 'Pending Users', icon: UserPlus, blurb: 'Stage + invite Pulse users to ACE (admin only)', Component: PendingUsersSection, adminOnly: true },
+  { key: 'audit-log', category: 'Admin', label: 'Audit log', icon: ScrollText, blurb: 'Recent admin actions (admin only)', Component: AuditLogSection, adminOnly: true },
 ];
 
 const SECTION_CATEGORIES: SectionCategory[] = ['Personal', 'Calling', 'Reports', 'Admin'];
@@ -223,7 +236,15 @@ function SettingsNav({ activeCategory }: { activeCategory: SectionCategory }) {
         // Hide the Admin group entirely for non-admin users so they don't see
         // nav items that 403 when clicked. Backend stays the source of truth.
         if (cat === 'Admin' && !isAdmin) return null;
-        const items = SECTIONS.filter((sec) => sec.category === cat);
+        // v0.10.11 — also filter individual adminOnly sections within other
+        // categories (e.g., Telnyx in Calling, Cost / Live ops / Presence
+        // in Reports, Data in Personal). Non-admins see only what's safe
+        // for them to touch.
+        const items = SECTIONS.filter((sec) => {
+          if (sec.category !== cat) return false;
+          if (sec.adminOnly && !isAdmin) return false;
+          return true;
+        });
         if (items.length === 0) return null;
         const open = openCats.has(cat);
         return (
@@ -269,6 +290,25 @@ export default function Settings() {
   const { section } = useParams<{ section?: string }>();
   const navigate = useNavigate();
 
+  // v0.10.11 — Resolve isAdmin once per mount so the main route can
+  // refuse direct URL access to admin-only sections (e.g., a user
+  // typing /settings/telnyx). The nav already hides these, but this
+  // covers paste-the-URL access. We default to null while loading so
+  // we DON'T pre-emptively redirect before we know.
+  const [routeIsAdmin, setRouteIsAdmin] = useState<boolean | null>(null);
+  useEffect(() => {
+    const token = sessionStorage.getItem('ace_token');
+    if (!token) {
+      setRouteIsAdmin(false);
+      return;
+    }
+    let cancelled = false;
+    getMe(token)
+      .then((u) => { if (!cancelled) setRouteIsAdmin(!!u.isAdmin); })
+      .catch(() => { if (!cancelled) setRouteIsAdmin(false); });
+    return () => { cancelled = true; };
+  }, []);
+
   // Reset scroll to top whenever the user switches sections.
   // Real scroll container is .app-content (Layout.tsx has overflow-y: auto).
   // v0.9.9 — fire THREE times: immediate, after rAF, and after 50ms timeout.
@@ -293,6 +333,17 @@ export default function Settings() {
   if (!section) return <Navigate to={`/settings/${DEFAULT_SECTION}`} replace />;
   const active = SECTIONS.find((s) => s.key === section);
   if (!active) return <Navigate to={`/settings/${DEFAULT_SECTION}`} replace />;
+  // v0.10.11 — Block direct URL access to admin-only sections for
+  // non-admins. We wait until we know isAdmin (null = still loading)
+  // before deciding so we don't redirect on first paint before getMe
+  // resolves. While loading: render a brief placeholder. Once known:
+  // either render the section (admin or section is open) or redirect.
+  if (active.adminOnly && routeIsAdmin === false) {
+    return <Navigate to={`/settings/${DEFAULT_SECTION}`} replace />;
+  }
+  if (active.adminOnly && routeIsAdmin === null) {
+    return <div className="settings-loading muted" style={{ padding: '2rem' }}>Loading…</div>;
+  }
   const ActiveComponent = active.Component;
 
   return (
