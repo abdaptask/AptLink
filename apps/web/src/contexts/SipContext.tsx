@@ -136,7 +136,36 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
       }
 
       console.log('[sip] connecting as', username, 'caller=', callerNumber);
-      const wssUri = import.meta.env.VITE_SIP_WSS_URI as string | undefined;
+      // v0.10.16 — Region-aware WSS endpoint selection.
+      //
+      // Why: Indian ISPs and cellular carriers frequently throttle or
+      // block traffic on non-standard ports. The default Telnyx WebRTC
+      // endpoint is `wss://sip.telnyx.com:7443` (port 7443). 689-227-8275
+      // reported persistent SIP flap that watchdog tuning + state
+      // debounce alone didn't fix — the underlying WebSocket itself
+      // kept dropping. Likely cause: port 7443 is being interfered
+      // with by the user's ISP / carrier middleboxes.
+      //
+      // Fix: route India users (detected via browser timezone =
+      // Asia/Kolkata) to `wss://rtc.telnyx.com:443` instead. Port 443
+      // is the HTTPS port and is universally allowed. US + other
+      // users stay on the default since port 7443 has historically
+      // worked fine for them and might be lower latency.
+      //
+      // Admin override: VITE_SIP_WSS_URI env var on the Vercel project
+      // forces all users to a specific endpoint regardless of region.
+      // Useful for testing or for routing everyone to port 443 if
+      // non-India users start reporting similar issues.
+      let wssUri = import.meta.env.VITE_SIP_WSS_URI as string | undefined;
+      if (!wssUri) {
+        try {
+          const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+          if (tz === 'Asia/Kolkata') {
+            wssUri = 'wss://rtc.telnyx.com:443';
+            console.log('[sip] India user detected (tz=Asia/Kolkata) — using port-443 endpoint');
+          }
+        } catch { /* noop — fall through to default */ }
+      }
 
       // v0.9.13 — Connect immediately with Telnyx-TURN-only so the user
       // isn't delayed by the Cloudflare-credentials round-trip. Then
