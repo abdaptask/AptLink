@@ -240,7 +240,28 @@ export class SipService {
     // port for SIP (Telnyx, Twilio, most carriers). Some Telnyx accounts
     // also accept wss://rtc.telnyx.com:443. Override via config.wssUri or
     // VITE_SIP_WSS_URI if your account uses a different region/host.
-    const wssUri = config.wssUri ?? 'wss://sip.telnyx.com:7443';
+    // v0.10.18 — Default changed from wss://sip.telnyx.com:7443 to
+    // wss://rtc.telnyx.com:443.
+    //
+    // Why: India users (689-227-8275 and 5001n35bk2) reported SIP
+    // status flapping that persisted across multiple watchdog/debounce
+    // tweaks. Root cause was a combination of:
+    //   1) ISP/cellular interference with non-HTTPS-port traffic
+    //      (7443 is non-standard, often throttled).
+    //   2) The REGISTER race fixed in v0.10.17.
+    //
+    // We previously tried timezone-based auto-routing (Asia/Kolkata
+    // → port 443) and a Vercel env var override. Both failed for one
+    // class of user: their Windows OS timezone was set to US
+    // (America/New_York) for work-hours alignment, so timezone detect
+    // never fired. And Vercel env vars don't propagate to the desktop
+    // GitHub Actions build environment.
+    //
+    // Simplest fix: just make port 443 the default for everyone. US
+    // users see no functional difference (port 443 is the HTTPS port
+    // and Telnyx geo-routes within their infrastructure). Indian
+    // users no longer hit ISP/carrier port blocks.
+    const wssUri = config.wssUri ?? 'wss://rtc.telnyx.com:443';
     console.log('[sip] connecting to', wssUri, 'as', config.username);
 
     const socket = new JsSIP.WebSocketInterface(wssUri);
