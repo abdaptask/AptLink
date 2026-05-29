@@ -157,6 +157,16 @@ body {
   /* Cap content width on very wide screens; min-height keeps a stable
      row regardless of which children render. */
   min-height: 56px;
+  /* v0.10.10 — backdrop-filter creates a new stacking context, which
+     trapped the DidSwitcher dropdown's z-index:700 inside the header.
+     Result: dropdown rendered visually behind the Recents sticky
+     search bar (which has its own z-index:5 inside the page). Fix:
+     promote the header's own stacking context above page content with
+     position:relative + a high z-index. Now the dropdown's inner
+     z-index sits within an already-elevated parent context, so
+     anything in the page body (sticky search bar etc.) goes below it. */
+  position: relative;
+  z-index: 600;
 }
 
 /* v0.10.0 — Center column wrapper. SIP-status pill + DidSwitcher live
@@ -3510,54 +3520,64 @@ body {
 
 /* v0.10.9 — Line badge on the ringer screen. Shows "on Main · (732)
    200-1305" so the user knows WHICH of their DIDs the call came in
-   on. --line-color is set inline from the UserDid.colorHex. Fades
-   in briefly when the lookup completes (~200ms after ringer mounts). */
+   on. --line-color is set inline from the UserDid.colorHex.
+   v0.10.10 — bumped contrast significantly. Previous values were
+   essentially unreadable against the dark-green ringer background.
+   Now: solid white text at full opacity, brighter background, thicker
+   colored swatch ring so it pops even from across the room. */
 .incoming-line-badge {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  padding: 6px 14px;
+  gap: 10px;
+  padding: 8px 18px;
   margin-bottom: 18px;
-  background: rgba(255, 255, 255, 0.08);
-  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.18);
+  border: 1.5px solid rgba(255, 255, 255, 0.3);
   border-radius: 999px;
-  font-size: 14px;
-  font-weight: 500;
-  color: rgba(255, 255, 255, 0.9);
+  font-size: 15px;
+  font-weight: 600;
+  color: #ffffff;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
   animation: incoming-badge-in 0.25s ease-out;
 }
 .incoming-line-swatch {
-  width: 10px;
-  height: 10px;
+  width: 12px;
+  height: 12px;
   border-radius: 50%;
   background: var(--line-color, #3b82f6);
-  box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.2);
+  box-shadow:
+    0 0 0 2px rgba(255, 255, 255, 0.35),
+    0 0 8px var(--line-color, #3b82f6);
   flex-shrink: 0;
 }
 .incoming-line-text {
   font-variant-numeric: tabular-nums;
   letter-spacing: 0.01em;
+  color: #ffffff;
 }
 /* Compact variant for the small in-banner ringer (when fullScreen=false). */
 .incoming-line-badge-compact {
   margin-bottom: 0;
   margin-left: 8px;
-  padding: 2px 8px;
+  padding: 3px 10px;
   font-size: 12px;
-  background: rgba(255, 255, 255, 0.06);
-  border-color: rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.16);
+  border-color: rgba(255, 255, 255, 0.26);
+  border-width: 1px;
 }
 .incoming-line-badge-compact .incoming-line-swatch {
-  width: 7px;
-  height: 7px;
+  width: 8px;
+  height: 8px;
 }
 [data-theme="light"] .incoming-line-badge {
-  background: rgba(0, 0, 0, 0.05);
-  border-color: rgba(0, 0, 0, 0.1);
+  background: rgba(0, 0, 0, 0.06);
+  border-color: rgba(0, 0, 0, 0.16);
   color: var(--text);
+  text-shadow: none;
 }
+[data-theme="light"] .incoming-line-text { color: var(--text); }
 [data-theme="light"] .incoming-line-swatch {
-  box-shadow: 0 0 0 1.5px rgba(0, 0, 0, 0.08);
+  box-shadow: 0 0 0 1.5px rgba(0, 0, 0, 0.12);
 }
 @keyframes incoming-badge-in {
   from { opacity: 0; transform: translateY(-4px); }
