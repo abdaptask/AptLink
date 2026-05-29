@@ -84,6 +84,15 @@ contextBridge.exposeInMainWorld('ace', {
   // Mirrors notifyReadyForSso.
   notifyReadyForDeepLink: () => ipcRenderer.send('ace:deep-link-ready'),
 
+  // ── System power events bridge (v0.10.9) ──
+  // Renderer subscribes; main pings on resume/unlock so SipContext can
+  // force-refresh registration before the user tries to take a call.
+  onSipWake: (cb: (data: { reason: string }) => void) => {
+    const handler = (_e: unknown, data: { reason: string }) => cb(data);
+    ipcRenderer.on('ace:sip-wake', handler);
+    return () => ipcRenderer.removeListener('ace:sip-wake', handler);
+  },
+
   // ── Silent auto-update bridge (Phase 7.1) ──
   // Renderer subscribes so UpdateBanner can show a "Restart to install"
   // button once electron-updater has downloaded the new version in the

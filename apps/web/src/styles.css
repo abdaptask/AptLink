@@ -3508,6 +3508,62 @@ body {
   animation: incoming-dots 1.4s infinite;
 }
 
+/* v0.10.9 — Line badge on the ringer screen. Shows "on Main · (732)
+   200-1305" so the user knows WHICH of their DIDs the call came in
+   on. --line-color is set inline from the UserDid.colorHex. Fades
+   in briefly when the lookup completes (~200ms after ringer mounts). */
+.incoming-line-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  margin-bottom: 18px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 999px;
+  font-size: 14px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.9);
+  animation: incoming-badge-in 0.25s ease-out;
+}
+.incoming-line-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--line-color, #3b82f6);
+  box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.2);
+  flex-shrink: 0;
+}
+.incoming-line-text {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.01em;
+}
+/* Compact variant for the small in-banner ringer (when fullScreen=false). */
+.incoming-line-badge-compact {
+  margin-bottom: 0;
+  margin-left: 8px;
+  padding: 2px 8px;
+  font-size: 12px;
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.1);
+}
+.incoming-line-badge-compact .incoming-line-swatch {
+  width: 7px;
+  height: 7px;
+}
+[data-theme="light"] .incoming-line-badge {
+  background: rgba(0, 0, 0, 0.05);
+  border-color: rgba(0, 0, 0, 0.1);
+  color: var(--text);
+}
+[data-theme="light"] .incoming-line-swatch {
+  box-shadow: 0 0 0 1.5px rgba(0, 0, 0, 0.08);
+}
+@keyframes incoming-badge-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
 .incoming-actions {
   display: flex;
   justify-content: center;

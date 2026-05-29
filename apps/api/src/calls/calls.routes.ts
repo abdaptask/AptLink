@@ -236,6 +236,57 @@ export async function callsRoutes(app: FastifyInstance) {
     return call;
   });
 
+  // v0.10.9 — Most recent inbound call for the current user, optionally
+  // filtered by caller (fromNumber match on last-10 digits, since formats
+  // drift between Telnyx variants). Used by the IncomingCall ringer
+  // component to look up which UserDid was dialed so it can render a
+  // line badge on the ringer screen.
+  //
+  // Why an endpoint vs. relying on the SIP INVITE: the SIP INVITE Telnyx
+  // sends to the WebRTC client only carries the user's SIP credential
+  // username, NOT the dialed DID. The webhooks service has the dialed
+  // DID (it gets call.initiated from Telnyx before TexML even fires)
+  // and stamps userDidId on the Call row. So we proxy through.
+  //
+  // Returns the single most-recent inbound call within the last 5
+  // minutes, with the UserDid relation loaded.
+  app.get(
+    '/calls/recent-inbound',
+    { onRequest: [app.authenticate] },
+    async (request: FastifyRequest) => {
+      const user = request.user as JwtPayload;
+      const query = (request.query as { fromNumber?: string }) ?? {};
+      const fiveMinAgo = new Date(Date.now() - 5 * 60 * 1000);
+
+      // If fromNumber was supplied, match on last-10. Otherwise just
+      // return the latest inbound regardless of caller.
+      const fromDigits = (query.fromNumber ?? '').replace(/[^\d]/g, '').slice(-10);
+
+      const calls = await prisma.call.findMany({
+        where: {
+          userId: user.sub,
+          direction: 'inbound',
+          startedAt: { gte: fiveMinAgo },
+        },
+        orderBy: { startedAt: 'desc' },
+        take: 10,
+        include: {
+          userDid: {
+            select: { id: true, label: true, colorHex: true, didNumber: true },
+          },
+        },
+      });
+
+      if (!fromDigits) {
+        return { call: calls[0] ?? null };
+      }
+      const match = calls.find(
+        (c) => (c.fromNumber ?? '').replace(/[^\d]/g, '').slice(-10) === fromDigits,
+      );
+      return { call: match ?? null };
+    },
+  );
+
   app.post('/calls', { onRequest: [app.authenticate] }, async (request, reply) => {
     const user = request.user as JwtPayload;
     const body = request.body as CreateCallBody;

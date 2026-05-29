@@ -530,37 +530,55 @@ export class SipService {
 
   /**
    * Phase 6.9 — proactive registration heartbeat. Calls ua.register()
-   * every 20s so we refresh well within the 600s expiry, even when the
-   * browser is throttling background timers. Cheap (one SIP REGISTER per
-   * 20s) and the only reliable way to keep the WebRTC client's presence
-   * alive across tab switches.
+   * every 10s so we refresh well within the 600s expiry, even when the
+   * browser is throttling background timers.
+   *
+   * v0.10.9 — tightened from 20s to 10s after first-call-to-voicemail
+   * bug on machine wake. The 20s window left enough slack for Telnyx
+   * to evict the contact between heartbeats if a REGISTER round-trip
+   * took unusually long during recovery. 10s halves the worst-case
+   * window and is still cheap — one SIP REGISTER every 10 seconds.
    */
   private installRegistrationHeartbeat(): void {
     if (this.heartbeatTimer) return;
     this.heartbeatTimer = setInterval(() => {
-      if (!this.ua) return;
-      try {
-        const isConnected = this.ua.isConnected?.() ?? false;
-        const isRegistered = this.ua.isRegistered?.() ?? false;
-        if (!isConnected) {
-          // Socket died — full reconnect needed.
-          console.log('[sip] heartbeat: socket dead, triggering reconnect');
-          this.reconnect();
-          return;
-        }
-        // Send REGISTER refresh. JsSIP queues it through the same socket.
-        // Idempotent — Telnyx accepts repeated registrations from the
-        // same Contact and just refreshes the expiry.
-        try { this.ua.register(); } catch (e) {
-          console.warn('[sip] heartbeat register threw', e);
-        }
-        if (!isRegistered) {
-          console.log('[sip] heartbeat: was unregistered, forcing register');
-        }
-      } catch (e) {
-        console.warn('[sip] heartbeat error', e);
+      this.refreshRegistration('heartbeat');
+    }, 10_000);
+  }
+
+  /**
+   * v0.10.9 — Public force-refresh entry point. Called by:
+   *   - The setInterval heartbeat (every 10s)
+   *   - The visibility-recovery handler (tab became visible)
+   *   - The Electron power-monitor IPC (`ace:sip-wake` after system
+   *     resume / screen unlock — only fires in the desktop app)
+   *
+   * Re-checks both the WSS socket AND the SIP registration. If socket
+   * is dead, triggers a full UA rebuild via reconnect(). If socket is
+   * alive but registration lapsed (or just to refresh), calls
+   * ua.register() — idempotent on Telnyx side.
+   */
+  refreshRegistration(reason: string): void {
+    if (!this.ua) return;
+    try {
+      const isConnected = this.ua.isConnected?.() ?? false;
+      const isRegistered = this.ua.isRegistered?.() ?? false;
+      if (!isConnected) {
+        console.log(`[sip] ${reason}: socket dead, triggering reconnect`);
+        this.reconnect();
+        return;
       }
-    }, 20_000);
+      try {
+        this.ua.register();
+      } catch (e) {
+        console.warn(`[sip] ${reason}: register() threw`, e);
+      }
+      if (!isRegistered) {
+        console.log(`[sip] ${reason}: was unregistered, forcing register`);
+      }
+    } catch (e) {
+      console.warn(`[sip] ${reason}: refresh error`, e);
+    }
   }
 
   private installVisibilityRecovery(): void {

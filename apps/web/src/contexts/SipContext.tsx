@@ -211,6 +211,16 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
     window.addEventListener('beforeunload', onUnload);
     window.addEventListener('pagehide', onUnload);
 
+    // v0.10.9 — Subscribe to system power events from Electron main.
+    // Fires on system resume from sleep + screen unlock. We force-refresh
+    // SIP registration immediately so the user's first call after a long
+    // idle/sleep doesn't drop into voicemail because Telnyx evicted the
+    // contact during the heartbeat-can't-fire period.
+    const offSipWake = window.ace?.onSipWake?.((data) => {
+      console.log('[sip] wake event', data);
+      sipService.refreshRegistration(`wake:${data.reason}`);
+    });
+
     const offAccept = window.ace?.onAcceptRequest?.(() => {
       sipService.acceptCall();
     });
@@ -303,6 +313,7 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
       offQuality();
       if (offAccept) offAccept();
       if (offDecline) offDecline();
+      if (offSipWake) offSipWake();
       window.removeEventListener('beforeunload', onUnload);
       window.removeEventListener('pagehide', onUnload);
       sipService.disconnect();

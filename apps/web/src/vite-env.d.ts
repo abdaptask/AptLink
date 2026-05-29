@@ -24,6 +24,8 @@ interface AceElectronBridge {
     cb: (data: { action: 'call' | 'sms'; to: string }) => void,
   ) => () => void;
   notifyReadyForDeepLink?: () => void;
+  // v0.10.9 — System power events (resume from sleep / unlock screen).
+  onSipWake?: (cb: (data: { reason: string }) => void) => () => void;
   // Phase 7.1 — silent auto-update bridge
   onUpdateAvailable?: (cb: (info: { version: string | null }) => void) => () => void;
   onUpdateProgress?: (cb: (info: { percent: number }) => void) => () => void;

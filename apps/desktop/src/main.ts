@@ -1,7 +1,7 @@
 // Electron main process — owns the application lifecycle, creates the window,
 // handles the floating-ringer popup for inbound calls, and (Phase 6.4) hides
 // the window to the system tray on close so active calls keep running.
-import { app, BrowserWindow, shell, Menu, ipcMain, screen, Tray, nativeImage } from 'electron';
+import { app, BrowserWindow, shell, Menu, ipcMain, screen, Tray, nativeImage, powerMonitor } from 'electron';
 import * as path from 'node:path';
 // electron-updater handles the entire silent-update lifecycle: poll GitHub
 // Releases, download the new installer in the background, and offer to restart.
@@ -561,6 +561,43 @@ ipcMain.on('ace:deep-link-ready', () => {
   if (pendingDeepLink) {
     handleDeepLink(pendingDeepLink.action, pendingDeepLink.to);
   }
+});
+
+// ────────────────────────────────────────────────────────────────────────
+// v0.10.9 — System power events: keep SIP registered across sleep/wake.
+//
+// Symptom we're fixing: first call after machine wakes from sleep went
+// straight to voicemail. Root cause: while the machine was asleep, the
+// SIP register heartbeat (20s setInterval in the renderer) couldn't fire,
+// the 600s SIP expiry lapsed, Telnyx evicted the contact, and the
+// inbound INVITE had nowhere to deliver → TexML fallthrough to voicemail.
+//
+// The renderer already has a `visibilitychange` listener that re-registers
+// when the window becomes visible, but that event doesn't fire on
+// machine wake-from-sleep / screen unlock — those are OS-level events
+// only the main process can hook.
+//
+// Approach: subscribe to powerMonitor 'resume' (sleep → wake) and
+// 'unlock-screen' (Windows lock screen unlocked, macOS keychain
+// unlocked). Each event sends an IPC `ace:sip-wake` to the renderer,
+// which forces an immediate SIP register check + reconnect if needed.
+// Idempotent — re-registering an already-registered UA is a no-op on
+// Telnyx side, just refreshes the expiry timer.
+function sendSipWake(reason: string) {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    console.log(`[power-monitor] ${reason} → ace:sip-wake`);
+    mainWindow.webContents.send('ace:sip-wake', { reason });
+  }
+}
+app.whenReady().then(() => {
+  // powerMonitor is only available after app.ready
+  powerMonitor.on('resume', () => sendSipWake('system resume'));
+  powerMonitor.on('unlock-screen', () => sendSipWake('screen unlock'));
+  // Some Windows builds also fire 'user-did-become-active' after long
+  // idle periods. Harmless extra trigger.
+  powerMonitor.on('user-did-become-active', () =>
+    sendSipWake('user became active'),
+  );
 });
 
 // Renderer asks us to open the Microsoft authorize URL in the system

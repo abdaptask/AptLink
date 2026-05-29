@@ -358,6 +358,24 @@ export async function getVoicemailsUnreadCount(token: string): Promise<number> {
   return Number(j?.count ?? 0);
 }
 
+// v0.10.9 — Look up the most-recent inbound call for the current user
+// (optionally filtered by caller's E.164). Used by the IncomingCall ringer
+// to render a line badge showing which of the user's DIDs was dialed.
+// The SIP INVITE itself only carries our SIP credential; the dialed DID
+// is on the Call row via the webhook's resolveUserAndDid().
+export async function getRecentInboundCall(
+  token: string,
+  fromNumber?: string | null,
+): Promise<CallRecord | null> {
+  const qs = fromNumber ? `?fromNumber=${encodeURIComponent(fromNumber)}` : '';
+  const res = await fetch(`${API_URL}/calls/recent-inbound${qs}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) return null;
+  const body = (await res.json().catch(() => ({}))) as { call?: CallRecord | null };
+  return body.call ?? null;
+}
+
 export async function getCalls(token: string): Promise<CallRecord[]> {
   const res = await fetch(`${API_URL}/calls`, {
     headers: { Authorization: `Bearer ${token}` },

@@ -13,7 +13,7 @@
 // a window event that PostDeclineReply (mounted in Layout, OUTSIDE this
 // component) picks up to surface a clean quick-reply sheet. Decoupling
 // keeps the reply UI alive after this component unmounts on decline.
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { Phone, PhoneOff, PhoneForwarded, MessageSquare } from 'lucide-react';
 import { useSip } from '../contexts/SipContext';
@@ -22,6 +22,7 @@ import { useJobDivaContact } from '../hooks/useJobDivaContact';
 import { notify } from '../lib/notify';
 import { formatPhone } from '../lib/phone';
 import { getFavoriteName } from '../lib/userPrefs';
+import { getRecentInboundCall, type RowUserDid } from '../api';
 
 function formatNumber(n: string | undefined): string {
   return formatPhone(n) || 'Unknown';
@@ -55,6 +56,33 @@ export default function IncomingCall() {
 
   const callerNumber = incoming?.fromNumber ?? incoming?.number;
   const jd = useJobDivaContact(callerNumber);
+
+  // v0.10.9 — Look up which of the user's DIDs the call landed on so we
+  // can render a line badge ("Incoming on Main · (732) 200-1305") on
+  // the ringer. The SIP INVITE doesn't carry the dialed DID, only our
+  // SIP credential. The webhooks service already stamped userDidId on
+  // the Call row (resolveUserAndDid by to_number match) before TexML
+  // even fired the dialing, so by the time the ringer mounts we can
+  // ask the API for the most-recent inbound call from this caller.
+  // Renders empty + then fades the badge in once the lookup returns
+  // (typically <300ms). Re-fetched on each new incoming.callId.
+  const [calledLine, setCalledLine] = useState<RowUserDid | null>(null);
+  useEffect(() => {
+    if (!incoming?.callId || !callerNumber) {
+      setCalledLine(null);
+      return;
+    }
+    let cancelled = false;
+    const token = sessionStorage.getItem('ace_token');
+    if (!token) return;
+    void getRecentInboundCall(token, callerNumber).then((call) => {
+      if (cancelled) return;
+      setCalledLine(call?.userDid ?? null);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [incoming?.callId, callerNumber]);
 
   useEffect(() => {
     if (!incoming) return;
@@ -102,11 +130,26 @@ export default function IncomingCall() {
     declineCall();
   }
 
+  // v0.10.9 \u2014 Line badge text shown under the caller name on the ringer.
+  // Empty until the recent-inbound lookup returns; then "on Main \u00b7 (732) 200-1305".
+  const lineBadge = calledLine
+    ? `on ${calledLine.label} \u00b7 ${formatPhone(calledLine.didNumber) || calledLine.didNumber}`
+    : null;
+
   return fullScreen ? (
     <div className="incoming-fullscreen">
       <div className="incoming-fs-inner">
         <div className="incoming-tag">Incoming call</div>
         <div className="incoming-caller">{callerLabel}</div>
+        {lineBadge && (
+          <div
+            className="incoming-line-badge"
+            style={{ '--line-color': calledLine?.colorHex } as React.CSSProperties}
+          >
+            <span className="incoming-line-swatch" />
+            <span className="incoming-line-text">{lineBadge}</span>
+          </div>
+        )}
         <div className="incoming-subtle">
           {canHoldAndAccept ? 'You\u2019re already on a call' : '\u2026'}
         </div>
@@ -157,6 +200,15 @@ export default function IncomingCall() {
       <div className="incoming-banner-text">
         <div className="incoming-banner-tag">
           Incoming call{canHoldAndAccept ? ' \u00b7 in-call' : ''}
+          {lineBadge && (
+            <span
+              className="incoming-line-badge incoming-line-badge-compact"
+              style={{ '--line-color': calledLine?.colorHex } as React.CSSProperties}
+            >
+              <span className="incoming-line-swatch" />
+              <span className="incoming-line-text">{lineBadge}</span>
+            </span>
+          )}
         </div>
         <div className="incoming-banner-caller">{callerLabel}</div>
       </div>
