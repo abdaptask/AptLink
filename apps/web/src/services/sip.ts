@@ -267,52 +267,76 @@ export class SipService {
       user_agent: 'ACE-Dialer/1.0',
     });
 
+    // v0.10.14 — Debounce state emissions to stop the
+    // connecting→online→disconnected UI flap reported by India users
+    // (689-227-8275 specifically). Root cause: JsSIP fires routine
+    // 'disconnected'/'connecting' events during WSS keep-alive pings
+    // + REGISTER refreshes that resolve themselves within <1s. The
+    // SIP layer is fine; only the UI was visibly flipping.
+    //
+    // New behaviour: 'connecting' and 'disconnected' emit to the UI
+    // only after sustained 2.5s in that state. If JsSIP transitions
+    // back to 'registered' before the timer fires, the UI never
+    // flips. 'registered' is emitted immediately (it's the desired
+    // state — no reason to debounce success).
+    let pendingState: SipState | null = null;
+    let pendingTimer: ReturnType<typeof setTimeout> | null = null;
+    const STATE_DEBOUNCE_MS = 2_500;
+    const scheduleEmit = (state: SipState) => {
+      pendingState = state;
+      if (pendingTimer) clearTimeout(pendingTimer);
+      pendingTimer = setTimeout(() => {
+        pendingTimer = null;
+        if (pendingState === state) {
+          this.emit<SipState>('state', state);
+        }
+      }, STATE_DEBOUNCE_MS);
+    };
+    const emitImmediate = (state: SipState) => {
+      // Successful transitions cancel any pending debounced state.
+      if (pendingTimer) {
+        clearTimeout(pendingTimer);
+        pendingTimer = null;
+      }
+      pendingState = state;
+      this.emit<SipState>('state', state);
+    };
+
     this.ua.on('connecting', () => {
       console.log('[sip] connecting');
-      // v0.10.0 — suppress status flips while a call is in flight.
-      // Telnyx's WSS does internal pings + REGISTER refreshes that briefly
-      // re-enter the 'connecting' state even though the active call's
-      // SIP+RTP path is fully alive. Showing 'Connecting...' in the
-      // header mid-call alarms users into thinking the call will drop.
-      // Stay on 'registered' visually as long as a call session exists.
+      // Suppress entirely while a call is in flight (existing v0.10.0
+      // behaviour — routine WSS pings shouldn't alarm mid-call users).
       if (this.calls.size > 0 || this.incomingCallId !== null) {
         console.log('[sip] (suppressed connecting state — call active)');
         return;
       }
-      this.emit<SipState>('state', 'connecting');
+      scheduleEmit('connecting');
     });
     this.ua.on('connected', () => {
       console.log('[sip] socket connected');
     });
     this.ua.on('disconnected', () => {
       console.log('[sip] socket disconnected');
-      // v0.10.0 — same suppression as 'connecting'. JsSIP fires
-      // 'disconnected' when the WSS layer reconnects after a routine
-      // ping timeout or after a REGISTER refresh failure; in both cases
-      // any active call keeps flowing audio over the WSS that JsSIP is
-      // simultaneously re-establishing. Showing 'Disconnected' in the
-      // header would alarm users mid-conversation even though the call
-      // itself is fine. Suppress while a call exists.
       if (this.calls.size > 0 || this.incomingCallId !== null) {
         console.log('[sip] (suppressed disconnected state — call active)');
         return;
       }
-      this.emit<SipState>('state', 'disconnected');
+      scheduleEmit('disconnected');
     });
     this.ua.on('registered', () => {
       console.log('[sip] registered');
-      // Successful REGISTER — clear the first-login retry counter so a
-      // later daytime hiccup gets the full 3-retry budget again.
       this.regFailCount = 0;
       if (this.regRetryTimer) {
         clearTimeout(this.regRetryTimer);
         this.regRetryTimer = null;
       }
-      this.emit<SipState>('state', 'registered');
+      // Happy state — emit immediately, cancelling any pending
+      // 'connecting'/'disconnected' that hadn't fired yet.
+      emitImmediate('registered');
     });
     this.ua.on('unregistered', () => {
       console.log('[sip] unregistered');
-      this.emit<SipState>('state', 'disconnected');
+      scheduleEmit('disconnected');
     });
     // v0.9.13 — auto-retry on registrationFailed.
     //
@@ -574,17 +598,43 @@ export class SipService {
    * is dead, triggers a full UA rebuild via reconnect(). If socket is
    * alive but registration lapsed (or just to refresh), calls
    * ua.register() — idempotent on Telnyx side.
+   *
+   * v0.10.14 — Require TWO CONSECUTIVE 'not connected' readings before
+   * doing a full UA rebuild. Reconnect() is expensive and visually
+   * disruptive (tears down the socket, rebuilds UA, fires
+   * 'connecting' / 'disconnected' state events). JsSIP's
+   * `isConnected()` returns false during routine WSS reconnects that
+   * resolve themselves within ~500ms — without this guard we were
+   * tearing down the UA every time the socket blipped on flaky India
+   * connections, which caused the visible status flap. The
+   * consecutive-failure check accepts one transient false reading
+   * and only escalates to reconnect when it's clearly sustained.
    */
+  private consecutiveDisconnectedReadings = 0;
   refreshRegistration(reason: string): void {
     if (!this.ua) return;
     try {
       const isConnected = this.ua.isConnected?.() ?? false;
       const isRegistered = this.ua.isRegistered?.() ?? false;
       if (!isConnected) {
-        console.log(`[sip] ${reason}: socket dead, triggering reconnect`);
+        this.consecutiveDisconnectedReadings += 1;
+        if (this.consecutiveDisconnectedReadings < 2) {
+          // First failure — JsSIP may be auto-reconnecting. Re-check
+          // on the next heartbeat tick (~10s later) before acting.
+          console.log(
+            `[sip] ${reason}: socket not connected (reading ${this.consecutiveDisconnectedReadings}/2), waiting one more tick before reconnect`,
+          );
+          return;
+        }
+        console.log(
+          `[sip] ${reason}: socket dead for 2 consecutive readings, triggering reconnect`,
+        );
+        this.consecutiveDisconnectedReadings = 0;
         this.reconnect();
         return;
       }
+      // Connection is healthy — clear the disconnect counter.
+      this.consecutiveDisconnectedReadings = 0;
       try {
         this.ua.register();
       } catch (e) {

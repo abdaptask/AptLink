@@ -1798,6 +1798,31 @@ body {
   font-weight: 600;
 }
 
+/* v0.10.15 — Light-mode contrast for the voicemail row's player + transcript.
+   All these properties were hardcoded with light-grey-on-dark RGBA values
+   that rendered as nearly invisible on the light theme. Specifically:
+   - vm-controls-label "SPEED" / "Auto-deletes in X days" — light gray text
+   - vm-rate-btn inactive labels (0.5x / 1.5x / 2x) — light gray text
+   - vm-rate-btn.active (1x) — white background that blends into the row bg
+   - vm-transcript — white text on white-faded box → invisible
+   - vm-transcript-tag "TRANSCRIPT" — light gray on light bg → invisible
+   Light-mode overrides use solid dark grays from the existing token set. */
+[data-theme="light"] .vm-controls-label {
+  color: var(--text-muted);
+}
+[data-theme="light"] .vm-rate-group {
+  background: rgba(0, 0, 0, 0.06);
+}
+[data-theme="light"] .vm-rate-btn {
+  color: var(--text-muted);
+}
+[data-theme="light"] .vm-rate-btn:hover { color: var(--text); }
+[data-theme="light"] .vm-rate-btn.active {
+  background: #fff;
+  color: var(--text);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+}
+
 /* ============ THREAD HEADER CALL BUTTON + HISTORY ============ */
 .thread-header-name {
   display: flex;
@@ -3403,6 +3428,9 @@ body {
 }
 .vm-row.unread .vm-number { font-weight: 600; }
 .vm-meta { font-size: 0.78rem; color: rgba(255, 255, 255, 0.5); margin-top: 2px; }
+/* v0.10.15 — Light-mode override for the meta row "May 28 · 0:11"
+   subtitle. White-at-50% rendered as invisible on the light theme. */
+[data-theme="light"] .vm-meta { color: var(--text-muted); }
 /* Auto-delete countdown — same size as .vm-meta but color-coded by urgency.
    Default = gray (plenty of time). Warn = amber (≤7 days). Danger = red (≤1). */
 .vm-expires {
@@ -3413,7 +3441,10 @@ body {
 }
 .vm-expires.warn   { color: #ff9f0a; }
 .vm-expires.danger { color: #ff453a; font-weight: 600; }
-[data-theme="light"] .vm-expires { color: rgba(60, 60, 67, 0.45); }
+/* v0.10.15 — Was rgba(60,60,67,0.45) which on light bg is ~3.2:1 contrast,
+   below WCAG AA. Use the themed --text-muted (~6.5:1) so "Auto-deletes
+   in 30 days" is actually readable. */
+[data-theme="light"] .vm-expires { color: var(--text-muted); }
 .vm-right { display: flex; align-items: center; gap: 0.35rem; flex: 0 0 auto; }
 .vm-action {
   background: rgba(255, 255, 255, 0.08);
@@ -3453,6 +3484,16 @@ body {
   text-transform: uppercase;
   color: rgba(255, 255, 255, 0.45);
   margin-right: 0.5rem;
+}
+/* v0.10.15 — Light-mode override. White text on a translucent-white
+   background was effectively invisible on the light theme. Use solid
+   dark grays for the body + a subtle gray bg for the box. */
+[data-theme="light"] .vm-transcript {
+  color: var(--text);
+  background: rgba(0, 0, 0, 0.04);
+}
+[data-theme="light"] .vm-transcript-tag {
+  color: var(--text-muted);
 }
 
 /* Tab badge */
