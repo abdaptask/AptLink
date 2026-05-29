@@ -147,6 +147,11 @@ interface CallEntry {
   heldLocal: boolean;
   audioEl: HTMLAudioElement | null;
   startedAt: number;
+  // v0.10.10 — true when we received SIP 183 Session Progress with
+  // early media (remote audio flowing before formal answer — voicemail
+  // greetings, busy tones, custom carrier messages). Used to suppress
+  // local ringback so the user can hear the remote audio.
+  hadEarlyMedia?: boolean;
 }
 
 export class SipService {
@@ -731,9 +736,27 @@ export class SipService {
     }
 
     session.on('progress', (data: { response?: { status_code?: number; reason_phrase?: string } }) => {
-      console.log('[sip] progress', callId, data?.response?.status_code, data?.response?.reason_phrase);
+      const status = data?.response?.status_code;
+      console.log('[sip] progress', callId, status, data?.response?.reason_phrase);
       if (direction === 'outbound') {
-        this.emit<CallEvent>('call', this.buildEvent(entry, 'ringing'));
+        // v0.10.10 — distinguish 180 Ringing (no audio yet, keep
+        // local ringback) from 183 Session Progress (early media,
+        // remote is already sending audio — voicemail greeting,
+        // busy tone, "this number is not in service", etc.). Without
+        // this distinction, the local ringback tone played OVER the
+        // remote's voicemail greeting, making it impossible to hear
+        // who you reached. 183 → fire 'connected' (which stops the
+        // ringback hook in InCall.tsx) so we hear the early media
+        // cleanly. The actual SIP accept (200 OK) may still arrive
+        // later or not at all (voicemail tracks are typically 183
+        // → bye, never a 200 OK).
+        if (status === 183) {
+          // Track this so 'accepted' later doesn't re-emit (idempotent).
+          entry.hadEarlyMedia = true;
+          this.emit<CallEvent>('call', this.buildEvent(entry, 'connected'));
+        } else {
+          this.emit<CallEvent>('call', this.buildEvent(entry, 'ringing'));
+        }
       }
     });
 
