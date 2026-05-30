@@ -85,13 +85,15 @@ jobs:
   windows:
     name: Build Windows .exe
     runs-on: windows-latest
-    # Wait for mac to finish so it can create the GitHub Release first.
-    # Otherwise both jobs race to create the same release, and we end up
-    # with duplicate untagged drafts (which is what kept us stuck on
-    # v0.6.1 — see the 5+ drafts that piled up). Mac uploads its .dmg +
-    # latest-mac.yml first; windows then appends .exe + latest.yml to the
-    # same release by matching the version tag.
-    needs: mac
+    # v0.10.23 — REMOVED `needs: mac`. Apple's notarytool API has been
+    # intermittently flaky (timeouts / connection drops on the
+    # appstoreconnect.apple.com endpoint), causing Mac builds to fail
+    # mid-flight. When Mac fails, `needs: mac` skipped this Windows job
+    # too — blocking ALL desktop installers from updating. Windows
+    # builds are completely independent of Mac signing/notarization,
+    # so let them run in parallel. The "duplicate release draft" risk
+    # the old comment warned about is now mitigated by softprops/
+    # action-gh-release upserting on the tag.
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
