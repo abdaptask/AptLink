@@ -1865,7 +1865,9 @@ export async function migrateDidToUser(
   if (!res.ok) {
     return { ok: false, error: body.error ?? `HTTP ${res.status}` };
   }
-  return { ok: true, ...body };
+  // Spread first, then force ok: true so the server's "ok" can't override us
+  // if it ever returned an unexpected value.
+  return { ...body, ok: true };
 }
 
 export interface InvitePendingResult {
