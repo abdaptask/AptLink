@@ -357,6 +357,28 @@ export function fetchCredentialConnection(
   return call(`/credential_connections/${connectionId}`, { method: 'GET' });
 }
 
+// v0.10.21 — Generic connection lookup that works across all Telnyx connection
+// types (credential, FQDN, IP, SIP). The /credential_connections/{id} endpoint
+// returns 404 for non-credential connections, which made the migrate picker
+// show "Unknown connection" for any DID bound to a different connection type.
+// /connections/{id} works for ALL types — returns connection_name always,
+// user_name only on credential connections (null for others).
+export interface GenericConnection {
+  id: string;
+  connection_name: string;
+  /** Only present on credential connections; null/undefined for FQDN/IP/SIP. */
+  user_name?: string | null;
+  /** Connection type — useful for showing in the picker. */
+  connection_type?: string;
+  active?: boolean;
+  [key: string]: unknown;
+}
+export function fetchAnyConnection(
+  connectionId: string,
+): Promise<TelnyxResult<SingleResponse<GenericConnection>>> {
+  return call(`/connections/${connectionId}`, { method: 'GET' });
+}
+
 // ───────────────────── 5. Look up a Credential Connection ───────────────────
 
 /**

@@ -2069,11 +2069,18 @@ export async function adminRoutes(app: FastifyInstance) {
       });
 
       // Dedupe connection IDs and fetch each once. Map to { name, sipUser }.
+      // v0.10.21 — Use the GENERIC /connections/{id} endpoint instead of
+      // /credential_connections/{id}. The credential-only endpoint returned
+      // 404 for non-credential connections (FQDN/IP/SIP types), which made
+      // the picker show "Unknown connection" for any Pulse DID bound to a
+      // non-credential connection. Generic endpoint works for all types.
+      // SIP username (user_name) is only populated on credential connections;
+      // null for other types — that's fine.
       const connIds = Array.from(new Set(filtered.map((c) => c.sourceConnectionId)));
       const connMeta: Record<string, { name: string | null; sipUser: string | null }> = {};
       await Promise.all(
         connIds.map(async (cid) => {
-          const cr = await telnyx.fetchCredentialConnection(cid);
+          const cr = await telnyx.fetchAnyConnection(cid);
           if (cr.ok && cr.data?.data) {
             connMeta[cid] = {
               name: cr.data.data.connection_name ?? null,
