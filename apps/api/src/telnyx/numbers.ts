@@ -1036,3 +1036,125 @@ export async function listMigrationCandidates(): Promise<TelnyxResult<MigrationC
   out.sort((a, b) => (a.areaCode ?? 'zzz').localeCompare(b.areaCode ?? 'zzz'));
   return { ok: true, status: 200, data: out };
 }
+
+// ═════════════════════════════════════════════════════════════════════════
+// v0.10.22 — Phase 2 of migration: pull 30d of voice + SMS history from
+// Telnyx for the migrated number and insert into ACE's Call + Message
+// tables. Called fire-and-forget from the migrate endpoint.
+//
+// Voice CDRs: GET /v2/detail_records?filter[record_type]=voice
+// SMS:        GET /v2/messaging_detail_records (cleaner shape than /v2/messages)
+//
+// Filter by phone number on BOTH `from` and `to` so we capture inbound + outbound.
+// Telnyx's detail-record APIs don't accept "phone matches from OR to" as a
+// single query, so we run two queries per record-type and merge results.
+// ═════════════════════════════════════════════════════════════════════════
+
+export interface TelnyxVoiceCdr {
+  id?: string;                              // Telnyx record id (use as telnyxCallId)
+  call_id?: string;                         // Some payloads use this instead
+  from?: string;                            // E.164
+  to?: string;                              // E.164
+  direction?: string;                       // 'inbound' | 'outbound'
+  status?: string;
+  started_at?: string;                      // ISO 8601
+  ended_at?: string | null;
+  answered_at?: string | null;
+  duration?: string | number;               // seconds
+  hangup_cause?: string;
+  hangup_source?: string;
+  recording_url?: string;
+}
+
+export interface TelnyxSmsMdr {
+  id?: string;                              // message id (use as telnyxMessageId)
+  direction?: string;                       // 'inbound' | 'outbound-api' | etc
+  from?: { phone_number?: string } | string;
+  to?: Array<{ phone_number?: string }> | string;
+  text?: string;
+  type?: string;                            // 'SMS' | 'MMS'
+  sent_at?: string;
+  received_at?: string;
+  status?: string;
+  media_urls?: string[];
+}
+
+/**
+ * Fetch up to N pages of voice CDRs where the given E.164 appears as
+ * EITHER `from` OR `to`. Filters by start_time gte = now - daysBack.
+ * Returns merged + deduped results. Best-effort: returns [] if Telnyx
+ * 4xx's (account may not have CDR API access on its tier).
+ */
+export async function listVoiceCdrsForNumber(
+  e164: string,
+  daysBack: number,
+  maxPages = 5,
+): Promise<TelnyxVoiceCdr[]> {
+  const since = new Date(Date.now() - daysBack * 86400_000).toISOString();
+  const out: Record<string, TelnyxVoiceCdr> = {};
+
+  for (const direction of ['from', 'to']) {
+    let page = 1;
+    while (page <= maxPages) {
+      const qs = new URLSearchParams({
+        'filter[record_type]': 'voice',
+        [`filter[${direction}]`]: e164,
+        'filter[start_time][gte]': since,
+        'page[number]': String(page),
+        'page[size]': '250',
+      });
+      const res = await call<ListResponse<TelnyxVoiceCdr>>(
+        `/detail_records?${qs.toString()}`,
+        { method: 'GET' },
+      );
+      if (!res.ok) break;          // Account may not have CDR API; bail silently.
+      const batch = res.data?.data ?? [];
+      for (const r of batch) {
+        const id = r.id ?? r.call_id;
+        if (id) out[id] = r;       // dedup by id across the from/to passes
+      }
+      const totalPages = res.data?.meta?.total_pages ?? page;
+      if (batch.length < 250 || page >= totalPages) break;
+      page += 1;
+    }
+  }
+  return Object.values(out);
+}
+
+/**
+ * Fetch up to N pages of SMS detail records where the given E.164 appears
+ * as EITHER `from` OR `to`. Returns merged + deduped results.
+ */
+export async function listSmsForNumber(
+  e164: string,
+  daysBack: number,
+  maxPages = 5,
+): Promise<TelnyxSmsMdr[]> {
+  const since = new Date(Date.now() - daysBack * 86400_000).toISOString();
+  const out: Record<string, TelnyxSmsMdr> = {};
+
+  for (const direction of ['from', 'to']) {
+    let page = 1;
+    while (page <= maxPages) {
+      const qs = new URLSearchParams({
+        [`filter[${direction}]`]: e164,
+        'filter[date_range][gte]': since,
+        'page[number]': String(page),
+        'page[size]': '250',
+      });
+      const res = await call<ListResponse<TelnyxSmsMdr>>(
+        `/messaging_detail_records?${qs.toString()}`,
+        { method: 'GET' },
+      );
+      if (!res.ok) break;
+      const batch = res.data?.data ?? [];
+      for (const r of batch) {
+        if (r.id) out[r.id] = r;
+      }
+      const totalPages = res.data?.meta?.total_pages ?? page;
+      if (batch.length < 250 || page >= totalPages) break;
+      page += 1;
+    }
+  }
+  return Object.values(out);
+}

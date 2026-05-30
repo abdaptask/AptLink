@@ -25,6 +25,7 @@ import { config } from '../config.js';
 import * as telnyx from '../telnyx/numbers.js';
 import { sendWelcomeEmail, sendLineAssignedEmail } from '../email/sendgrid.js';
 import { sendLineAssignedCard } from '../lib/teamsNotify.js';
+import { backfillMigratedDidHistory } from '../lib/migrationBackfill.js';
 import { recordAudit } from '../lib/audit.js';
 import { ensureUserDid } from '../lib/userDid.js';
 
@@ -2638,6 +2639,29 @@ export async function adminRoutes(app: FastifyInstance) {
         previousConnectionId,                  // Pulse connection we took the DID from
         previousMessagingProfileId,
         newConnectionId: connectionId,         // ACE connection we re-bound to
+      });
+
+      // v0.10.22 — Fire-and-forget 30d history backfill from Telnyx.
+      // Pulls all voice CDRs + SMS detail records where the migrated number
+      // appears as from OR to in the last 30 days, deduped against existing
+      // rows, inserted into Call + Message tables. Response returns
+      // immediately; backfill streams in over the next minute. Migration
+      // never fails because of backfill issues — best-effort only.
+      void backfillMigratedDidHistory(
+        {
+          userId,
+          userDidId: created.id,
+          didNumber: e164,
+          daysBack: 30,
+        },
+        (obj, msg) => request.log.info(obj, msg),
+      ).then((bf) => {
+        request.log.info({ userId, didNumber: e164, ...bf }, '[admin.user_dids.migrate] backfill complete');
+      }).catch((e) => {
+        request.log.warn(
+          { userId, didNumber: e164, err: e instanceof Error ? e.message : String(e) },
+          '[admin.user_dids.migrate] backfill threw (best-effort, ignored)',
+        );
       });
 
       // v0.10.20 — Notify the user that their number was migrated.
