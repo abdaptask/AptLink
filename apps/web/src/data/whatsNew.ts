@@ -24,7 +24,7 @@ export interface ReleaseEntry {
 
 export const WHATS_NEW: ReleaseEntry[] = [
   {
-    version: '0.10.31',
+    version: '0.10.32',
     date: 'June 1, 2026',
     highlight: 'Critical call reliability fixes',
     changes: [
