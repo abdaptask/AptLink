@@ -1,6 +1,6 @@
 # ACE Dialer — Features
 
-What ACE Dialer can do as of v0.10.8 (May 28, 2026).
+What ACE Dialer can do as of v0.10.23 (May 30, 2026).
 
 ## Calling
 
@@ -34,6 +34,19 @@ What ACE Dialer can do as of v0.10.8 (May 28, 2026).
   hangup behavior per leg)
 - Real-time call quality meter (RTT + jitter, India-calibrated thresholds)
 - Active call survives window-minimize-to-tray (no audio drop)
+
+### Audio quality (v0.10.21)
+- **User-controlled noise suppression** — Settings → Microphone → "Noise
+  suppression" toggle. Default OFF. When enabled, Chrome's built-in
+  RNNoise filter scrubs keyboard taps, AC hum, fans, and other background
+  noise from the user's outbound audio before it reaches Telnyx. Users
+  in noisy environments (cafes, open offices) toggle ON; users with
+  high-quality headsets generally leave it off to avoid the slight
+  "tunnel/pipe" artifact RNNoise can produce. Read fresh on every call —
+  no reload required after toggling.
+- Echo cancellation + auto gain control always on (required for VoIP).
+- Future: Telnyx Krisp Viva server-side suppression as a per-Credential-
+  Connection option (pending Telnyx add-on activation).
 
 ### Call ending
 - Telnyx hangup_cause classified into: completed / no_answer / rejected /
@@ -89,14 +102,64 @@ with the matched UserDid so the UI can render a line badge per row.
 ### Admin-facing
 - **Admin → Users → Manage lines** opens a modal showing the user's current
   DIDs with their colors, labels, default status, and edit/remove buttons.
-- **Add line** sub-modal — picker for "Use an existing unassigned number"
-  vs "Buy a new number" from a specified area code.
+- **Add line** sub-modal — picker with three options (renamed in v0.10.20
+  for clarity):
+  - **Add an available number from Telnyx** — pick from numbers already
+    in your Telnyx inventory that aren't currently bound to any voice or
+    messaging connection. $0.
+  - **Purchase a new DID from Telnyx** — buy a fresh local US number
+    (~$0.45 setup + $0.45/mo). User gets a new phone number.
+  - **Migrate Existing User to New Dialer** (v0.10.20) — see below.
 - **Inline label editor** — pencil icon next to each line's label opens an
   input in place (Enter saves, Escape cancels).
 - **Color picker** — six preset colors per line; renders in the line badge
   across the app.
 - **Set as default** — toggles `isDefault` and updates the user's active
   outbound caller ID server-side.
+
+### Migrate Existing User to New Dialer (v0.10.20–v0.10.22)
+The marquee feature for migrating from the legacy Pulse dialer. Takes a
+Telnyx DID that's currently bound to another connection (typically Pulse)
+and rebinds it to the target user's ACE Credential Connection — without
+changing the phone number itself.
+
+- **Picker with typeahead search** — Pulse customers can have hundreds of
+  DIDs across many connections. The search input matches against phone
+  digits, connection name, AND SIP username, so the admin can find any
+  number quickly.
+- **Connection name + SIP user shown in the picker** — each candidate
+  reads like *"(732) 555-1234 — Pulse: jdoe@aptask (SIP user: aptask123)"*.
+  Backend dedupes connection lookups so a connection with 50 DIDs only
+  triggers one Telnyx API call. Works across all Telnyx connection types
+  (Credential, FQDN, IP, SIP) via the generic `/connections/{id}` endpoint.
+- **One-click rebind** — selecting + submitting calls
+  `POST /admin/users/:id/dids/migrate` which:
+  - Validates the DID isn't already in ACE
+  - Reads the current `connection_id` (captures `previousConnectionId` for
+    audit + cleanup)
+  - PATCHes the DID's `connection_id` to the user's ACE connection
+  - Binds the DID to ACE's messaging profile (inbound SMS routing)
+  - Creates the `UserDid` row with the admin's chosen label/color/default
+  - Audits as `user_did.migrated` with full before/after state
+- **Post-migration cleanup prompt (v0.10.21)** — admin lands on a new
+  modal step after successful migration showing the previous Pulse
+  connection (name + SIP user) and three buttons:
+  - **Deactivate** — sets `active=false` on the Telnyx Credential
+    Connection. SIP REGISTER from Pulse stops working immediately,
+    but the connection is recoverable.
+  - **Delete** — calls `DELETE /credential_connections/{id}`. Irreversible.
+  - **Keep** — does nothing, just closes the modal.
+- **30-day history backfill (v0.10.22)** — after a successful migration,
+  a background job (fire-and-forget, doesn't block the response) pulls
+  the last 30 days of voice CDRs + ALL SMS history from Telnyx for the
+  migrated number, in BOTH directions, and inserts deduped rows into
+  ACE's `Call` + `Message` tables. The user opens Recents / Messages and
+  sees their history reconstructed automatically. Each SMS thread
+  rebuckets by the other party's number. Voicemails are NOT included
+  because Pulse-side voicemails live in Pulse's database, not Telnyx.
+- **Email + Teams notifications fire on migrate** (v0.10.20) — the
+  target user receives an email and a Teams DM saying
+  *"Your number has been migrated to ACE Dialer"*.
 
 ## Microsoft Teams notifications
 

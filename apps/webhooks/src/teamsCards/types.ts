@@ -123,36 +123,48 @@ export function formatTimeForDisplay(d: Date | string | number): string {
   }) + ' ET';
 }
 
-/** v0.10.10 — Build call / SMS action URLs for Teams card buttons.
+/** v0.10.24 — Build call / SMS action URLs for Teams card buttons.
  *
- * v0.10.5: web /auto/call → protocol attempt → web fallback.
- *   Problem: too many users dismissed the browser prompt or had Chrome
- *   silently block the protocol, ending up on the web dialer instead
- *   of their installed desktop app.
+ * History:
  *
- * v0.10.10: emit `ace-dialer://` URLs directly. Microsoft Teams
- *   supports custom-protocol URLs in Action.OpenUrl; clicking the
- *   card button hands off straight to the OS protocol handler, which
- *   launches / focuses the desktop ACE Dialer. No intermediate
- *   browser tab.
+ * v0.10.5: web /auto/call → protocol attempt → web fallback. The /auto/*
+ *   pages did: `window.location.href = 'ace-dialer://...'` → if no
+ *   handler responded in 3s, redirect to /keypad?to=... in the same
+ *   browser. Works universally.
  *
- * Voicemail playback URL stays as a web URL — it intentionally opens
- * a browser page (the audio playback view).
+ * v0.10.10: switched to emitting `ace-dialer://` URLs DIRECTLY in the
+ *   card buttons, betting that Teams Action.OpenUrl would just hand
+ *   off to the OS protocol handler. **Doesn't work in practice.** Teams
+ *   desktop AND Teams web silently swallow non-http(s) URLs in card
+ *   buttons. Result: clicking Reply/Call in a card did nothing.
  *
- * `WEB_BASE_URL` is the Vercel origin used for voicemail playback. */
+ * v0.10.24: REVERTED to the v0.10.5 web-URL approach. Card buttons
+ *   point at `https://ace-dialer.vercel.app/auto/call?to=...` and
+ *   `.../auto/sms?to=...`. The web page does the protocol launch
+ *   (with browser permission prompt) and falls back to the in-browser
+ *   dialer after 3s. Works on:
+ *     • Teams desktop (Windows/Mac) — protocol prompt, user picks
+ *       "Open ACE Dialer"
+ *     • Teams web client — same
+ *     • Teams mobile — no protocol handler, falls back to web dialer
+ *
+ * Voicemail playback URL ALSO stays as a web URL — it intentionally
+ * opens a browser page (the audio playback view).
+ *
+ * `WEB_BASE_URL` is the Vercel origin used for all card action URLs. */
 function webBase(): string {
   return (process.env.WEB_BASE_URL ?? 'https://ace-dialer.vercel.app').replace(/\/+$/, '');
 }
 
 export function buildCallDeepLink(toNumber: string): string {
   const cleaned = encodeURIComponent(toNumber.trim());
-  return `ace-dialer://call?to=${cleaned}`;
+  return `${webBase()}/auto/call?to=${cleaned}`;
 }
 
 export function buildSmsDeepLink(toNumber: string, prefillText?: string): string {
   const cleaned = encodeURIComponent(toNumber.trim());
   const t = prefillText ? `&body=${encodeURIComponent(prefillText)}` : '';
-  return `ace-dialer://sms?to=${cleaned}${t}`;
+  return `${webBase()}/auto/sms?to=${cleaned}${t}`;
 }
 
 /** Voicemail playback URL — stays as a web route (audio playback is

@@ -67,6 +67,11 @@ async function resolveUserAndDid(opts: {
   sipUsername?: string | null;
   fromNumber?: string | null;
   toNumber?: string | null;
+  /** v0.10.24 — REQUIRED for correct line attribution. Inbound matches
+   *  toNumber (the dialed DID = which line rang). Outbound matches
+   *  fromNumber (the caller ID = which line was used). Old code matched
+   *  both, which produced wrong results when toNumber was a SIP URI. */
+  direction?: 'inbound' | 'outbound';
 }): Promise<{ userId: number; userDidId: number | null }> {
   // 1. SIP username (exact match). Tells us the user but not which of
   // their DIDs was touched — we resolve userDidId via to/from numbers
@@ -80,27 +85,38 @@ async function resolveUserAndDid(opts: {
     if (u) userId = u.id;
   }
 
-  // 2. DID match (also gives us userDidId).
+  // 2. DID match (gives us userDidId) — direction-aware.
+  //
+  // v0.10.24 — Match the CORRECT number based on direction.
+  //   - inbound:  match toNumber (which of OUR lines was rung)
+  //   - outbound: match fromNumber (which of OUR lines was used as caller ID)
+  //   - unknown direction: defensively match toNumber only, never fromNumber
+  //     (fromNumber-as-our-line is only valid for outbound; getting it wrong
+  //     on inbound stamps the caller's number as our user's line)
+  //
+  // Why this matters: Telnyx delivers the recipient leg of a TexML-routed
+  // call with toNumber set to a SIP URI (not the dialed DID), which last10
+  // strips to nothing. The PREVIOUS code fell through to fromNumber and
+  // matched the CALLER's caller-ID against our UserDids — sometimes by
+  // coincidence (caller's number happened to be one of our DIDs, e.g.
+  // self-calls during testing). Catastrophic line attribution either way.
   let userDidId: number | null = null;
-  const candidates = [opts.toNumber, opts.fromNumber]
-    .map(last10)
-    .filter((d) => d.length === 10);
-  if (candidates.length > 0) {
+  const matchAgainst =
+    opts.direction === 'outbound' ? opts.fromNumber : opts.toNumber;
+  const matchLast10 = last10(matchAgainst ?? '');
+  if (matchLast10.length === 10) {
+    // Restrict the lookup to the identified user's DIDs when we know
+    // who it is. Cross-user matches would be a different kind of bug.
     const allDids = await prisma.userDid.findMany({
-      where: { userId: { not: null } },
+      where: userId !== null
+        ? { userId }
+        : { userId: { not: null } },
       select: { id: true, userId: true, didNumber: true },
     });
-    for (const c of candidates) {
-      const match = allDids.find((d) => last10(d.didNumber) === c);
-      if (match) {
-        userDidId = match.id;
-        // Only override userId if SIP-username didn't already resolve it.
-        // (Edge case: a user's call where to=their own DID — both routes
-        // resolve to the same userId so it doesn't matter, but in the
-        // unlikely case they diverge, trust SIP username over DID.)
-        if (userId === null) userId = match.userId ?? null;
-        break;
-      }
+    const match = allDids.find((d) => last10(d.didNumber) === matchLast10);
+    if (match) {
+      userDidId = match.id;
+      if (userId === null) userId = match.userId ?? null;
     }
   }
 
@@ -318,6 +334,7 @@ app.post('/webhooks/telnyx/calls', async (request) => {
           sipUsername: payload.sip_username ?? payload.client_username ?? null,
           fromNumber,
           toNumber,
+          direction,           // v0.10.24 — direction-aware line attribution
         });
 
         // Phase 6.8 - number blocking: for INBOUND calls only, check if
@@ -600,6 +617,7 @@ app.post('/webhooks/telnyx/calls', async (request) => {
           const { userId: ownerUserId, userDidId } = await resolveUserAndDid({
             fromNumber: vmFrom,
             toNumber: vmTo,
+            direction: 'inbound',
           });
           // Pre-fill transcription from Telnyx if they happen to include it
           // (we don't pay them for it, but if it's there, use it as a head-
@@ -731,6 +749,7 @@ app.post('/webhooks/telnyx/sms', async (request) => {
         const threadKey = fromNumber; // the other party
         const { userId: ownerUserId, userDidId } = await resolveUserAndDid({
           toNumber, fromNumber,
+          direction: 'inbound',
         });
 
         // Phase 6.8 - number blocking: silently drop SMS from blocked
@@ -1168,6 +1187,7 @@ app.post('/webhooks/telnyx/voicemail', async (request) => {
     // v0.10.0 Task 5 — also resolve userDidId for line-badge tagging.
     const { userId: ownerUserId, userDidId } = await resolveUserAndDid({
       toNumber, fromNumber,
+      direction: 'inbound',
     });
 
     // Phase 6.12 - drop blocked voicemails. Telnyx Hosted Voicemail still
