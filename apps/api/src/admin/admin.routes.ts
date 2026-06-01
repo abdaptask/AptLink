@@ -2092,7 +2092,7 @@ export async function adminRoutes(app: FastifyInstance) {
   app.get(
     '/admin/telnyx/migration-candidates',
     { onRequest: [app.authenticate, requireAdmin] },
-    async (_request, reply) => {
+    async (request, reply) => {
       const res = await telnyx.listMigrationCandidates();
       if (!res.ok) {
         return reply.code(502).send({
