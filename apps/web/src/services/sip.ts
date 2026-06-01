@@ -379,6 +379,17 @@ export class SipService {
     });
     this.ua.on('unregistered', () => {
       console.log('[sip] unregistered');
+      // v0.10.34 — Suppress the UI flip while a call is active, same
+      // as 'connecting'/'disconnected' do above. JsSIP fires
+      // 'unregistered' during routine REGISTER refresh blips (common
+      // on Ravindra's India link). The active call has its own SIP
+      // dialog and is unaffected by REGISTER state, so flickering the
+      // status pill from Online → Disconnected → Online while the
+      // user is on a call is misleading and alarming.
+      if (this.calls.size > 0 || this.incomingCallId !== null) {
+        console.log('[sip] (suppressed unregistered state — call active)');
+        return;
+      }
       scheduleEmit('disconnected');
     });
     // v0.9.13 — auto-retry on registrationFailed.

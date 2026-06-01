@@ -26,6 +26,13 @@
 
 import { prisma } from '@ace/db';
 import * as telnyx from '../telnyx/numbers.js';
+import {
+  findPulseUserIdByEmail,
+  getPulseMessagesForUser,
+  getPulseCallsForUser,
+  type PulseMessageRow,
+  type PulseCallRow,
+} from './pulseBackfill.js';
 
 interface BackfillResult {
   callsInserted: number;
@@ -142,8 +149,201 @@ export async function backfillMigratedDidHistory(
     log({ err: msg }, '[backfill] sms failed');
   }
 
+  // ─── Pulse DB backfill (best-effort, env-var gated) ──────────────────
+  //
+  // v0.10.34 — Pull from Pulse MySQL when the PULSE_DB_* env vars are
+  // set. Catches users whose history isn't in Telnyx (Pulse may have
+  // routed via Twilio for some accounts, etc.). Reads ONCE during the
+  // migration; the data ends up in ACE's Postgres, after which there's
+  // no ongoing Pulse dependency.
+  //
+  // Lookup chain:
+  //   1. Find user's email in ACE
+  //   2. Find their pulse user_id by email match in Pulse's users table
+  //   3. Pull messages + twilio_call_logs filtered by that pulse user_id
+  //   4. Map to ACE Call/Message rows, insert with skipDuplicates
+  //
+  // If PULSE_DB_* not configured, all sub-calls return [] silently.
+  try {
+    const aceUser = await prisma.user.findUnique({
+      where: { id: args.userId },
+      select: { email: true },
+    });
+    if (aceUser?.email) {
+      const pulseUserId = await findPulseUserIdByEmail(aceUser.email);
+      if (pulseUserId !== null) {
+        log({ pulseUserId, email: aceUser.email }, '[backfill] Pulse user_id resolved');
+
+        // SMS from Pulse messages table
+        const pulseMessages = await getPulseMessagesForUser({ pulseUserId, daysBack });
+        log({ count: pulseMessages.length }, '[backfill] Pulse messages fetched');
+        if (pulseMessages.length > 0) {
+          const msgRows = pulseMessages
+            .map((r) => mapPulseMessageRowToMessage(r, args.userId, args.userDidId, args.didNumber))
+            .filter((r): r is NonNullable<typeof r> => r !== null);
+          if (msgRows.length > 0) {
+            try {
+              const inserted = await prisma.message.createMany({
+                data: msgRows,
+                skipDuplicates: true,
+              });
+              result.messagesInserted += inserted.count;
+              result.messagesSkipped += msgRows.length - inserted.count;
+              log({ inserted: inserted.count, total: msgRows.length }, '[backfill] Pulse messages inserted');
+            } catch (e) {
+              result.errors.push(`Pulse message createMany: ${e instanceof Error ? e.message : String(e)}`);
+            }
+          }
+        }
+
+        // Calls from Pulse twilio_call_logs table
+        const pulseCalls = await getPulseCallsForUser({ pulseUserId, daysBack });
+        log({ count: pulseCalls.length }, '[backfill] Pulse calls fetched');
+        if (pulseCalls.length > 0) {
+          const callRows = pulseCalls
+            .map((r) => mapPulseCallRowToCall(r, args.userId, args.userDidId))
+            .filter((r): r is NonNullable<typeof r> => r !== null);
+          if (callRows.length > 0) {
+            try {
+              const inserted = await prisma.call.createMany({
+                data: callRows,
+                skipDuplicates: true,
+              });
+              result.callsInserted += inserted.count;
+              result.callsSkipped += callRows.length - inserted.count;
+              log({ inserted: inserted.count, total: callRows.length }, '[backfill] Pulse calls inserted');
+            } catch (e) {
+              result.errors.push(`Pulse call createMany: ${e instanceof Error ? e.message : String(e)}`);
+            }
+          }
+        }
+      } else {
+        log({ email: aceUser.email }, '[backfill] no matching Pulse user_id — skipping Pulse backfill');
+      }
+    }
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    result.errors.push(`Pulse backfill: ${msg}`);
+    log({ err: msg }, '[backfill] Pulse backfill failed (non-fatal)');
+  }
+
   log({ result }, '[backfill] done');
   return result;
+}
+
+// ─── Pulse row → ACE schema mappers ─────────────────────────────────────
+
+function mapPulseMessageRowToMessage(
+  row: PulseMessageRow,
+  userId: number,
+  userDidId: number,
+  ourDidE164: string,
+) {
+  // Pulse direction:
+  //   from_type='c' (chat_user external) + to_type='r' (recruiter) → inbound
+  //   from_type='r' (recruiter) + to_type='c' (chat_user) → outbound
+  const direction = row.from_type === 'c' ? 'inbound' : 'outbound';
+
+  // Build phone numbers. Pulse stores user_ids not numbers, but the
+  // external contact's number is on chat_user.mobile_no (we JOINed it
+  // in as contact_phone).
+  const last10 = (s: string) => s.replace(/\D/g, '').slice(-10);
+  const ourLast10 = last10(ourDidE164);
+  let contactE164 = (row.contact_phone ?? '').trim();
+  if (contactE164 && !contactE164.startsWith('+')) {
+    // Pulse sometimes stores phone numbers without the + prefix.
+    const digits = contactE164.replace(/\D/g, '');
+    contactE164 = digits.length === 10 ? `+1${digits}` :
+      digits.length === 11 && digits.startsWith('1') ? `+${digits}` :
+      `+${digits}`;
+  }
+  if (!contactE164) return null;
+
+  const fromNumber = direction === 'inbound' ? contactE164 : ourDidE164;
+  const toNumber = direction === 'inbound' ? ourDidE164 : contactE164;
+  const threadKey = contactE164;
+
+  // Dedup key: prefer Telnyx message id if present; otherwise synthesize
+  // from Pulse's row id with a prefix so it can't collide with native
+  // Telnyx IDs in our DB.
+  const telnyxMessageId = (row.sms_id ?? '').trim() || `pulse-${row.id}`;
+
+  // Status: Pulse stores strings like "delivered", "received", "failed".
+  const statusRaw = (row.status ?? '').toLowerCase().trim();
+  const status = ['queued', 'sent', 'delivered', 'failed', 'received'].includes(statusRaw)
+    ? statusRaw
+    : direction === 'inbound' ? 'received' : 'delivered';
+
+  // Media: Pulse stores URL(s) in `media` column. Comma-separated if multiple.
+  const mediaUrls = row.media
+    ? row.media.split(',').map((u) => u.trim()).filter((u) => u.length > 0)
+    : [];
+
+  // Avoid unused-var lint warning; helper retained for future need.
+  void ourLast10;
+
+  return {
+    userId,
+    telnyxMessageId,
+    threadKey,
+    direction,
+    fromNumber,
+    toNumber,
+    body: row.message ?? '',
+    mediaUrls,
+    status,
+    sentAt: row.created_at,
+    deliveredAt: status === 'delivered' ? row.created_at : null,
+    userDidId,
+  };
+}
+
+function mapPulseCallRowToCall(
+  row: PulseCallRow,
+  userId: number,
+  userDidId: number,
+) {
+  // Normalize phone number BigInt/string to E.164.
+  const norm = (raw: bigint | string | null | undefined): string => {
+    if (raw === null || raw === undefined) return '';
+    const s = typeof raw === 'bigint' ? raw.toString() : String(raw);
+    const digits = s.replace(/\D/g, '');
+    if (digits.length === 10) return `+1${digits}`;
+    if (digits.length === 11 && digits.startsWith('1')) return `+${digits}`;
+    return digits.length > 0 ? `+${digits}` : '';
+  };
+  const fromNumber = norm(row.from);
+  const toNumber = norm(row.to);
+  if (!fromNumber || !toNumber) return null;
+
+  const direction = row.direction?.toLowerCase() === 'inbound' ? 'inbound' : 'outbound';
+  const durationSeconds = row.duration ?? 0;
+
+  // Status mapping. Pulse uses various strings; normalize.
+  let status = 'completed';
+  if (durationSeconds === 0) {
+    status = direction === 'inbound' ? 'missed' : 'failed';
+  }
+  if (row.call_type === 'voicemail') status = 'voicemail';
+
+  // Dedup key — prefer Telnyx call sid, fall back to Pulse row id.
+  const telnyxCallId = (row.sid || row.call_session_id || `pulse-call-${row.id}`).trim();
+
+  return {
+    userId,
+    telnyxCallId,
+    direction,
+    fromNumber,
+    toNumber,
+    status,
+    startedAt: row.start_time ?? row.createdAt,
+    answeredAt: row.answer_time ?? null,
+    endedAt: row.end_time ?? null,
+    durationSeconds,
+    hangupCause: row.endReason ?? null,
+    recordingUrl: row.recording_url ?? row.voicemail_url ?? null,
+    userDidId,
+  };
 }
 
 // ─── Async Telnyx Report helpers ────────────────────────────────────────

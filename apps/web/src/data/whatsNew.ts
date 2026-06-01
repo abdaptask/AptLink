@@ -24,6 +24,16 @@ export interface ReleaseEntry {
 
 export const WHATS_NEW: ReleaseEntry[] = [
   {
+    version: '0.10.34',
+    date: 'June 1, 2026',
+    highlight: 'Connection status stays steady during calls',
+    changes: [
+      { type: 'fixed', text: 'Connection status pill no longer flickers between Online and Disconnected while you\'re on a call. Routine SIP refresh blips (every few minutes for some network conditions) used to flash the indicator alarmingly even though the call itself was unaffected. The pill now stays stable for the duration of the call.' },
+      { type: 'new', text: 'When you migrate a user from Pulse to ACE, their 30-day SMS history and call history can also import from Pulse\'s database — not just from Telnyx. This catches users whose data was on Pulse-only routes (Twilio shared sender, etc.) and wasn\'t visible to Telnyx alone. (Requires admin to configure Pulse DB connection in env vars; code ships dormant until activated.)' },
+      { type: 'improved', text: 'Once history imports from Pulse, ACE owns it permanently. Migrated users\' data lives on ACE\'s database with no ongoing dependency on Pulse — Pulse can be decommissioned without affecting them.' },
+    ],
+  },
+  {
     version: '0.10.33',
     date: 'June 1, 2026',
     highlight: 'Spelling suggestions on right-click',
