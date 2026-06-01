@@ -707,10 +707,28 @@ export class SipService {
       direction === 'inbound'
         ? this.extractPhone(session.remote_identity?.uri)
         : this.callerNumber;
+    // v0.10.25 — CRITICAL fix. For OUTBOUND, the SIP To header
+    // (session.remote_identity) is the dialed destination — correct.
+    // For INBOUND, we previously set toNumber = this.callerNumber,
+    // which is the user's OWN default outbound caller ID (Main DID).
+    // That is COMPLETELY UNRELATED to which of the user's lines was
+    // rung — but the /calls POST handler dutifully matched it against
+    // UserDids and stamped Main as userDidId. Result: the ringer
+    // always showed "on Main · <user's Main DID>" for every inbound
+    // call, regardless of which line the caller actually dialed.
+    //
+    // The SIP layer alone CAN'T know which DID was dialed (the INVITE
+    // request URI is our SIP credential, not the original PSTN-side
+    // DID). Telnyx's webhook handler (apps/webhooks/src/main.ts)
+    // receives the real dialed DID via call.initiated payload and is
+    // the authoritative source for userDidId on inbound calls. Leave
+    // toNumber empty for inbound here — SipContext skips the createCall
+    // POST when toNumber is empty, letting the webhook be the sole
+    // writer of inbound Call rows.
     const toNumber =
       direction === 'outbound'
         ? this.extractPhone(session.remote_identity?.uri)
-        : this.callerNumber;
+        : '';
     const callId: string = session.id;
     const destinationDisplay = direction === 'inbound' ? fromNumber : toNumber;
 

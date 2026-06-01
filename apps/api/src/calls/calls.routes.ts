@@ -304,9 +304,19 @@ export async function callsRoutes(app: FastifyInstance) {
     // v0.10.0 Task 5 — Stamp userDidId on the row so the Recents line
     // badge knows which of the user's DIDs this call belongs to.
     // For OUTBOUND calls: match on fromNumber (the user called FROM
-    // that DID). For INBOUND (this endpoint is rarely used for inbound
-    // — the webhook normally handles those): match on toNumber.
-    const matchNumber = direction === 'outbound' ? body.fromNumber : body.toNumber;
+    // that DID).
+    //
+    // v0.10.25 — For INBOUND, the client doesn't actually know which
+    // of the user's DIDs was rung (only that one of their SIP creds
+    // was). It previously sent `toNumber = its own default caller ID`
+    // (Main DID), which we'd match here and OVERWRITE the correct
+    // userDidId already stamped by the webhook. Result: ringer always
+    // showed "on Main · <user's Main DID>" regardless of which line
+    // was actually called. Fix: never match userDidId here for inbound.
+    // The webhook (apps/webhooks/src/main.ts) is the authoritative
+    // writer for inbound rows; it reads the real dialed DID from
+    // Telnyx's call.initiated payload.
+    const matchNumber = direction === 'outbound' ? body.fromNumber : null;
     let userDidId: number | null = null;
     if (matchNumber) {
       // Strip everything except digits, then keep last 10. Tolerates
