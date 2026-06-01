@@ -730,7 +730,7 @@ function AddLineSubModal({ userId, onClose, onAdded }: AddLineProps) {
                           <select
                             value={pickedMigrationDid}
                             onChange={(e) => setPickedMigrationDid(e.target.value)}
-                            size={Math.min(8, Math.max(3, filtered.length + 1))}
+                            size={Math.min(5, Math.max(3, filtered.length + 1))}
                           >
                             <option value="">— Select a number —</option>
                             {filtered.map((c) => {

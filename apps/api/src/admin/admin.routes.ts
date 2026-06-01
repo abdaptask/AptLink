@@ -2124,6 +2124,7 @@ export async function adminRoutes(app: FastifyInstance) {
       // null for other types — that's fine.
       const connIds = Array.from(new Set(filtered.map((c) => c.sourceConnectionId)));
       const connMeta: Record<string, { name: string | null; sipUser: string | null }> = {};
+      let failedLookups = 0;
       await Promise.all(
         connIds.map(async (cid) => {
           const cr = await telnyx.fetchAnyConnection(cid);
@@ -2134,9 +2135,28 @@ export async function adminRoutes(app: FastifyInstance) {
             };
           } else {
             connMeta[cid] = { name: null, sipUser: null };
+            failedLookups += 1;
+            // v0.10.26 — Log the FIRST failure of each batch so we can
+            // diagnose "all candidates show Unknown connection". Common
+            // cause: Telnyx /v2/connections/{id} returns 404 because the
+            // connection was deleted out-of-band but the DID still
+            // references it. Less common: account doesn't have the
+            // /v2/connections endpoint enabled.
+            if (failedLookups <= 3) {
+              request.log.warn(
+                { connectionId: cid, status: cr.status, error: cr.error },
+                '[admin/migration-candidates] connection name lookup failed',
+              );
+            }
           }
         }),
       );
+      if (failedLookups > 0) {
+        request.log.info(
+          { total: connIds.length, failed: failedLookups },
+          '[admin/migration-candidates] some connection lookups failed (will render as "Unknown connection")',
+        );
+      }
 
       const items = filtered.map((c) => ({
         ...c,

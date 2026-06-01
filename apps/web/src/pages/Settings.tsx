@@ -52,7 +52,12 @@ import {
   X,
   Loader2,
   AlertCircle,
+  // v0.10.26 — What's new section
+  Sparkles,
+  Wrench,
+  Zap,
 } from 'lucide-react';
+import { WHATS_NEW, type ChangeType } from '../data/whatsNew';
 import {
   getMe,
   updateMe,
@@ -148,6 +153,7 @@ interface SectionDef {
 }
 
 const SECTIONS: SectionDef[] = [
+  { key: 'whats-new', category: 'Personal', label: 'What\'s new', icon: Sparkles, blurb: 'Recent updates + bug fixes', Component: WhatsNewSection },
   { key: 'account', category: 'Personal', label: 'Account', icon: UserCircle, blurb: 'Name, DID, SIP', Component: AccountSection },
   { key: 'appearance', category: 'Personal', label: 'Appearance', icon: Palette, blurb: 'Light / dark / system', Component: AppearanceSection },
   { key: 'telnyx', category: 'Calling', label: 'Telnyx', icon: Phone, blurb: 'SIP credentials', Component: TelnyxSection, adminOnly: true },
@@ -4269,5 +4275,147 @@ function TeamsConnectionSection() {
         </div>
       )}
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// v0.10.26 — What's New section.
+//
+// User-facing release notes. Plain English, grouped by version. Three
+// change types (new / improved / fixed) with distinct icons + colors.
+// Data lives in apps/web/src/data/whatsNew.ts so adding a new version
+// is a single-file edit.
+// ---------------------------------------------------------------------------
+
+function WhatsNewSection() {
+  return (
+    <div className="settings-section whats-new">
+      <p className="settings-blurb">
+        See what's been added, improved, and fixed in recent updates.
+      </p>
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem', marginTop: '0.75rem' }}>
+        {WHATS_NEW.map((release) => (
+          <ReleaseCard key={release.version} release={release} />
+        ))}
+      </div>
+
+      <p
+        className="muted small"
+        style={{ marginTop: '2rem', textAlign: 'center' }}
+      >
+        Suggestions or bug reports? Email{' '}
+        <a href="mailto:it@aptask.com">it@aptask.com</a>.
+      </p>
+    </div>
+  );
+}
+
+function ReleaseCard({ release }: { release: typeof WHATS_NEW[number] }) {
+  return (
+    <div
+      style={{
+        border: '1px solid var(--divider, rgba(128,128,128,0.2))',
+        borderRadius: 10,
+        padding: '14px 18px',
+        background: 'var(--surface, rgba(128,128,128,0.04))',
+      }}
+    >
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'baseline',
+          gap: 12,
+          marginBottom: release.highlight ? 4 : 12,
+        }}
+      >
+        <h3 style={{ margin: 0, fontSize: '1.05rem' }}>v{release.version}</h3>
+        <span className="muted small">{release.date}</span>
+      </div>
+
+      {release.highlight && (
+        <div
+          style={{
+            fontWeight: 600,
+            color: 'var(--accent, #0a84ff)',
+            marginBottom: 12,
+          }}
+        >
+          {release.highlight}
+        </div>
+      )}
+
+      <ul
+        style={{
+          listStyle: 'none',
+          padding: 0,
+          margin: 0,
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '0.5rem',
+        }}
+      >
+        {release.changes.map((change, i) => (
+          <ChangeRow key={i} type={change.type} text={change.text} />
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function ChangeRow({ type, text }: { type: ChangeType; text: string }) {
+  const config = {
+    new: {
+      icon: <Zap size={14} />,
+      color: '#22c55e',
+      bg: 'rgba(34, 197, 94, 0.12)',
+      label: 'NEW',
+    },
+    improved: {
+      icon: <Sparkles size={14} />,
+      color: '#0a84ff',
+      bg: 'rgba(10, 132, 255, 0.12)',
+      label: 'IMPROVED',
+    },
+    fixed: {
+      icon: <Wrench size={14} />,
+      color: '#a855f7',
+      bg: 'rgba(168, 85, 247, 0.12)',
+      label: 'FIXED',
+    },
+  }[type];
+
+  return (
+    <li
+      style={{
+        display: 'flex',
+        alignItems: 'flex-start',
+        gap: 10,
+        lineHeight: 1.45,
+      }}
+    >
+      <span
+        style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 4,
+          padding: '2px 8px',
+          borderRadius: 999,
+          background: config.bg,
+          color: config.color,
+          fontSize: '0.65rem',
+          fontWeight: 700,
+          letterSpacing: '0.04em',
+          flexShrink: 0,
+          marginTop: 2,
+          minWidth: 70,
+          justifyContent: 'center',
+        }}
+      >
+        {config.icon}
+        {config.label}
+      </span>
+      <span style={{ flex: 1 }}>{text}</span>
+    </li>
   );
 }
