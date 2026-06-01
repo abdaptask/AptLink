@@ -24,6 +24,16 @@ export interface ReleaseEntry {
 
 export const WHATS_NEW: ReleaseEntry[] = [
   {
+    version: '0.10.31',
+    date: 'June 1, 2026',
+    highlight: 'Ringer + thread header polish',
+    changes: [
+      { type: 'fixed', text: 'Accept button on incoming call screen could occasionally appear unresponsive when the caller hung up at exactly the same moment. The button now correctly dismisses the ringer instead of doing nothing silently.' },
+      { type: 'improved', text: 'Thread header is reorganized — the contact\'s name and number group together at the top, with "Your line:" explicitly labeled below so it\'s clear which line is which.' },
+      { type: 'fixed', text: 'SMS compose placeholder text no longer wraps and gets cut off in narrow windows. Shift+Enter / Enter hints moved to a tooltip on hover.' },
+    ],
+  },
+  {
     version: '0.10.30',
     date: 'June 1, 2026',
     highlight: 'SMS compose upgrades',

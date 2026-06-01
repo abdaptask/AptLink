@@ -1840,6 +1840,33 @@ body {
   font-weight: 400;
   margin-top: 1px;
 }
+/* v0.10.30 — Clearer header layout. Contact info groups together (name +
+   their number); "your line" pill sits below with an explicit label so it
+   doesn't get confused for the contact's info. */
+.thread-header-contact {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  line-height: 1.15;
+}
+.thread-header-contact-name {
+  font-weight: 600;
+  font-size: 16px;
+}
+.thread-header-your-line {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+}
+.thread-header-your-line-label {
+  font-size: 0.7rem;
+  color: rgba(235, 235, 245, 0.6);
+  font-weight: 500;
+}
+[data-theme="light"] .thread-header-your-line-label {
+  color: rgba(0, 0, 0, 0.55);
+}
 .thread-call-btn {
   color: #34c759;
 }

@@ -545,18 +545,28 @@ function ThreadDetail({ number, onBack }: ThreadDetailProps) {
           <ArrowLeft size={18} />
         </button>
         <div className="thread-header-name">
-          {displayName}
-          {/* v0.10.0 Task 5 — Line badge in the thread header. Use the
-              most-recent message's userDid since that's the line the
-              user is currently active on for this contact. In the
-              normal case all messages in a thread share the same DID. */}
+          {/* v0.10.30 — Reorganized for clarity. Contact name on top with
+              their phone number directly below; "Your line:" pill below
+              that so users can tell at a glance which is theirs vs the
+              contact's. Previously the line pill was sandwiched between
+              the name and contact number, which looked like it belonged
+              to the contact. */}
+          <span className="thread-header-contact">
+            <span className="thread-header-contact-name">{displayName}</span>
+            {displayName !== formatNumber(number) && (
+              <span className="thread-header-sub">{formatNumber(number)}</span>
+            )}
+          </span>
           {(() => {
             const lastWithDid = [...messages].reverse().find((m) => m.userDid);
-            return <LineBadge userDid={lastWithDid?.userDid} variant="header" />;
+            if (!lastWithDid?.userDid) return null;
+            return (
+              <span className="thread-header-your-line">
+                <span className="thread-header-your-line-label">Your line:</span>
+                <LineBadge userDid={lastWithDid.userDid} variant="header" />
+              </span>
+            );
           })()}
-          {displayName !== formatNumber(number) && (
-            <span className="thread-header-sub">{formatNumber(number)}</span>
-          )}
         </div>
         {blocked && (
           <span
@@ -820,7 +830,8 @@ function ThreadDetail({ number, onBack }: ThreadDetailProps) {
         <textarea
           ref={composeInputRef}
           className="compose-input"
-          placeholder="Text message (Shift+Enter for new line)"
+          placeholder="Text message"
+          title="Shift+Enter for new line, Enter to send"
           value={draft}
           rows={1}
           onChange={(e) => setDraft(e.target.value)}

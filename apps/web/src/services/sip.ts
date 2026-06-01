@@ -1318,9 +1318,21 @@ export class SipService {
   acceptCall(): void {
     const id = this.incomingCallId;
     if (!id) {
-      console.warn('[sip] acceptCall: no incomingCallId', {
+      // v0.10.30 — Force-emit an 'ended' event so the UI updates and
+      // the ringer disappears. Previously this just warned and returned;
+      // the user saw the Accept button do nothing because their click
+      // landed in the gap between the SIP session ending (incomingCallId
+      // cleared) and the React UI re-rendering. Users reported "Accept
+      // button is unresponsive". Now if state has gone stale, we
+      // explicitly tell the UI the call ended so it dismisses.
+      console.warn('[sip] acceptCall: no incomingCallId (state desync)', {
         callsSize: this.calls.size,
         activeCallId: this.activeCallId,
+      });
+      this.emit<CallEvent>('call', {
+        state: 'ended',
+        callId: '__stale__',
+        hangupCause: 'state_desync',
       });
       return;
     }
@@ -1328,6 +1340,12 @@ export class SipService {
     if (!entry) {
       console.warn('[sip] acceptCall: no entry for incomingCallId=', id, {
         callsSize: this.calls.size,
+      });
+      this.incomingCallId = null;
+      this.emit<CallEvent>('call', {
+        state: 'ended',
+        callId: id,
+        hangupCause: 'state_desync',
       });
       return;
     }
@@ -1504,9 +1522,27 @@ export class SipService {
 
   declineCall(): void {
     const id = this.incomingCallId;
-    if (!id) return;
+    if (!id) {
+      // v0.10.30 — Same state-desync defense as acceptCall(). If state
+      // is already stale (call cancelled by caller / ended), still
+      // force-emit 'ended' so the UI dismisses the ringer.
+      this.emit<CallEvent>('call', {
+        state: 'ended',
+        callId: '__stale__',
+        hangupCause: 'state_desync',
+      });
+      return;
+    }
     const entry = this.calls.get(id);
-    if (!entry) return;
+    if (!entry) {
+      this.incomingCallId = null;
+      this.emit<CallEvent>('call', {
+        state: 'ended',
+        callId: id,
+        hangupCause: 'state_desync',
+      });
+      return;
+    }
     try {
       entry.session.terminate({ status_code: 486, reason_phrase: 'Busy Here' });
     } catch (e) {
