@@ -55,6 +55,11 @@ export async function backfillMigratedDidHistory(
     userDidId: number;
     didNumber: string;          // E.164
     daysBack?: number;          // default 30
+    /** v0.10.35 — Optional override for the Pulse user_id lookup.
+     *  Use when ACE email doesn't match the Pulse email (different
+     *  casing/domain/etc). Admin can find the right pulseUserId via
+     *  GET /admin/pulse/search?q=... and pass it explicitly. */
+    pulseUserIdOverride?: number;
   },
   log: LogFn = noopLog,
 ): Promise<BackfillResult> {
@@ -165,60 +170,71 @@ export async function backfillMigratedDidHistory(
   //
   // If PULSE_DB_* not configured, all sub-calls return [] silently.
   try {
-    const aceUser = await prisma.user.findUnique({
-      where: { id: args.userId },
-      select: { email: true },
-    });
-    if (aceUser?.email) {
-      const pulseUserId = await findPulseUserIdByEmail(aceUser.email);
-      if (pulseUserId !== null) {
-        log({ pulseUserId, email: aceUser.email }, '[backfill] Pulse user_id resolved');
+    // v0.10.35 — Honour explicit pulseUserIdOverride if provided.
+    // Otherwise look up by email (default behaviour).
+    let pulseUserId: number | null = args.pulseUserIdOverride ?? null;
+    let lookupEmail: string | null = null;
+    if (pulseUserId === null) {
+      const aceUser = await prisma.user.findUnique({
+        where: { id: args.userId },
+        select: { email: true },
+      });
+      lookupEmail = aceUser?.email ?? null;
+      if (lookupEmail) {
+        pulseUserId = await findPulseUserIdByEmail(lookupEmail);
+      }
+    }
 
-        // SMS from Pulse messages table
-        const pulseMessages = await getPulseMessagesForUser({ pulseUserId, daysBack });
-        log({ count: pulseMessages.length }, '[backfill] Pulse messages fetched');
-        if (pulseMessages.length > 0) {
-          const msgRows = pulseMessages
-            .map((r) => mapPulseMessageRowToMessage(r, args.userId, args.userDidId, args.didNumber))
-            .filter((r): r is NonNullable<typeof r> => r !== null);
-          if (msgRows.length > 0) {
-            try {
-              const inserted = await prisma.message.createMany({
-                data: msgRows,
-                skipDuplicates: true,
-              });
-              result.messagesInserted += inserted.count;
-              result.messagesSkipped += msgRows.length - inserted.count;
-              log({ inserted: inserted.count, total: msgRows.length }, '[backfill] Pulse messages inserted');
-            } catch (e) {
-              result.errors.push(`Pulse message createMany: ${e instanceof Error ? e.message : String(e)}`);
-            }
+    if (pulseUserId === null) {
+      log(
+        { lookupEmail: lookupEmail ?? '(no email)' },
+        '[backfill] no matching Pulse user_id — skipping Pulse backfill (try pulseUserIdOverride if email differs in Pulse)',
+      );
+    } else {
+      log({ pulseUserId, lookupEmail: lookupEmail ?? 'override' }, '[backfill] Pulse user_id resolved');
+
+      // SMS from Pulse messages table
+      const pulseMessages = await getPulseMessagesForUser({ pulseUserId, daysBack });
+      log({ count: pulseMessages.length }, '[backfill] Pulse messages fetched');
+      if (pulseMessages.length > 0) {
+        const msgRows = pulseMessages
+          .map((r) => mapPulseMessageRowToMessage(r, args.userId, args.userDidId, args.didNumber))
+          .filter((r): r is NonNullable<typeof r> => r !== null);
+        if (msgRows.length > 0) {
+          try {
+            const inserted = await prisma.message.createMany({
+              data: msgRows,
+              skipDuplicates: true,
+            });
+            result.messagesInserted += inserted.count;
+            result.messagesSkipped += msgRows.length - inserted.count;
+            log({ inserted: inserted.count, total: msgRows.length }, '[backfill] Pulse messages inserted');
+          } catch (e) {
+            result.errors.push(`Pulse message createMany: ${e instanceof Error ? e.message : String(e)}`);
           }
         }
+      }
 
-        // Calls from Pulse twilio_call_logs table
-        const pulseCalls = await getPulseCallsForUser({ pulseUserId, daysBack });
-        log({ count: pulseCalls.length }, '[backfill] Pulse calls fetched');
-        if (pulseCalls.length > 0) {
-          const callRows = pulseCalls
-            .map((r) => mapPulseCallRowToCall(r, args.userId, args.userDidId))
-            .filter((r): r is NonNullable<typeof r> => r !== null);
-          if (callRows.length > 0) {
-            try {
-              const inserted = await prisma.call.createMany({
-                data: callRows,
-                skipDuplicates: true,
-              });
-              result.callsInserted += inserted.count;
-              result.callsSkipped += callRows.length - inserted.count;
-              log({ inserted: inserted.count, total: callRows.length }, '[backfill] Pulse calls inserted');
-            } catch (e) {
-              result.errors.push(`Pulse call createMany: ${e instanceof Error ? e.message : String(e)}`);
-            }
+      // Calls from Pulse twilio_call_logs table
+      const pulseCalls = await getPulseCallsForUser({ pulseUserId, daysBack });
+      log({ count: pulseCalls.length }, '[backfill] Pulse calls fetched');
+      if (pulseCalls.length > 0) {
+        const callRows = pulseCalls
+          .map((r) => mapPulseCallRowToCall(r, args.userId, args.userDidId))
+          .filter((r): r is NonNullable<typeof r> => r !== null);
+        if (callRows.length > 0) {
+          try {
+            const inserted = await prisma.call.createMany({
+              data: callRows,
+              skipDuplicates: true,
+            });
+            result.callsInserted += inserted.count;
+            result.callsSkipped += callRows.length - inserted.count;
+            log({ inserted: inserted.count, total: callRows.length }, '[backfill] Pulse calls inserted');
+          } catch (e) {
+            result.errors.push(`Pulse call createMany: ${e instanceof Error ? e.message : String(e)}`);
           }
         }
-      } else {
-        log({ email: aceUser.email }, '[backfill] no matching Pulse user_id — skipping Pulse backfill');
       }
     }
   } catch (e) {

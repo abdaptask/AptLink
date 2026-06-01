@@ -197,6 +197,43 @@ export async function getPulseCallsForUser(args: {
   }
 }
 
+/**
+ * Diagnostic — search Pulse users by email substring (case-insensitive).
+ * Returns up to 20 matches. Useful when the user's email in ACE doesn't
+ * match what's in Pulse (different domain, casing, etc.). Lets admins
+ * find the right pulseUserId without needing a MySQL client.
+ */
+export async function searchPulseUsers(query: string): Promise<Array<{
+  user_id: number;
+  email: string | null;
+  first_name: string | null;
+  last_name: string | null;
+}>> {
+  const p = getPool();
+  if (!p) return [];
+  try {
+    const [rows] = await p.query<mysql.RowDataPacket[]>(
+      `SELECT user_id, email, first_name, last_name
+       FROM users
+       WHERE email LIKE ?
+          OR first_name LIKE ?
+          OR last_name LIKE ?
+       ORDER BY user_id DESC
+       LIMIT 20`,
+      [`%${query}%`, `%${query}%`, `%${query}%`],
+    );
+    return rows as unknown as Array<{
+      user_id: number;
+      email: string | null;
+      first_name: string | null;
+      last_name: string | null;
+    }>;
+  } catch (e) {
+    console.error('[pulseBackfill] searchPulseUsers failed', { query, error: e });
+    return [];
+  }
+}
+
 /** Cleanup — call this if the API server shuts down gracefully. */
 export async function closePulsePool(): Promise<void> {
   if (pool) {

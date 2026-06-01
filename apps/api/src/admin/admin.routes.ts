@@ -3154,6 +3154,26 @@ export async function adminRoutes(app: FastifyInstance) {
     },
   );
 
+  // ── GET /admin/pulse/search?q=ravindra ────────────────────────────────
+  //
+  // v0.10.35 — Diagnostic helper. Search Pulse users table by name/email
+  // substring (case-insensitive). Returns up to 20 matches with their
+  // pulse user_id. Used to find a user when their email in ACE doesn't
+  // match what's stored in Pulse.
+  app.get<{ Querystring: { q?: string } }>(
+    '/admin/pulse/search',
+    { onRequest: [app.authenticate, requireAdmin] },
+    async (request, reply) => {
+      const q = (request.query.q ?? '').trim();
+      if (q.length < 2) {
+        return reply.code(400).send({ error: 'Query must be at least 2 characters' });
+      }
+      const { searchPulseUsers } = await import('../lib/pulseBackfill.js');
+      const results = await searchPulseUsers(q);
+      return { query: q, count: results.length, results };
+    },
+  );
+
   // ── POST /admin/users/:id/dids/:didId/backfill-from-csv ────────────────
   //
   // v0.10.27 — Critical workaround. Telnyx's /v2/detail_records sync API
@@ -3270,6 +3290,11 @@ export async function adminRoutes(app: FastifyInstance) {
   // response. Same dedup-via-unique-constraint pattern means retrying is safe.
   const BackfillSchema = z.object({
     daysBack: z.number().int().min(1).max(90).optional().default(30),
+    // v0.10.35 — Optional override for Pulse user_id. By default the
+    // backfill looks up Pulse user by ACE email; when emails don't
+    // match across systems, admin can pass the explicit Pulse user_id
+    // (found via GET /admin/pulse/search?q=...).
+    pulseUserIdOverride: z.number().int().positive().optional(),
   });
   app.post<{ Params: { id: string; didId: string } }>(
     '/admin/users/:id/dids/:didId/backfill',
@@ -3300,6 +3325,7 @@ export async function adminRoutes(app: FastifyInstance) {
           userDidId: userDid.id,
           didNumber: userDid.didNumber,
           daysBack: parsed.data.daysBack,
+          pulseUserIdOverride: parsed.data.pulseUserIdOverride,
         },
         (obj, msg) => request.log.info(obj, msg),
       );
