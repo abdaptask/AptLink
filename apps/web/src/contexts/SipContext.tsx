@@ -211,16 +211,26 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
     // INVITE to BOTH Contacts, and the resulting race is exactly what
     // broke inbound Accept (INVALID_STATE_ERROR / cause:Canceled).
     //
-    // beforeunload fires on browser tab close + page reload.
-    // pagehide fires on actual page-going-away (more reliable on mobile/
-    // bfcache + Electron's renderer destruction).
-    // Both call disconnect() which now sends REGISTER Contact:* Expires:0
-    // before tearing down the WebSocket.
+    // v0.10.25 — CRITICAL fix. The previous version ALSO listened to
+    // pagehide and called disconnect() on it. In Electron, pagehide
+    // fires when the renderer is hidden (window minimized to system tray,
+    // Cmd+H on macOS, etc.) — NOT just on real destroy. Calling
+    // disconnect() in that case unregistered the user from Telnyx, so
+    // every incoming call while the app was "in background" went straight
+    // to voicemail. End-state: users reporting "calls go to voicemail
+    // when my dialer isn't the front window" — exactly this bug.
+    //
+    // Fix: guard pagehide with event.persisted. persisted === true means
+    // the page is going to bfcache and will resume; never disconnect.
+    // persisted === false in pagehide *could* mean a real unload, but in
+    // Electron it's ambiguous (also fires on window hide). To stay safe,
+    // we now ONLY disconnect on beforeunload — that's the reliable
+    // "page is really going away" signal in Electron. The bfcache orphan-
+    // contact case is rare and self-heals on next launch.
     const onUnload = () => {
       try { sipService.disconnect(); } catch { /* noop */ }
     };
     window.addEventListener('beforeunload', onUnload);
-    window.addEventListener('pagehide', onUnload);
 
     // v0.10.9 — Subscribe to system power events from Electron main.
     // Fires on system resume from sleep + screen unlock. We force-refresh
