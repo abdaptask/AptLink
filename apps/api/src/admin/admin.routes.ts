@@ -211,6 +211,182 @@ function buildCallbackHtml(success: boolean, message: string): string {
 </body></html>`;
 }
 
+// v0.10.27 — Minimal RFC 4180 CSV parser for Telnyx CDR/MDR uploads.
+// Handles quoted fields, escaped quotes (""), trims whitespace, returns
+// rows as { columnName: value } objects keyed by the header row.
+//
+// Limitations: doesn't support embedded newlines inside quoted fields.
+// Telnyx CSV exports don't use them, so this is fine for our use case.
+function parseCsv(text: string): Array<Record<string, string>> {
+  const lines = text.split(/\r?\n/).filter((l) => l.length > 0);
+  if (lines.length < 2) return [];
+  const headers = parseCsvLine(lines[0]);
+  const rows: Array<Record<string, string>> = [];
+  for (let i = 1; i < lines.length; i++) {
+    const vals = parseCsvLine(lines[i]);
+    const row: Record<string, string> = {};
+    for (let j = 0; j < headers.length; j++) {
+      row[headers[j]] = vals[j] ?? '';
+    }
+    rows.push(row);
+  }
+  return rows;
+}
+
+function parseCsvLine(line: string): string[] {
+  const out: string[] = [];
+  let cur = '';
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (inQuotes) {
+      if (c === '"' && line[i + 1] === '"') {
+        cur += '"';
+        i++;
+      } else if (c === '"') {
+        inQuotes = false;
+      } else {
+        cur += c;
+      }
+    } else {
+      if (c === ',') {
+        out.push(cur);
+        cur = '';
+      } else if (c === '"') {
+        inQuotes = true;
+      } else {
+        cur += c;
+      }
+    }
+  }
+  out.push(cur);
+  return out.map((s) => s.trim());
+}
+
+// Map a parsed Telnyx CDR CSV row to a Prisma Call.create input.
+// Returns null if required fields are missing.
+function mapTelnyxCdrCsvRow(
+  row: Record<string, string>,
+  userId: number,
+  userDidId: number,
+): {
+  userId: number;
+  telnyxCallId: string;
+  direction: string;
+  fromNumber: string;
+  toNumber: string;
+  status: string;
+  startedAt: Date;
+  answeredAt: Date | null;
+  endedAt: Date | null;
+  durationSeconds: number;
+  hangupCause: string | null;
+  userDidId: number;
+} | null {
+  // Prefer "Call UUID" (Telnyx call_session_id-style UUID), fall back to
+  // "Unique CDR ID". We need a stable telnyxCallId for dedup.
+  const telnyxCallId = (row['Call UUID'] || row['Unique CDR ID'] || '').trim();
+  const fromNumber = (row['Originating Number'] || '').trim();
+  const toNumber = (row['Terminating number'] || row['Full Terminating number'] || '').trim();
+  const startStr = (row['Start Timestamp(UTC)'] || row['Start Timestamp'] || '').trim();
+  if (!telnyxCallId || !fromNumber || !toNumber || !startStr) return null;
+
+  const direction = (row['Direction'] || '').toLowerCase() === 'inbound' ? 'inbound' : 'outbound';
+  const startedAt = new Date(startStr.replace(' ', 'T') + 'Z');
+  const answeredStr = (row['Answer Timestamp'] || '').trim();
+  const answeredAt = answeredStr ? new Date(answeredStr.replace(' ', 'T') + 'Z') : null;
+  const endedStr = (row['End Timestamp'] || '').trim();
+  const endedAt = endedStr ? new Date(endedStr.replace(' ', 'T') + 'Z') : null;
+  const durationSeconds = parseInt(row['Call duration'] || '0', 10) || 0;
+  const hangupCause = (row['Hangup cause'] || '').trim() || null;
+
+  // Status: completed if duration > 0; otherwise missed for inbound, failed for outbound.
+  let status: string;
+  if (durationSeconds > 0) status = 'completed';
+  else if (direction === 'inbound') status = 'missed';
+  else status = 'failed';
+
+  return {
+    userId,
+    telnyxCallId,
+    direction,
+    fromNumber,
+    toNumber,
+    status,
+    startedAt,
+    answeredAt,
+    endedAt,
+    durationSeconds,
+    hangupCause,
+    userDidId,
+  };
+}
+
+// Map a parsed Telnyx MDR CSV row to a Prisma Message.create input.
+// Telnyx MDR CSV has columns: "Message ID", "From", "To", "Direction",
+// "Body", "Created At", "Status" (or variations). We accept a few common
+// header naming variants.
+function mapTelnyxMdrCsvRow(
+  row: Record<string, string>,
+  userId: number,
+  userDidId: number,
+  ourDidE164: string,
+): {
+  userId: number;
+  telnyxMessageId: string;
+  threadKey: string;
+  direction: string;
+  fromNumber: string;
+  toNumber: string;
+  body: string;
+  mediaUrls: string[];
+  status: string;
+  sentAt: Date | null;
+  deliveredAt: Date | null;
+  userDidId: number;
+} | null {
+  const telnyxMessageId = (
+    row['Message ID'] || row['MessageID'] || row['ID'] || row['Unique MDR ID'] || ''
+  ).trim();
+  const fromNumber = (row['From'] || row['Originating Number'] || '').trim();
+  const toNumber = (row['To'] || row['Terminating number'] || '').trim();
+  const tsStr = (row['Created At'] || row['Start Timestamp'] || row['Sent At'] || '').trim();
+  if (!telnyxMessageId || !fromNumber || !toNumber) return null;
+
+  // Direction: trust the CSV's Direction column; otherwise infer from our DID.
+  const last10 = (s: string) => s.replace(/\D/g, '').slice(-10);
+  const ourLast10 = last10(ourDidE164);
+  let direction = (row['Direction'] || '').toLowerCase();
+  if (direction !== 'inbound' && direction !== 'outbound') {
+    direction = last10(fromNumber) === ourLast10 ? 'outbound' : 'inbound';
+  }
+
+  const threadKey = direction === 'outbound' ? toNumber : fromNumber;
+  const body = (row['Body'] || row['Text'] || '').trim();
+  const statusRaw = (row['Status'] || '').toLowerCase().trim();
+  const status = ['queued', 'sent', 'delivered', 'failed', 'received'].includes(statusRaw)
+    ? statusRaw
+    : direction === 'inbound'
+      ? 'received'
+      : 'delivered';
+  const sentAt = tsStr ? new Date(tsStr.replace(' ', 'T') + 'Z') : null;
+
+  return {
+    userId,
+    telnyxMessageId,
+    threadKey,
+    direction,
+    fromNumber,
+    toNumber,
+    body,
+    mediaUrls: [],
+    status,
+    sentAt,
+    deliveredAt: status === 'delivered' && sentAt ? sentAt : null,
+    userDidId,
+  };
+}
+
 export async function adminRoutes(app: FastifyInstance) {
   // ───────────────────────── GET /admin/users ─────────────────────────
   app.get(
@@ -2958,6 +3134,167 @@ export async function adminRoutes(app: FastifyInstance) {
       await disconnectGraph();
       await recordAudit(actor.sub, 'ms_graph.disconnected', null, {});
       return { ok: true };
+    },
+  );
+
+  // ── POST /admin/users/:id/dids/:didId/backfill-from-csv ────────────────
+  //
+  // v0.10.27 — Critical workaround. Telnyx's /v2/detail_records sync API
+  // doesn't actually support filter[from]/filter[to] — it silently returns
+  // empty when those filters are applied. This means the automatic backfill
+  // never finds anything. As an immediate fix, admin can manually export
+  // the CSV from Telnyx Portal → Reports and upload it here.
+  //
+  // Body: { csvText: string, type: 'voice' | 'sms' }
+  //
+  // Voice CSV columns expected (from Telnyx CDR export):
+  //   "Originating Number", "Terminating number", "Start Timestamp(UTC)",
+  //   "Answer Timestamp", "End Timestamp", "Call duration", "Direction",
+  //   "Hangup cause", "Call UUID"
+  //
+  // SMS CSV columns expected (from Telnyx MDR export):
+  //   "Message ID", "From", "To", "Direction", "Body", "Created At",
+  //   "Status", "Carrier"
+  //
+  // Dedupes via Call.telnyxCallId / Message.telnyxMessageId unique constraint.
+  const BackfillCsvSchema = z.object({
+    csvText: z.string().min(10),
+    type: z.enum(['voice', 'sms']),
+  });
+  app.post<{ Params: { id: string; didId: string } }>(
+    '/admin/users/:id/dids/:didId/backfill-from-csv',
+    { onRequest: [app.authenticate, requireAdmin] },
+    async (request, reply) => {
+      const actor = request.user as JwtPayload;
+      const userId = Number(request.params.id);
+      const didId = Number(request.params.didId);
+      if (!Number.isFinite(userId) || !Number.isFinite(didId)) {
+        return reply.code(400).send({ error: 'Invalid id' });
+      }
+      const parsed = BackfillCsvSchema.safeParse(request.body);
+      if (!parsed.success) {
+        return reply.code(400).send({ error: 'Invalid input', details: parsed.error.flatten() });
+      }
+      const userDid = await prisma.userDid.findFirst({
+        where: { id: didId, userId },
+        select: { id: true, didNumber: true },
+      });
+      if (!userDid) {
+        return reply.code(404).send({ error: 'UserDid not found for this user' });
+      }
+
+      const rows = parseCsv(parsed.data.csvText);
+      if (rows.length === 0) {
+        return { ok: true, inserted: 0, skipped: 0, parsed: 0 };
+      }
+
+      if (parsed.data.type === 'voice') {
+        const callRows = rows
+          .map((r) => mapTelnyxCdrCsvRow(r, userId, userDid.id))
+          .filter((x): x is NonNullable<typeof x> => x !== null);
+        const result = await prisma.call.createMany({
+          data: callRows,
+          skipDuplicates: true,
+        });
+        await recordAudit(actor.sub, 'user_did.backfill_csv', userId, {
+          userDidId: didId,
+          didNumber: userDid.didNumber,
+          type: 'voice',
+          parsed: rows.length,
+          mapped: callRows.length,
+          inserted: result.count,
+        });
+        return {
+          ok: true,
+          type: 'voice',
+          parsed: rows.length,
+          mapped: callRows.length,
+          inserted: result.count,
+          skipped: callRows.length - result.count,
+        };
+      }
+
+      // type === 'sms'
+      const msgRows = rows
+        .map((r) => mapTelnyxMdrCsvRow(r, userId, userDid.id, userDid.didNumber))
+        .filter((x): x is NonNullable<typeof x> => x !== null);
+      const result = await prisma.message.createMany({
+        data: msgRows,
+        skipDuplicates: true,
+      });
+      await recordAudit(actor.sub, 'user_did.backfill_csv', userId, {
+        userDidId: didId,
+        didNumber: userDid.didNumber,
+        type: 'sms',
+        parsed: rows.length,
+        mapped: msgRows.length,
+        inserted: result.count,
+      });
+      return {
+        ok: true,
+        type: 'sms',
+        parsed: rows.length,
+        mapped: msgRows.length,
+        inserted: result.count,
+        skipped: msgRows.length - result.count,
+      };
+    },
+  );
+
+  // ── POST /admin/users/:id/dids/:didId/backfill ──────────────────────────
+  //
+  // v0.10.26 — Manually re-trigger the 30-day call+SMS history backfill for
+  // an already-migrated UserDid. Used when the original migration's
+  // backfill didn't run (e.g. migration happened before the backfill code
+  // was deployed) or when the admin wants to retry after fixing a Telnyx
+  // API access issue.
+  //
+  // Synchronous (not fire-and-forget) so the admin sees real counts in the
+  // response. Same dedup-via-unique-constraint pattern means retrying is safe.
+  const BackfillSchema = z.object({
+    daysBack: z.number().int().min(1).max(90).optional().default(30),
+  });
+  app.post<{ Params: { id: string; didId: string } }>(
+    '/admin/users/:id/dids/:didId/backfill',
+    { onRequest: [app.authenticate, requireAdmin] },
+    async (request, reply) => {
+      const actor = request.user as JwtPayload;
+      const userId = Number(request.params.id);
+      const didId = Number(request.params.didId);
+      if (!Number.isFinite(userId) || !Number.isFinite(didId)) {
+        return reply.code(400).send({ error: 'Invalid id' });
+      }
+      const parsed = BackfillSchema.safeParse(request.body ?? {});
+      if (!parsed.success) {
+        return reply.code(400).send({ error: 'Invalid input', details: parsed.error.flatten() });
+      }
+
+      const userDid = await prisma.userDid.findFirst({
+        where: { id: didId, userId },
+        select: { id: true, didNumber: true },
+      });
+      if (!userDid) {
+        return reply.code(404).send({ error: 'UserDid not found for this user' });
+      }
+
+      const result = await backfillMigratedDidHistory(
+        {
+          userId,
+          userDidId: userDid.id,
+          didNumber: userDid.didNumber,
+          daysBack: parsed.data.daysBack,
+        },
+        (obj, msg) => request.log.info(obj, msg),
+      );
+
+      await recordAudit(actor.sub, 'user_did.backfill_rerun', userId, {
+        userDidId: didId,
+        didNumber: userDid.didNumber,
+        daysBack: parsed.data.daysBack,
+        result,
+      });
+
+      return { ok: true, ...result };
     },
   );
 
