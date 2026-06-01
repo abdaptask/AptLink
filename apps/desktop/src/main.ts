@@ -157,6 +157,71 @@ function createWindow() {
   session.setPermissionRequestHandler((_wc, _permission, callback) => callback(true));
   session.setPermissionCheckHandler(() => true);
 
+  // v0.10.33 — Spell checker + right-click suggestion menu.
+  //
+  // Electron has a built-in Chromium spellchecker that shows the red
+  // squiggles on typos in any <textarea> or contentEditable. BUT the
+  // default Electron right-click menu does NOT include suggestions —
+  // you get the browser's HTML context menu (Copy/Paste/etc) with no
+  // dictionary suggestions. To get the "spelled wrong, here are 3
+  // alternatives" Outlook-like UX, we have to listen for the context-
+  // menu event and build a Menu ourselves using params.dictionary-
+  // Suggestions.
+  try {
+    session.setSpellCheckerEnabled(true);
+    // Locale auto-detects from system but force en-US as a sane fallback.
+    session.setSpellCheckerLanguages(['en-US']);
+  } catch (e) {
+    console.warn('[spellcheck] setup failed', e);
+  }
+
+  mainWindow.webContents.on('context-menu', (_event, params) => {
+    // Only show our menu when the right-click is on editable content
+    // OR there are spelling suggestions to offer. Otherwise let Chromium
+    // handle non-editable right-click normally (copy link, etc).
+    if (!params.isEditable && params.dictionarySuggestions.length === 0) return;
+
+    const template: Electron.MenuItemConstructorOptions[] = [];
+
+    // Spelling suggestions at the top — clicking one replaces the
+    // misspelled word in place via webContents.replaceMisspelling.
+    if (params.dictionarySuggestions.length > 0) {
+      for (const suggestion of params.dictionarySuggestions) {
+        template.push({
+          label: suggestion,
+          click: () => mainWindow?.webContents.replaceMisspelling(suggestion),
+        });
+      }
+      template.push({ type: 'separator' });
+    }
+
+    // "Add to dictionary" — Electron persists this per-user in their
+    // local spellchecker dictionary so subsequent typings of this word
+    // don't get squiggled.
+    if (params.misspelledWord) {
+      template.push({
+        label: `Add "${params.misspelledWord}" to dictionary`,
+        click: () =>
+          session.addWordToSpellCheckerDictionary(params.misspelledWord),
+      });
+      template.push({ type: 'separator' });
+    }
+
+    // Standard editor actions.
+    template.push(
+      { role: 'undo' },
+      { role: 'redo' },
+      { type: 'separator' },
+      { role: 'cut' },
+      { role: 'copy' },
+      { role: 'paste' },
+      { role: 'selectAll' },
+    );
+
+    const menu = Menu.buildFromTemplate(template);
+    menu.popup({ window: mainWindow ?? undefined });
+  });
+
   const devUrl = process.env.VITE_DEV_SERVER_URL;
   if (devUrl) {
     mainWindow.loadURL(devUrl);

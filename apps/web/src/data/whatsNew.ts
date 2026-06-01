@@ -24,6 +24,14 @@ export interface ReleaseEntry {
 
 export const WHATS_NEW: ReleaseEntry[] = [
   {
+    version: '0.10.33',
+    date: 'June 1, 2026',
+    highlight: 'Spelling suggestions on right-click',
+    changes: [
+      { type: 'improved', text: 'Right-click any squiggled (misspelled) word in the SMS compose box or any other text input — you now get spelling suggestions at the top of the menu. Click a suggestion to replace the word, or "Add to dictionary" to suppress the squiggle for that word going forward. Works across every text field in the dialer.' },
+    ],
+  },
+  {
     version: '0.10.32',
     date: 'June 1, 2026',
     highlight: 'Critical call reliability fixes',
