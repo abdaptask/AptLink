@@ -1459,6 +1459,14 @@ export interface RefreshFromPulseResult {
   errors?: string[];
   durationMs?: number;
   error?: string;
+  // v0.10.41 — Diagnostic counts straight from Pulse MySQL. Lets admin
+  // distinguish "Pulse has 0 SMS for this user" from "Pulse has SMS but
+  // our query isn't catching them". null when Pulse DB unreachable.
+  pulseCounts?: {
+    totalAllTime: number;
+    totalSms: number;
+    smsLastNDays: number;
+  } | null;
 }
 export async function refreshUserFromPulse(
   token: string,

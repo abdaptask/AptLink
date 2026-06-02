@@ -234,6 +234,56 @@ export async function searchPulseUsers(query: string): Promise<Array<{
   }
 }
 
+/**
+ * v0.10.41 — Diagnostic counts. Returns how many messages exist for a
+ * pulseUserId in Pulse's `messages` table, broken down by total /
+ * SMS-only / SMS-last-30-days. Used by the Refresh from Pulse response
+ * so admins can tell "Pulse genuinely has 0 SMS for this user" apart
+ * from "Pulse has SMS but our query isn't finding them".
+ *
+ * Returns null when env vars aren't set OR the query fails — caller
+ * should treat null as "diagnostics unavailable".
+ */
+export async function countPulseMessagesForUser(args: {
+  pulseUserId: number;
+  daysBack: number;
+}): Promise<{
+  totalAllTime: number;
+  totalSms: number;
+  smsLastNDays: number;
+} | null> {
+  const p = getPool();
+  if (!p) return null;
+  try {
+    const [allRows] = await p.query<mysql.RowDataPacket[]>(
+      `SELECT COUNT(*) AS c FROM messages
+       WHERE from_user_id = ? OR to_user_id = ?`,
+      [args.pulseUserId, args.pulseUserId],
+    );
+    const [smsRows] = await p.query<mysql.RowDataPacket[]>(
+      `SELECT COUNT(*) AS c FROM messages
+       WHERE message_type = 'sms'
+         AND (from_user_id = ? OR to_user_id = ?)`,
+      [args.pulseUserId, args.pulseUserId],
+    );
+    const [smsRecentRows] = await p.query<mysql.RowDataPacket[]>(
+      `SELECT COUNT(*) AS c FROM messages
+       WHERE message_type = 'sms'
+         AND (from_user_id = ? OR to_user_id = ?)
+         AND created_at >= DATE_SUB(NOW(), INTERVAL ? DAY)`,
+      [args.pulseUserId, args.pulseUserId, args.daysBack],
+    );
+    return {
+      totalAllTime: Number(allRows[0]?.c ?? 0),
+      totalSms: Number(smsRows[0]?.c ?? 0),
+      smsLastNDays: Number(smsRecentRows[0]?.c ?? 0),
+    };
+  } catch (e) {
+    console.error('[pulseBackfill] countPulseMessagesForUser failed', { args, error: e });
+    return null;
+  }
+}
+
 /** Cleanup — call this if the API server shuts down gracefully. */
 export async function closePulsePool(): Promise<void> {
   if (pool) {

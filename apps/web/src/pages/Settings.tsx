@@ -3354,6 +3354,53 @@ function RefreshUserFromPulseModal({
                 </div>
               )}
             </div>
+
+            {/* v0.10.41 — Pulse-side diagnostic counts. If we imported 0
+                messages, this tells admin whether Pulse genuinely has no
+                SMS for this user (totalSms === 0) or whether our query
+                is missing them (totalSms > 0 but messagesInserted === 0). */}
+            {result.pulseCounts && (
+              <div
+                style={{
+                  padding: 10, borderRadius: 8, marginBottom: 12,
+                  background: 'rgba(0,0,0,0.04)', fontSize: '0.88rem',
+                }}
+              >
+                <strong>Pulse-side diagnostic for user_id {result.pulseUserId}:</strong>
+                <div className="muted small" style={{ marginTop: 4 }}>
+                  Total messages (any type, any time):{' '}
+                  <strong>{result.pulseCounts.totalAllTime}</strong>
+                </div>
+                <div className="muted small">
+                  Total SMS (any time):{' '}
+                  <strong>{result.pulseCounts.totalSms}</strong>
+                </div>
+                <div className="muted small">
+                  SMS in last 30 days:{' '}
+                  <strong>{result.pulseCounts.smsLastNDays}</strong>
+                </div>
+                {result.pulseCounts.totalSms === 0 && (
+                  <div className="muted small" style={{ marginTop: 6 }}>
+                    Pulse has no SMS at all for this user — they may only
+                    use Pulse for calls, or their SMS routing was different.
+                  </div>
+                )}
+                {result.pulseCounts.totalSms > 0 &&
+                  result.pulseCounts.smsLastNDays === 0 && (
+                  <div className="muted small" style={{ marginTop: 6 }}>
+                    Pulse has SMS for this user, but none in the last 30 days.
+                  </div>
+                )}
+                {result.pulseCounts.smsLastNDays > 0 &&
+                  (result.messagesInserted ?? 0) === 0 && (
+                  <div className="small" style={{ marginTop: 6, color: '#d70015' }}>
+                    Warning: Pulse has {result.pulseCounts.smsLastNDays} SMS in the last
+                    30 days but ACE didn't import any. This means there's a bug — let the
+                    devs know.
+                  </div>
+                )}
+              </div>
+            )}
             {result.errors && result.errors.length > 0 && (
               <details open style={{ marginTop: 8 }}>
                 <summary style={{ cursor: 'pointer', fontSize: '0.88rem', marginBottom: 8 }}>
