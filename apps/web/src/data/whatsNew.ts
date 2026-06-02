@@ -24,6 +24,34 @@ export interface ReleaseEntry {
 
 export const WHATS_NEW: ReleaseEntry[] = [
   {
+    version: '0.10.38',
+    date: 'June 1, 2026',
+    highlight: 'One-click refresh from Pulse for any migrated user',
+    changes: [
+      { type: 'new', text: 'On every user row in Settings - Users, the kebab menu now has "Refresh from Pulse". One click opens a modal that re-pulls their last 30 days of SMS history. If you also paste their Pulse password, calls get refreshed too. No command-line, no IDs to look up.' },
+      { type: 'new', text: 'Settings - Users - "Bulk-refresh SMS" runs the same SMS refresh across every migrated user in one shot. Per-user results table shows the new-message count for each. SMS-only by design (calls would need per-user passwords we deliberately don\'t store).' },
+    ],
+  },
+  {
+    version: '0.10.37',
+    date: 'June 1, 2026',
+    highlight: 'One-click migrate user from Pulse',
+    changes: [
+      { type: 'new', text: 'Settings - Users - "Migrate from Pulse". Enter the user\'s Pulse email and password, and ACE does everything else in 30-60 seconds: creates their ACE account, moves their phone number from Pulse to ACE in Telnyx, configures the messaging profile, sends a welcome email, and imports their last 30 days of calls + SMS. Step-by-step results shown in the modal.' },
+      { type: 'improved', text: 'Migration audit log records pulse user_id, ACE email, DID, both Telnyx connection IDs (before + after), counts of records imported, and total duration - but never the user\'s Pulse password.' },
+    ],
+  },
+  {
+    version: '0.10.36',
+    date: 'June 1, 2026',
+    highlight: 'Migration backfill now reaches into Pulse for call history',
+    changes: [
+      { type: 'new', text: 'When you migrate a user from Pulse to ACE, the dialer now logs into Pulse with the user\'s credentials and pulls their last ~200 call records (typically 20-30 days of history depending on call volume) directly into ACE\'s Recents. Combined with the existing 30-day SMS import, migrated users land with their full recent history visible immediately.' },
+      { type: 'improved', text: 'Admins can re-run a user\'s backfill at any time by providing that user\'s Pulse email + password to the backfill endpoint. Password is used once and never stored.' },
+      { type: 'fixed', text: 'Pulse marks call records as "incoming"/"outgoing" rather than "inbound"/"outbound". The import now recognizes both - earlier some incoming calls were incorrectly tagged as outbound.' },
+    ],
+  },
+  {
     version: '0.10.34',
     date: 'June 1, 2026',
     highlight: 'Connection status stays steady during calls',

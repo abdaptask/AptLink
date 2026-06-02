@@ -26,6 +26,7 @@ import * as telnyx from '../telnyx/numbers.js';
 import { sendWelcomeEmail, sendLineAssignedEmail } from '../email/sendgrid.js';
 import { sendLineAssignedCard } from '../lib/teamsNotify.js';
 import { backfillMigratedDidHistory } from '../lib/migrationBackfill.js';
+import { loginToPulse, decodePulseJwt } from '../lib/pulseApi.js';
 import {
   buildAuthorizeUrl,
   exchangeCodeForTokens,
@@ -3295,6 +3296,12 @@ export async function adminRoutes(app: FastifyInstance) {
     // match across systems, admin can pass the explicit Pulse user_id
     // (found via GET /admin/pulse/search?q=...).
     pulseUserIdOverride: z.number().int().positive().optional(),
+    // v0.10.36 — Optional Pulse user email + password to log into Pulse
+    // REST API as the target user. Required only for the per-user
+    // call-log path; SMS uses the MySQL backfill which doesn't need
+    // credentials. Password is used once and never persisted.
+    pulseUserEmail: z.string().email().optional(),
+    pulseUserPassword: z.string().min(1).max(200).optional(),
   });
   app.post<{ Params: { id: string; didId: string } }>(
     '/admin/users/:id/dids/:didId/backfill',
@@ -3326,18 +3333,599 @@ export async function adminRoutes(app: FastifyInstance) {
           didNumber: userDid.didNumber,
           daysBack: parsed.data.daysBack,
           pulseUserIdOverride: parsed.data.pulseUserIdOverride,
+          pulseUserEmail: parsed.data.pulseUserEmail,
+          pulseUserPassword: parsed.data.pulseUserPassword,
         },
         (obj, msg) => request.log.info(obj, msg),
       );
 
+      // v0.10.36 — Audit log records that a Pulse password was provided,
+      // but never the password value.
       await recordAudit(actor.sub, 'user_did.backfill_rerun', userId, {
         userDidId: didId,
         didNumber: userDid.didNumber,
         daysBack: parsed.data.daysBack,
+        pulseUserIdOverride: parsed.data.pulseUserIdOverride ?? null,
+        pulseUserEmailUsed: parsed.data.pulseUserEmail ?? null,
+        pulsePasswordProvided: Boolean(parsed.data.pulseUserPassword),
         result,
       });
 
       return { ok: true, ...result };
+    },
+  );
+
+  // ── POST /admin/users/migrate-from-pulse ───────────────────────────────
+  //
+  // v0.10.37 — One-shot wizard. Admin enters Pulse email + Pulse password.
+  // We log into Pulse on the user's behalf, decode their JWT to extract
+  // everything we need (Pulse user_id, name, voip_number), then run the
+  // full create-ACE-user → rebind-DID → backfill pipeline in a single
+  // request.
+  //
+  // Failure model: if any step after the User row is created fails, we
+  // LEAVE the user in place and return ok=false with steps[] telling
+  // the admin which step failed. Rationale: Telnyx and email hiccups are
+  // transient; rolling back the user would cause duplicate-user errors
+  // on retry. Admin can finish the failed step manually.
+  //
+  // Password is never persisted — used once for loginToPulse to obtain
+  // a JWT, then GC'd at end of request. Audit log records that a
+  // migration ran, but not the credentials.
+  const MigrateFromPulseSchema = z.object({
+    pulseEmail: z.string().email(),
+    pulsePassword: z.string().min(1).max(200),
+    isAdmin: z.boolean().optional().default(false),
+    daysBack: z.number().int().min(1).max(90).optional().default(30),
+  });
+  app.post(
+    '/admin/users/migrate-from-pulse',
+    { onRequest: [app.authenticate, requireAdmin] },
+    async (request, reply) => {
+      const actor = request.user as JwtPayload;
+      const startedAt = Date.now();
+      const parsed = MigrateFromPulseSchema.safeParse(request.body);
+      if (!parsed.success) {
+        return reply.code(400).send({ error: 'Invalid input', details: parsed.error.flatten() });
+      }
+      const { pulseEmail, pulsePassword, isAdmin: makeAdmin, daysBack } = parsed.data;
+      const normEmail = pulseEmail.trim().toLowerCase();
+
+      const steps: Array<{ step: string; ok: boolean; error?: string }> = [];
+      const step = (label: string, ok: boolean, error?: string) =>
+        steps.push({ step: label, ok, ...(error ? { error } : {}) });
+
+      // 1) Login to Pulse, decode JWT
+      const pulseJwt = await loginToPulse(normEmail, pulsePassword);
+      if (!pulseJwt) {
+        step('login to Pulse', false, 'Pulse rejected the credentials (wrong password or no account)');
+        return reply.code(401).send({ ok: false, error: 'Pulse login failed', steps });
+      }
+      step('login to Pulse', true);
+
+      const payload = decodePulseJwt(pulseJwt);
+      if (!payload) {
+        step('decode Pulse JWT', false, 'JWT format unexpected');
+        return reply.code(502).send({ ok: false, error: 'Could not read Pulse user profile from JWT', steps });
+      }
+      step(`decode Pulse JWT (user_id=${payload.id}, name=${payload.first_name ?? ''} ${payload.last_name ?? ''})`, true);
+
+      // 2) Verify Pulse user has a voip_number we can migrate
+      const rawVoip = (payload.voip_number ?? payload.caller_phone_number ?? '').trim();
+      if (!rawVoip) {
+        step('extract voip_number from Pulse profile', false, 'Pulse user has no voip_number / caller_phone_number assigned');
+        return reply.code(422).send({ ok: false, error: 'This Pulse user has no phone number to migrate', steps });
+      }
+      const voipDigits = rawVoip.replace(/\D/g, '');
+      const e164 = voipDigits.length === 11 && voipDigits.startsWith('1')
+        ? `+${voipDigits}`
+        : voipDigits.length === 10
+          ? `+1${voipDigits}`
+          : rawVoip.startsWith('+') ? rawVoip : `+${voipDigits}`;
+      step(`extract voip_number (${e164})`, true);
+
+      // 3) Refuse if ACE already has this user (active) or this DID
+      const dupUser = await prisma.user.findUnique({
+        where: { email: normEmail },
+        select: { id: true, isActive: true },
+      });
+      const recycleExistingUserId = dupUser && !dupUser.isActive ? dupUser.id : null;
+      if (dupUser && dupUser.isActive) {
+        step('check for existing ACE user', false, `An active ACE user with email ${normEmail} already exists`);
+        return reply.code(409).send({ ok: false, error: 'User already in ACE', steps });
+      }
+      step('check for existing ACE user', true);
+
+      const dupDid = await prisma.userDid.findUnique({
+        where: { didNumber: e164 },
+        select: { id: true, userId: true },
+      });
+      if (dupDid) {
+        step('check DID not already in ACE', false,
+          `DID ${e164} is already assigned to ACE user #${dupDid.userId}`);
+        return reply.code(409).send({ ok: false, error: 'DID already in ACE', steps });
+      }
+      step(`check DID ${e164} not already in ACE`, true);
+
+      // 4) Look up the DID on Telnyx
+      const tn = await telnyx.findNumberByE164(e164);
+      if (!tn.ok) {
+        step('look up DID on Telnyx', false, JSON.stringify(tn.error));
+        return reply.code(502).send({ ok: false, error: 'Telnyx lookup failed', steps });
+      }
+      if (!tn.data) {
+        step('look up DID on Telnyx', false, `Telnyx doesn't recognize ${e164}`);
+        return reply.code(404).send({ ok: false, error: 'DID not found on Telnyx', steps });
+      }
+      const telnyxNumberId = tn.data.id;
+      const previousConnectionId = tn.data.connection_id ?? null;
+      step(`look up DID on Telnyx (current connection: ${previousConnectionId ?? 'none'})`, true);
+
+      // 5) Create a Telnyx Credential Connection for the new ACE user
+      const slug = (payload.first_name || normEmail.split('@')[0])
+        .toLowerCase()
+        .replace(/[^a-z0-9-]/gi, '');
+      const connectionName = `${slug}-ace-${Date.now().toString(36).slice(-5)}`;
+      const userName = `ace${slug.replace(/[^a-z0-9]/gi, '').slice(0, 20)}${Date.now().toString(36).slice(-6)}`;
+
+      let sipUsername = '';
+      let sipPassword = '';
+      let connectionId = '';
+      const tplIdRes = await telnyx.resolveTemplateConnectionId();
+      const tplId = tplIdRes.ok ? tplIdRes.data : null;
+      let usedTemplate = false;
+      if (tplId) {
+        const cloneRes = await telnyx.createConnectionFromTemplate({
+          connectionName, userName, templateConnectionId: tplId,
+        });
+        if (cloneRes.ok && cloneRes.connection) {
+          sipUsername = cloneRes.connection.user_name;
+          sipPassword = cloneRes.connection.password ?? '';
+          connectionId = cloneRes.connection.id;
+          usedTemplate = true;
+          step('clone Telnyx connection from template (outbound voice profile + limits)', true);
+        } else {
+          step('clone Telnyx connection from template', false, JSON.stringify(cloneRes.error ?? cloneRes.warnings));
+        }
+      }
+      if (!usedTemplate) {
+        const conn = await telnyx.createCredentialConnection({ connectionName, userName });
+        if (!conn.ok || !conn.data) {
+          step('create Telnyx Credential Connection (fallback)', false, JSON.stringify(conn.error));
+          return reply.code(502).send({ ok: false, error: 'createCredentialConnection failed', steps });
+        }
+        sipUsername = conn.data.data.user_name;
+        sipPassword = conn.data.data.password ?? '';
+        connectionId = conn.data.data.id;
+        step('create Telnyx Credential Connection (no template)', true);
+      }
+
+      // 6) Rebind the Pulse DID to the new ACE connection
+      const rebind = await telnyx.assignDidToConnection(telnyxNumberId, connectionId);
+      if (!rebind.ok) {
+        step('rebind DID from Pulse to new ACE connection', false, JSON.stringify(rebind.error));
+        return reply.code(502).send({ ok: false, error: 'DID rebind failed', steps });
+      }
+      step(`rebind DID ${e164} from Pulse to ACE connection ${connectionId}`, true);
+
+      // 7) Bind to ACE messaging profile (SMS routing)
+      if (config.telnyxMessagingProfileId) {
+        const bind = await telnyx.assignNumberMessagingProfile(
+          telnyxNumberId, config.telnyxMessagingProfileId,
+        );
+        step(
+          bind.ok
+            ? 'bind DID to ACE messaging profile (SMS routing)'
+            : 'bind DID to ACE messaging profile',
+          bind.ok,
+          bind.ok ? undefined : JSON.stringify(bind.error),
+        );
+      }
+
+      // 8) Set Caller ID Override = the migrated DID
+      const callerIdRes = await telnyx.setConnectionCallerIdOverride(connectionId, e164);
+      step(
+        `set Caller ID Override = ${e164}`,
+        callerIdRes.ok,
+        callerIdRes.ok ? undefined : JSON.stringify(callerIdRes.error),
+      );
+
+      // 9) Create / recycle the ACE User row
+      const userSelect = {
+        id: true, email: true, firstName: true, lastName: true,
+        isAdmin: true, isActive: true, provider: true,
+        sipUsername: true, didNumber: true, lastLoginAt: true, createdAt: true,
+      };
+      const created = recycleExistingUserId
+        ? await prisma.user.update({
+            where: { id: recycleExistingUserId },
+            data: {
+              firstName: payload.first_name ?? null,
+              lastName: payload.last_name ?? null,
+              sipUsername, sipPassword,
+              didNumber: e164,
+              isAdmin: !!makeAdmin,
+              isActive: true,
+              provider: 'microsoft',
+              lastLoginAt: null,
+            },
+            select: userSelect,
+          })
+        : await prisma.user.create({
+            data: {
+              email: normEmail,
+              firstName: payload.first_name ?? null,
+              lastName: payload.last_name ?? null,
+              sipUsername, sipPassword,
+              didNumber: e164,
+              isAdmin: !!makeAdmin,
+              isActive: true,
+              provider: 'microsoft',
+            },
+            select: userSelect,
+          });
+      step(
+        recycleExistingUserId
+          ? `recycle deactivated User row #${recycleExistingUserId}`
+          : `create User row (ACE user_id=${created.id})`,
+        true,
+      );
+
+      // 10) UserDid row
+      const linked = await ensureUserDid({
+        userId: created.id, didNumber: e164, connectionId, isDefault: true,
+      });
+      step(
+        linked.ok ? 'create UserDid row + set as default outbound line' : 'create UserDid row',
+        linked.ok, linked.ok ? undefined : linked.error ?? 'unknown error',
+      );
+
+      // 11) Welcome email
+      const mail = await sendWelcomeEmail({
+        toEmail: normEmail,
+        firstName: payload.first_name ?? null,
+        didNumber: e164,
+      });
+      step(
+        'send welcome email',
+        mail.ok,
+        mail.ok ? undefined : (typeof mail.error === 'string' ? mail.error : `HTTP ${mail.status}`),
+      );
+
+      // 12) Backfill — calls via Pulse REST, SMS via Pulse MySQL
+      const userDid = await prisma.userDid.findFirst({
+        where: { userId: created.id, didNumber: e164 },
+        select: { id: true },
+      });
+      let backfillResult: Awaited<ReturnType<typeof backfillMigratedDidHistory>> | null = null;
+      if (userDid) {
+        backfillResult = await backfillMigratedDidHistory(
+          {
+            userId: created.id,
+            userDidId: userDid.id,
+            didNumber: e164,
+            daysBack,
+            pulseUserIdOverride: payload.id,
+            pulseUserEmail: normEmail,
+            pulseUserPassword: pulsePassword,
+          },
+          (obj, msg) => request.log.info(obj, msg),
+        );
+        step(
+          `backfill 30-day history (calls=${backfillResult.callsInserted}, sms=${backfillResult.messagesInserted})`,
+          backfillResult.errors.length === 0,
+          backfillResult.errors.length > 0 ? backfillResult.errors.join('; ') : undefined,
+        );
+      } else {
+        step('locate new UserDid for backfill', false, 'UserDid row missing after create — backfill skipped');
+      }
+
+      await recordAudit(actor.sub, 'user.migrated_from_pulse', created.id, {
+        pulseUserId: payload.id,
+        pulseEmail: normEmail,
+        aceEmail: normEmail,
+        didNumber: e164,
+        previousConnectionId,
+        newConnectionId: connectionId,
+        callsInserted: backfillResult?.callsInserted ?? 0,
+        messagesInserted: backfillResult?.messagesInserted ?? 0,
+        backfillErrors: backfillResult?.errors ?? [],
+        durationMs: Date.now() - startedAt,
+      });
+
+      const allStepsOk = steps.every((s) => s.ok);
+      return {
+        ok: allStepsOk,
+        user: publicUser(created),
+        pulseUserId: payload.id,
+        didNumber: e164,
+        sipUsername,
+        callsInserted: backfillResult?.callsInserted ?? 0,
+        callsSkipped: backfillResult?.callsSkipped ?? 0,
+        messagesInserted: backfillResult?.messagesInserted ?? 0,
+        messagesSkipped: backfillResult?.messagesSkipped ?? 0,
+        backfillErrors: backfillResult?.errors ?? [],
+        durationMs: Date.now() - startedAt,
+        steps,
+      };
+    },
+  );
+
+  // ── POST /admin/users/:id/refresh-from-pulse ───────────────────────────
+  //
+  // v0.10.38 — Per-user "Refresh from Pulse" button. UI sends just the
+  // target user id and (optionally) the user's Pulse password. Backend
+  // resolves everything else (pulseUserId from audit log, default DID,
+  // email from the User row).
+  const RefreshFromPulseSchema = z.object({
+    pulseUserPassword: z.string().min(1).max(200).optional(),
+    daysBack: z.number().int().min(1).max(90).optional().default(30),
+  });
+  app.post<{ Params: { id: string } }>(
+    '/admin/users/:id/refresh-from-pulse',
+    { onRequest: [app.authenticate, requireAdmin] },
+    async (request, reply) => {
+      const actor = request.user as JwtPayload;
+      const userId = Number(request.params.id);
+      if (!Number.isFinite(userId)) {
+        return reply.code(400).send({ ok: false, error: 'Invalid user id' });
+      }
+      const parsed = RefreshFromPulseSchema.safeParse(request.body ?? {});
+      if (!parsed.success) {
+        return reply.code(400).send({ ok: false, error: 'Invalid input', details: parsed.error.flatten() });
+      }
+      const { pulseUserPassword, daysBack } = parsed.data;
+
+      const user = await prisma.user.findUnique({
+        where: { id: userId },
+        select: {
+          id: true, email: true, firstName: true, lastName: true, isActive: true,
+          userDids: {
+            where: { isDefault: true },
+            select: { id: true, didNumber: true },
+            take: 1,
+          },
+        },
+      });
+      if (!user) return reply.code(404).send({ ok: false, error: 'User not found in ACE' });
+      if (!user.isActive) return reply.code(409).send({ ok: false, error: 'User is deactivated' });
+      const did = user.userDids[0];
+      if (!did) {
+        return reply.code(409).send({
+          ok: false,
+          error: 'User has no default phone line. Set one up first.',
+        });
+      }
+
+      // Auto-resolve pulseUserId from audit log — newest entry wins
+      const auditRow = await prisma.auditLog.findFirst({
+        where: {
+          targetUserId: userId,
+          OR: [
+            { action: 'user.migrated_from_pulse' },
+            { action: 'user_did.backfill_rerun' },
+          ],
+        },
+        orderBy: { createdAt: 'desc' },
+        select: { metadata: true },
+      });
+      let pulseUserId: number | null = null;
+      if (auditRow?.metadata) {
+        const meta = auditRow.metadata as Record<string, unknown>;
+        const pid = meta.pulseUserId ?? meta.pulseUserIdOverride;
+        if (typeof pid === 'number' && pid > 0) pulseUserId = pid;
+      }
+      if (pulseUserId === null) {
+        return reply.code(409).send({
+          ok: false,
+          error: 'No Pulse user_id on record for this user. They may not have been migrated from Pulse.',
+        });
+      }
+
+      const startedAt = Date.now();
+      const result = await backfillMigratedDidHistory(
+        {
+          userId,
+          userDidId: did.id,
+          didNumber: did.didNumber,
+          daysBack,
+          pulseUserIdOverride: pulseUserId,
+          pulseUserEmail: user.email,
+          pulseUserPassword,
+        },
+        (obj, msg) => request.log.info(obj, msg),
+      );
+
+      await recordAudit(actor.sub, 'user.refresh_from_pulse', userId, {
+        pulseUserId,
+        didNumber: did.didNumber,
+        daysBack,
+        callsRequested: Boolean(pulseUserPassword),
+        callsInserted: result.callsInserted,
+        messagesInserted: result.messagesInserted,
+        errors: result.errors,
+        durationMs: Date.now() - startedAt,
+      });
+
+      return {
+        ok: result.errors.length === 0,
+        userId,
+        userEmail: user.email,
+        pulseUserId,
+        didNumber: did.didNumber,
+        callsRequested: Boolean(pulseUserPassword),
+        callsInserted: result.callsInserted,
+        callsSkipped: result.callsSkipped,
+        messagesInserted: result.messagesInserted,
+        messagesSkipped: result.messagesSkipped,
+        errors: result.errors,
+        durationMs: Date.now() - startedAt,
+      };
+    },
+  );
+
+  // ── POST /admin/users/bulk-refresh-pulse-sms ──────────────────────────
+  //
+  // v0.10.38 — Re-runs the MySQL SMS backfill for every ACE user who has
+  // a Pulse origin in the audit log. SMS only (calls would need per-user
+  // passwords). Sequential processing with a 200ms inter-user delay to
+  // stay polite to Pulse MySQL. Capped at 100 users per invocation.
+  const BulkRefreshSchema = z.object({
+    daysBack: z.number().int().min(1).max(90).optional().default(30),
+    maxUsers: z.number().int().min(1).max(200).optional().default(100),
+  });
+  app.post(
+    '/admin/users/bulk-refresh-pulse-sms',
+    { onRequest: [app.authenticate, requireAdmin] },
+    async (request, reply) => {
+      const actor = request.user as JwtPayload;
+      const startedAt = Date.now();
+      const parsed = BulkRefreshSchema.safeParse(request.body ?? {});
+      if (!parsed.success) {
+        return reply.code(400).send({ error: 'Invalid input', details: parsed.error.flatten() });
+      }
+      const { daysBack, maxUsers } = parsed.data;
+
+      const auditRows = await prisma.auditLog.findMany({
+        where: {
+          OR: [
+            { action: 'user.migrated_from_pulse' },
+            { action: 'user_did.backfill_rerun' },
+          ],
+          targetUserId: { not: null },
+        },
+        orderBy: { createdAt: 'desc' },
+        select: { targetUserId: true, metadata: true, createdAt: true },
+      });
+
+      const userPulseMap = new Map<number, number>();
+      for (const row of auditRows) {
+        if (row.targetUserId === null) continue;
+        if (userPulseMap.has(row.targetUserId)) continue;
+        const meta = row.metadata as Record<string, unknown> | null;
+        if (!meta) continue;
+        const pid = meta.pulseUserId ?? meta.pulseUserIdOverride;
+        if (typeof pid !== 'number' || pid <= 0) continue;
+        userPulseMap.set(row.targetUserId, pid);
+      }
+
+      if (userPulseMap.size === 0) {
+        return {
+          ok: true,
+          totalUsers: 0,
+          totalCallsInserted: 0,
+          totalMessagesInserted: 0,
+          totalDurationMs: Date.now() - startedAt,
+          results: [],
+          note: 'No migrated users found in audit log. Nothing to do.',
+        };
+      }
+
+      const entries = Array.from(userPulseMap.entries()).slice(0, maxUsers);
+      const results: Array<{
+        userId: number;
+        email: string;
+        pulseUserId: number;
+        didNumber: string | null;
+        callsInserted: number;
+        callsSkipped: number;
+        messagesInserted: number;
+        messagesSkipped: number;
+        errors: string[];
+        durationMs: number;
+        skipped?: string;
+      }> = [];
+
+      let totalCalls = 0;
+      let totalMessages = 0;
+
+      for (const [userId, pulseUserId] of entries) {
+        const userStart = Date.now();
+        const user = await prisma.user.findUnique({
+          where: { id: userId },
+          select: {
+            id: true, email: true, isActive: true,
+            userDids: {
+              where: { isDefault: true },
+              select: { id: true, didNumber: true },
+              take: 1,
+            },
+          },
+        });
+        if (!user) {
+          results.push({
+            userId, email: '(deleted)', pulseUserId, didNumber: null,
+            callsInserted: 0, callsSkipped: 0, messagesInserted: 0, messagesSkipped: 0,
+            errors: [], durationMs: Date.now() - userStart,
+            skipped: 'user no longer in ACE',
+          });
+          continue;
+        }
+        if (!user.isActive) {
+          results.push({
+            userId, email: user.email, pulseUserId, didNumber: null,
+            callsInserted: 0, callsSkipped: 0, messagesInserted: 0, messagesSkipped: 0,
+            errors: [], durationMs: Date.now() - userStart,
+            skipped: 'user deactivated',
+          });
+          continue;
+        }
+        const did = user.userDids[0];
+        if (!did) {
+          results.push({
+            userId, email: user.email, pulseUserId, didNumber: null,
+            callsInserted: 0, callsSkipped: 0, messagesInserted: 0, messagesSkipped: 0,
+            errors: [], durationMs: Date.now() - userStart,
+            skipped: 'no default UserDid',
+          });
+          continue;
+        }
+
+        const r = await backfillMigratedDidHistory(
+          {
+            userId,
+            userDidId: did.id,
+            didNumber: did.didNumber,
+            daysBack,
+            pulseUserIdOverride: pulseUserId,
+          },
+          (obj, msg) => request.log.info(obj, msg),
+        );
+        totalCalls += r.callsInserted;
+        totalMessages += r.messagesInserted;
+        results.push({
+          userId,
+          email: user.email,
+          pulseUserId,
+          didNumber: did.didNumber,
+          callsInserted: r.callsInserted,
+          callsSkipped: r.callsSkipped,
+          messagesInserted: r.messagesInserted,
+          messagesSkipped: r.messagesSkipped,
+          errors: r.errors,
+          durationMs: Date.now() - userStart,
+        });
+
+        await new Promise((res) => setTimeout(res, 200));
+      }
+
+      await recordAudit(actor.sub, 'admin.bulk_refresh_pulse_sms', null, {
+        attempted: entries.length,
+        totalUsersInRegistry: userPulseMap.size,
+        totalCallsInserted: totalCalls,
+        totalMessagesInserted: totalMessages,
+        durationMs: Date.now() - startedAt,
+      });
+
+      return {
+        ok: true,
+        totalUsers: entries.length,
+        totalUsersInRegistry: userPulseMap.size,
+        totalCallsInserted: totalCalls,
+        totalMessagesInserted: totalMessages,
+        totalDurationMs: Date.now() - startedAt,
+        results,
+      };
     },
   );
 

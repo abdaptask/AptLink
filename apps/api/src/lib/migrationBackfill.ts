@@ -33,6 +33,11 @@ import {
   type PulseMessageRow,
   type PulseCallRow,
 } from './pulseBackfill.js';
+import {
+  loginToPulse,
+  getCallLogsAsUser,
+  type PulseRestCallRow,
+} from './pulseApi.js';
 
 interface BackfillResult {
   callsInserted: number;
@@ -60,6 +65,13 @@ export async function backfillMigratedDidHistory(
      *  casing/domain/etc). Admin can find the right pulseUserId via
      *  GET /admin/pulse/search?q=... and pass it explicitly. */
     pulseUserIdOverride?: number;
+    /** v0.10.36 — Optional Pulse user email + password to log into the
+     *  Pulse REST API and pull that user's call logs. Required only for
+     *  the per-user call-log path; SMS uses the MySQL path which doesn't
+     *  need a password. Email defaults to the ACE user's email if
+     *  omitted; password is used once for login then discarded. */
+    pulseUserEmail?: string;
+    pulseUserPassword?: string;
   },
   log: LogFn = noopLog,
 ): Promise<BackfillResult> {
@@ -243,8 +255,133 @@ export async function backfillMigratedDidHistory(
     log({ err: msg }, '[backfill] Pulse backfill failed (non-fatal)');
   }
 
+  // ─── v0.10.36 — Pulse REST API call backfill ──────────────────────────
+  //
+  // Only runs when pulseUserPassword is supplied. Logs into Pulse as the
+  // target user, pulls /telnyx/getCallLogs (up to 200 latest calls), and
+  // inserts the ones inside the daysBack window into ACE's Call table.
+  // SMS is NOT pulled via REST — Pulse's API doesn't serve message bodies
+  // (verified live 2026-05-29). SMS uses the MySQL path above.
+  if (args.pulseUserPassword) {
+    try {
+      const loginEmail = args.pulseUserEmail
+        ?? (await prisma.user.findUnique({
+          where: { id: args.userId },
+          select: { email: true },
+        }))?.email
+        ?? null;
+      if (!loginEmail) {
+        log({}, '[backfill] Pulse REST call-log fetch skipped — no email available');
+      } else {
+        const userJwt = await loginToPulse(loginEmail, args.pulseUserPassword);
+        if (!userJwt) {
+          log({ loginEmail }, '[backfill] Pulse REST login failed');
+          result.errors.push('Pulse REST login failed (check email/password)');
+        } else {
+          const restCalls = await getCallLogsAsUser({ userJwt, daysBack });
+          log({ count: restCalls.length }, '[backfill] Pulse REST calls fetched');
+          if (restCalls.length > 0) {
+            const callRows = restCalls
+              .map((r) => mapPulseRestCallRowToCall(r, args.userId, args.userDidId))
+              .filter((r): r is NonNullable<typeof r> => r !== null);
+            if (callRows.length > 0) {
+              try {
+                const inserted = await prisma.call.createMany({
+                  data: callRows,
+                  skipDuplicates: true,
+                });
+                result.callsInserted += inserted.count;
+                result.callsSkipped += callRows.length - inserted.count;
+                log({ inserted: inserted.count, total: callRows.length }, '[backfill] Pulse REST calls inserted');
+              } catch (e) {
+                result.errors.push(`Pulse REST call createMany: ${e instanceof Error ? e.message : String(e)}`);
+              }
+            }
+          }
+        }
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      result.errors.push(`Pulse REST backfill: ${msg}`);
+      log({ err: msg }, '[backfill] Pulse REST backfill failed (non-fatal)');
+    }
+  } else {
+    log({}, '[backfill] Pulse REST call-log fetch skipped — no pulseUserPassword supplied');
+  }
+
   log({ result }, '[backfill] done');
   return result;
+}
+
+// ─── v0.10.36 — Pulse REST call row → ACE Call row ────────────────────────
+
+function mapPulseRestCallRowToCall(
+  row: PulseRestCallRow,
+  userId: number,
+  userDidId: number,
+) {
+  // Phone normalization — Pulse stores `from`/`to` as raw integers
+  // (e.g. 17327344818) or strings; convert to +E.164.
+  const norm = (raw: string | number | null): string => {
+    if (raw === null || raw === undefined) return '';
+    const digits = String(raw).replace(/\D/g, '');
+    if (digits.length === 10) return `+1${digits}`;
+    if (digits.length === 11 && digits.startsWith('1')) return `+${digits}`;
+    return digits.length > 0 ? `+${digits}` : '';
+  };
+  const fromNumber = norm(row.from);
+  const toNumber = norm(row.to);
+  if (!fromNumber || !toNumber) return null;
+
+  // Pulse production returns "incoming" / "outgoing" (not
+  // "inbound"/"outbound"). Verified live 2026-05-29.
+  const dirRaw = (row.direction ?? '').toLowerCase().trim();
+  const direction = (dirRaw === 'inbound' || dirRaw === 'incoming')
+    ? 'inbound'
+    : 'outbound';
+  const durationSeconds = row.duration ?? 0;
+
+  let status = 'completed';
+  if (durationSeconds === 0) {
+    status = direction === 'inbound' ? 'missed' : 'failed';
+  }
+  if (row.status && typeof row.status === 'string') {
+    const s = row.status.toLowerCase().trim();
+    if (s === 'voicemail') status = 'voicemail';
+    else if (s === 'no-answer' || s === 'noanswer') status = 'missed';
+    else if (s === 'busy') status = 'busy';
+    else if (s === 'completed') status = 'completed';
+    else if (s === 'failed') status = 'failed';
+  }
+
+  // Dedup key. Prefix with `pulse-` so cross-source attribution is obvious.
+  const telnyxCallId = (row.sid && row.sid.trim().length > 0)
+    ? `pulse-${row.sid.trim()}`
+    : `pulse-call-${row.id}`;
+
+  // Approximate timestamps. Pulse's REST response only gives createdAt +
+  // duration; no separate answered_at / ended_at.
+  const startedAt = new Date(row.createdAt);
+  const endedAt = durationSeconds > 0
+    ? new Date(startedAt.getTime() + durationSeconds * 1000)
+    : null;
+  const answeredAt = status === 'completed' ? startedAt : null;
+
+  return {
+    userId,
+    telnyxCallId,
+    direction,
+    fromNumber,
+    toNumber,
+    status,
+    startedAt,
+    answeredAt,
+    endedAt,
+    durationSeconds,
+    hangupCause: null,
+    recordingUrl: row.recording_url_conferrence ?? null,
+    userDidId,
+  };
 }
 
 // ─── Pulse row → ACE schema mappers ─────────────────────────────────────
