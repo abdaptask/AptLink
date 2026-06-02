@@ -24,6 +24,14 @@ export interface ReleaseEntry {
 
 export const WHATS_NEW: ReleaseEntry[] = [
   {
+    version: '0.10.49',
+    date: 'June 2, 2026',
+    highlight: 'Critical SMS import fix — Pulse SMS imports now actually work',
+    changes: [
+      { type: 'fixed', text: 'Every SMS import from Pulse since v0.10.44 was failing silently. The fetch SQL referenced a chat_user.normalized_mobile column that exists in newer Pulse schema dumps but NOT in production. MySQL returned "Unknown column" error, the catch block swallowed it, and the diagnostic kept showing "Pulse has X SMS, ACE imported 0". Removed the bad column. Now run Refresh from Pulse on any user (Sagar, Sanjyot, anyone whose import showed 0) and SMS will actually come through.' },
+    ],
+  },
+  {
     version: '0.10.48',
     date: 'June 2, 2026',
     highlight: 'Admins can set one hold music for everyone',

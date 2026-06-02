@@ -117,21 +117,19 @@ export async function getPulseMessagesForUser(args: {
   const p = getPool();
   if (!p) return [];
   try {
-    // v0.10.44 — Improved SELECT:
-    //   1. Try cu.mobile_no first (older Pulse records)
-    //   2. Fall back to cu.normalized_mobile (newer Pulse records)
-    //   3. Surface the chat_user.id so the mapper can synthesize a key
-    //      when both phone columns are null.
-    // The COALESCE+NULLIF combo treats empty strings as null so we don't
-    // accidentally pick an empty string over a non-empty fallback.
+    // v0.10.49 — Use only cu.mobile_no. The earlier v0.10.44 attempt to
+    // also read cu.normalized_mobile broke the entire fetch query because
+    // Pulse production's chat_user table doesn't have that column —
+    // it's only present in newer Pulse schema dumps (the one in
+    // pulse-master.zip), not actual production. Bug: 100% of SMS
+    // imports failed silently since v0.10.44 deploy.
+    // The v0.10.44+ synthetic-key fallbacks in the mapper still handle
+    // the null-mobile_no case correctly; we don't need normalized_mobile.
     const [rows] = await p.query<mysql.RowDataPacket[]>(
       `SELECT
          m.id, m.sms_id, m.message, m.message_type, m.media, m.status,
          m.from_user_id, m.to_user_id, m.from_type, m.to_type, m.created_at,
-         COALESCE(
-           NULLIF(TRIM(cu.mobile_no), ''),
-           NULLIF(TRIM(cu.normalized_mobile), '')
-         ) AS contact_phone,
+         NULLIF(TRIM(cu.mobile_no), '') AS contact_phone,
          cu.first_name AS contact_first_name,
          cu.last_name AS contact_last_name,
          cu.id AS contact_chat_user_id

@@ -401,7 +401,7 @@ function mapPulseMessageRowToMessage(
 
   // Build phone numbers. Pulse stores user_ids not numbers, but the
   // external contact's number is on chat_user.mobile_no (we JOINed it
-  // in as contact_phone — and as of v0.10.44, fall back to normalized_mobile).
+  // in as contact_phone via JOIN to chat_user.mobile_no).
   const last10 = (s: string) => s.replace(/\D/g, '').slice(-10);
   const ourLast10 = last10(ourDidE164);
   let contactE164 = (row.contact_phone ?? '').trim();
