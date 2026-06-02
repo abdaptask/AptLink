@@ -24,6 +24,15 @@ export interface ReleaseEntry {
 
 export const WHATS_NEW: ReleaseEntry[] = [
   {
+    version: '0.10.45',
+    date: 'June 2, 2026',
+    highlight: 'Migrated messages and calls show their original send time',
+    changes: [
+      { type: 'fixed', text: 'SMS and calls migrated from Pulse were all showing the import time as the message time, instead of when they actually happened in Pulse. The Messages list looked like every conversation happened at the same instant. Fixed for all future imports — they now anchor to the original Pulse send time.' },
+      { type: 'new', text: 'New admin maintenance endpoint POST /admin/maintenance/fix-pulse-timestamps that retroactively corrects timestamps on previously-imported Pulse messages and calls. Run it once after deploying v0.10.45 and Ravindra/Himank/Sanjyot\'s already-imported history will show in proper chronological order.' },
+    ],
+  },
+  {
     version: '0.10.44',
     date: 'June 2, 2026',
     highlight: 'SMS import works even when Pulse contact phone is null',
