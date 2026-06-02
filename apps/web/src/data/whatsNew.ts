@@ -24,6 +24,15 @@ export interface ReleaseEntry {
 
 export const WHATS_NEW: ReleaseEntry[] = [
   {
+    version: '0.10.48',
+    date: 'June 2, 2026',
+    highlight: 'Admins can set one hold music for everyone',
+    changes: [
+      { type: 'new', text: 'Settings → Hold music. Admins now see a "Set as tenant default" button below the regular upload controls. Once set, every new user (and every existing user without their own override) inherits the same hold music automatically on next sign-in. Users can still upload their own personal hold music to override the default if they want.' },
+      { type: 'improved', text: 'Hold music is now stored centrally in ACE\'s database (one tenant-wide entry) instead of only in each user\'s browser. Admin manages it once; the rollout to every user is automatic.' },
+    ],
+  },
+  {
     version: '0.10.47',
     date: 'June 2, 2026',
     highlight: 'Yesterday\'s activity at a glance',

@@ -77,6 +77,9 @@ import {
   type RefreshFromPulseResult,
   bulkRefreshPulseSms,
   type BulkRefreshPulseSmsResult,
+  getTenantHoldMusic,
+  setTenantHoldMusic,
+  clearTenantHoldMusic,
   listUnassignedTelnyxNumbers,
   type InviteNewUserResult,
   type UnassignedTelnyxNumber,
@@ -861,6 +864,57 @@ function HoldMusicSection() {
   const [error, setError] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  // v0.10.48 — Tenant-wide hold music (admin-only).
+  const [isAdmin, setIsAdmin] = useState<boolean>(false);
+  const [tenantFilename, setTenantFilename] = useState<string | null>(null);
+  const [tenantBusy, setTenantBusy] = useState<'upload' | 'clear' | null>(null);
+  const [tenantInfo, setTenantInfo] = useState<string | null>(null);
+
+  useEffect(() => {
+    const token = sessionStorage.getItem('ace_token');
+    if (!token) return;
+    getMe(token).then((u) => {
+      setIsAdmin(u.isAdmin);
+      if (u.isAdmin) {
+        // Load current tenant default so admin sees what's in place.
+        getTenantHoldMusic(token).then((r) => {
+          if (r.ok && r.filename) setTenantFilename(r.filename);
+        }).catch(() => undefined);
+      }
+    }).catch(() => undefined);
+  }, []);
+
+  async function promoteToTenantDefault() {
+    if (!dataUrl || !filename) return;
+    const token = sessionStorage.getItem('ace_token');
+    if (!token) return;
+    setTenantBusy('upload');
+    setTenantInfo(null);
+    const r = await setTenantHoldMusic(token, { dataUrl, filename });
+    setTenantBusy(null);
+    if (r.ok) {
+      setTenantFilename(filename);
+      setTenantInfo('Saved as tenant default. New users (and users without their own override) will inherit this on next sign-in.');
+    } else {
+      setError(r.error ?? 'Failed to save tenant default');
+    }
+  }
+
+  async function clearTenantDefault() {
+    if (!confirm('Remove the tenant-wide default hold music? Users\' own local files are not affected.')) return;
+    const token = sessionStorage.getItem('ace_token');
+    if (!token) return;
+    setTenantBusy('clear');
+    setTenantInfo(null);
+    const r = await clearTenantHoldMusic(token);
+    setTenantBusy(null);
+    if (r.ok) {
+      setTenantFilename(null);
+      setTenantInfo('Tenant default cleared.');
+    } else {
+      setError(r.error ?? 'Failed to clear tenant default');
+    }
+  }
 
   function pickFile() { fileRef.current?.click(); }
 
@@ -983,6 +1037,57 @@ function HoldMusicSection() {
         Note: hold music plays only while *you* are holding the other party.
         When *they* hold *you*, what you hear is up to their phone system.
       </p>
+
+      {/* v0.10.48 — Admin-only: promote local hold music to tenant-wide
+          default. Every user without their own override will inherit it
+          on next sign-in. */}
+      {isAdmin && (
+        <div
+          style={{
+            marginTop: '1.5rem',
+            padding: '12px 14px',
+            borderRadius: 8,
+            background: 'rgba(120, 100, 220, 0.08)',
+            border: '1px solid rgba(120, 100, 220, 0.25)',
+          }}
+        >
+          <div style={{ fontWeight: 600, marginBottom: 4 }}>
+            Tenant-wide default (admin only)
+          </div>
+          <div className="muted small" style={{ marginBottom: 10 }}>
+            {tenantFilename
+              ? <>Current default: <strong>{tenantFilename}</strong>. New users (and anyone without their own override) will inherit this on sign-in.</>
+              : <>No default set. Without one, new users have silent hold by default. Upload your file above, then click "Set as tenant default" to push it to everyone.</>
+            }
+          </div>
+          <div className="device-actions">
+            <button
+              type="button"
+              className="device-action primary"
+              onClick={promoteToTenantDefault}
+              disabled={!dataUrl || tenantBusy !== null}
+              title={!dataUrl ? 'Upload an audio file above first' : 'Save your current file as the default for all users'}
+            >
+              {tenantBusy === 'upload' ? 'Saving…' : 'Set as tenant default'}
+            </button>
+            {tenantFilename && (
+              <button
+                type="button"
+                className="device-action danger"
+                onClick={clearTenantDefault}
+                disabled={tenantBusy !== null}
+              >
+                {tenantBusy === 'clear' ? 'Clearing…' : 'Clear tenant default'}
+              </button>
+            )}
+          </div>
+          {tenantInfo && (
+            <p className="muted small" style={{ marginTop: 8 }}>
+              {tenantInfo}
+            </p>
+          )}
+        </div>
+      )}
     </div>
   );
 }

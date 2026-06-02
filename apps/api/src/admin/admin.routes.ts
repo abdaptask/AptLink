@@ -3824,6 +3824,87 @@ export async function adminRoutes(app: FastifyInstance) {
     },
   );
 
+  // ── Hold music admin-distribute (v0.10.48) ─────────────────────────────
+  //
+  // Admin uploads a single audio file (any format the browser can play —
+  // typically MP3 or M4A, under 3 MB). It's stored as a base64 data URL
+  // in the SystemSetting table under key "hold_music_data_url" and
+  // becomes the default for any user without their own local override.
+  //
+  // Three endpoints:
+  //   POST   /admin/hold-music   — upload/replace
+  //   GET    /admin/hold-music   — view current (admin diagnostic)
+  //   DELETE /admin/hold-music   — clear, fall back to "no default"
+  //
+  // The user-facing GET /me/hold-music lives in me.routes.ts. Same data,
+  // but no admin gate.
+  const HoldMusicUploadSchema = z.object({
+    /** Base64 data URL (e.g. "data:audio/mpeg;base64,SUQz..."). */
+    dataUrl: z.string().startsWith('data:audio/').max(4 * 1024 * 1024),
+    /** Original filename — display-only, no semantic meaning. */
+    filename: z.string().min(1).max(200),
+  });
+  app.post(
+    '/admin/hold-music',
+    { onRequest: [app.authenticate, requireAdmin] },
+    async (request, reply) => {
+      const actor = request.user as JwtPayload;
+      const parsed = HoldMusicUploadSchema.safeParse(request.body);
+      if (!parsed.success) {
+        return reply.code(400).send({ error: 'Invalid input', details: parsed.error.flatten() });
+      }
+      // Upsert both rows in a single transaction so they never go out of sync.
+      await prisma.$transaction([
+        prisma.systemSetting.upsert({
+          where: { key: 'hold_music_data_url' },
+          update: { value: parsed.data.dataUrl, updatedBy: actor.sub },
+          create: { key: 'hold_music_data_url', value: parsed.data.dataUrl, updatedBy: actor.sub },
+        }),
+        prisma.systemSetting.upsert({
+          where: { key: 'hold_music_filename' },
+          update: { value: parsed.data.filename, updatedBy: actor.sub },
+          create: { key: 'hold_music_filename', value: parsed.data.filename, updatedBy: actor.sub },
+        }),
+      ]);
+      await recordAudit(actor.sub, 'admin.hold_music_set', null, {
+        filename: parsed.data.filename,
+        sizeBytes: parsed.data.dataUrl.length,
+      });
+      return { ok: true, filename: parsed.data.filename };
+    },
+  );
+
+  app.get(
+    '/admin/hold-music',
+    { onRequest: [app.authenticate, requireAdmin] },
+    async () => {
+      const [url, name] = await Promise.all([
+        prisma.systemSetting.findUnique({ where: { key: 'hold_music_data_url' } }),
+        prisma.systemSetting.findUnique({ where: { key: 'hold_music_filename' } }),
+      ]);
+      return {
+        ok: true,
+        dataUrl: url?.value ?? null,
+        filename: name?.value ?? null,
+        updatedAt: url?.updatedAt ?? null,
+      };
+    },
+  );
+
+  app.delete(
+    '/admin/hold-music',
+    { onRequest: [app.authenticate, requireAdmin] },
+    async (request) => {
+      const actor = request.user as JwtPayload;
+      await prisma.$transaction([
+        prisma.systemSetting.deleteMany({ where: { key: 'hold_music_data_url' } }),
+        prisma.systemSetting.deleteMany({ where: { key: 'hold_music_filename' } }),
+      ]);
+      await recordAudit(actor.sub, 'admin.hold_music_cleared', null, {});
+      return { ok: true };
+    },
+  );
+
   // ── POST /admin/maintenance/fix-pulse-timestamps ──────────────────────
   //
   // v0.10.45 — One-time cleanup. Pulse-migrated Messages and Calls before

@@ -27,6 +27,13 @@ import SmsNotifier from '../components/SmsNotifier';
 import VoicemailNotifier from '../components/VoicemailNotifier';
 import UpdateBanner from '../components/UpdateBanner';
 import DailyActivityBanner from '../components/DailyActivityBanner';
+import { getTenantHoldMusic } from '../api';
+import {
+  getHoldMusicDataUrl,
+  setHoldMusicDataUrl,
+  getHoldMusicEnabled,
+  setHoldMusicEnabled,
+} from '../lib/userPrefs';
 import DidSwitcher from '../components/DidSwitcher';
 import { useSip } from '../contexts/SipContext';
 import { ensureNotificationPermission } from '../lib/notify';
@@ -211,6 +218,28 @@ export default function Layout({ user, onLogout }: Props) {
       navigate('/in-call');
     }
   }, [callState.state, location.pathname, navigate]);
+
+  // v0.10.48 — Auto-inherit tenant-wide hold music when this user has no
+  // local override. Runs once per session. If admin has uploaded a
+  // tenant-wide default via Settings, every user picks it up the next
+  // time they sign in — no manual action needed.
+  useEffect(() => {
+    const token = sessionStorage.getItem('ace_token');
+    if (!token) return;
+    // Only fetch if the user has no local hold music yet. Local override
+    // (manually uploaded by the user) always wins.
+    if (getHoldMusicDataUrl()) return;
+    let cancelled = false;
+    getTenantHoldMusic(token).then((r) => {
+      if (cancelled || !r.ok || !r.dataUrl || !r.filename) return;
+      // Save to localStorage so all existing hold-music code paths just
+      // work transparently. Also enable it by default for users who've
+      // never set this up before.
+      setHoldMusicDataUrl(r.dataUrl, r.filename);
+      if (!getHoldMusicEnabled()) setHoldMusicEnabled(true);
+    }).catch(() => { /* silent — non-essential */ });
+    return () => { cancelled = true; };
+  }, []);
 
   // Show a "return to call" banner whenever we're not on /in-call but
   // there's still an active call in progress.

@@ -465,4 +465,27 @@ export async function meRoutes(app: FastifyInstance) {
       };
     },
   );
+
+  // ── GET /me/hold-music ──────────────────────────────────────────────────
+  //
+  // v0.10.48 — Returns the tenant-wide default hold music if the admin has
+  // uploaded one. Each user's browser caches it locally and uses it for
+  // hold-music playback when they put a call on hold. Users can override
+  // with their own local file (see Settings → Microphone) — the local
+  // override takes precedence over this default.
+  app.get(
+    '/me/hold-music',
+    { onRequest: [app.authenticate] },
+    async () => {
+      const [url, name] = await Promise.all([
+        prisma.systemSetting.findUnique({ where: { key: 'hold_music_data_url' } }),
+        prisma.systemSetting.findUnique({ where: { key: 'hold_music_filename' } }),
+      ]);
+      return {
+        ok: true,
+        dataUrl: url?.value ?? null,
+        filename: name?.value ?? null,
+      };
+    },
+  );
 }

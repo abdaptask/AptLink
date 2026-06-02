@@ -1385,6 +1385,62 @@ export async function inviteNewUserAutoProvision(
   return body;
 }
 
+// v0.10.48 — Tenant hold music. Read by every user; written by admin.
+export interface TenantHoldMusic {
+  ok: boolean;
+  dataUrl: string | null;
+  filename: string | null;
+  error?: string;
+}
+export async function getTenantHoldMusic(token: string): Promise<TenantHoldMusic> {
+  const res = await fetch(`${API_URL}/me/hold-music`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const body = (await res.json().catch(() => ({}))) as TenantHoldMusic;
+  if (!res.ok) {
+    return {
+      ok: false, dataUrl: null, filename: null,
+      error: typeof body === 'object' && 'error' in body
+        ? String((body as { error: unknown }).error) : `HTTP ${res.status}`,
+    };
+  }
+  return body;
+}
+export async function setTenantHoldMusic(
+  token: string,
+  input: { dataUrl: string; filename: string },
+): Promise<{ ok: boolean; filename?: string; error?: string }> {
+  const res = await fetch(`${API_URL}/admin/hold-music`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify(input),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    return {
+      ok: false,
+      error: typeof body === 'object' && 'error' in body
+        ? String((body as { error: unknown }).error) : `HTTP ${res.status}`,
+    };
+  }
+  return body as { ok: boolean; filename?: string };
+}
+export async function clearTenantHoldMusic(token: string): Promise<{ ok: boolean; error?: string }> {
+  const res = await fetch(`${API_URL}/admin/hold-music`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    return {
+      ok: false,
+      error: typeof body === 'object' && 'error' in body
+        ? String((body as { error: unknown }).error) : `HTTP ${res.status}`,
+    };
+  }
+  return body as { ok: boolean };
+}
+
 // v0.10.47 — Daily activity summary for the "Yesterday's activity"
 // banner. Counts are scoped to the authenticated user (no admin gate).
 export interface ActivitySummary {

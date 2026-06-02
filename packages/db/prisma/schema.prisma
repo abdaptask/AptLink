@@ -461,3 +461,28 @@ model MsServiceToken {
 
   @@map("ms_service_tokens")
 }
+
+/// v0.10.48 — Tenant-wide key/value settings table.
+///
+/// Originally added for hold music: admin uploads a default audio file
+/// once, every user inherits it. Stored as base64 data URL in the
+/// `value` column (~2-3MB max for typical short hold-music loops).
+///
+/// Keys in use:
+///   "hold_music_data_url"  — base64 data URL of the default hold music
+///   "hold_music_filename"  — original filename (display only)
+///
+/// New keys can be added freely without schema changes.
+model SystemSetting {
+  /// Setting name. Globally unique. Snake_case by convention.
+  key       String   @id
+  /// Setting value. May be a short string or a multi-MB base64 blob.
+  /// Postgres TEXT type accommodates both; we don't enforce limits here.
+  value     String
+  /// ACE user id of the admin who last set this. Null for system defaults.
+  updatedBy Int?     @map("updated_by")
+  updatedAt DateTime @updatedAt @map("updated_at")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("system_settings")
+}
