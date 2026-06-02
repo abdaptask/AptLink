@@ -27,6 +27,7 @@ import { sendWelcomeEmail, sendLineAssignedEmail } from '../email/sendgrid.js';
 import { sendLineAssignedCard } from '../lib/teamsNotify.js';
 import { backfillMigratedDidHistory } from '../lib/migrationBackfill.js';
 import { loginToPulse, decodePulseJwt } from '../lib/pulseApi.js';
+import { countPulseMessagesForUser } from '../lib/pulseBackfill.js';
 import {
   buildAuthorizeUrl,
   exchangeCodeForTokens,
@@ -3784,6 +3785,15 @@ export async function adminRoutes(app: FastifyInstance) {
         (obj, msg) => request.log.info(obj, msg),
       );
 
+      // v0.10.41 — Always fetch diagnostic counts so the admin can see
+      // how much SMS data Pulse actually has for this user (vs. what we
+      // imported). Distinguishes "Pulse has 0 SMS for them" from "Pulse
+      // has lots of SMS but our query is missing them".
+      const pulseCounts = await countPulseMessagesForUser({
+        pulseUserId,
+        daysBack,
+      });
+
       await recordAudit(actor.sub, 'user.refresh_from_pulse', userId, {
         pulseUserId,
         didNumber: did.didNumber,
@@ -3791,6 +3801,7 @@ export async function adminRoutes(app: FastifyInstance) {
         callsRequested: Boolean(pulseUserPassword),
         callsInserted: result.callsInserted,
         messagesInserted: result.messagesInserted,
+        pulseCounts,
         errors: result.errors,
         durationMs: Date.now() - startedAt,
       });
@@ -3806,6 +3817,7 @@ export async function adminRoutes(app: FastifyInstance) {
         callsSkipped: result.callsSkipped,
         messagesInserted: result.messagesInserted,
         messagesSkipped: result.messagesSkipped,
+        pulseCounts,
         errors: result.errors,
         durationMs: Date.now() - startedAt,
       };

@@ -24,6 +24,14 @@ export interface ReleaseEntry {
 
 export const WHATS_NEW: ReleaseEntry[] = [
   {
+    version: '0.10.41',
+    date: 'June 2, 2026',
+    highlight: 'Refresh from Pulse shows diagnostic counts',
+    changes: [
+      { type: 'new', text: 'When you refresh a user from Pulse and 0 SMS come over, the result panel now shows what Pulse actually has for them: total messages, total SMS (any time), SMS in the last 30 days. Makes it clear whether Pulse genuinely has no SMS for that user or whether ACE is missing them — no more guessing.' },
+    ],
+  },
+  {
     version: '0.10.40',
     date: 'June 2, 2026',
     highlight: 'Refresh from Pulse: works for pre-wizard users + handles multi-line users',
