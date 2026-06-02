@@ -4009,17 +4009,46 @@ body {
   font: inherit;
   color: inherit;
   width: 100%;
+  max-width: 100%;
   text-align: left;
   appearance: none;
   -webkit-appearance: none;
+  /* v0.10.42 — Cap row to its container so it doesn't bust the layout
+     on narrow viewports (1366x768 / DPI-scaled). Combined with
+     .thread-text overflow:hidden + .thread-name truncation, this
+     prevents the row from horizontally overflowing and pushing the
+     preview text off-screen. */
+  box-sizing: border-box;
+  overflow: hidden;
 }
 .thread-row:hover { background: rgba(255, 255, 255, 0.04); }
 [data-theme="light"] .thread-row {
   border-bottom: 1px solid rgba(60, 60, 67, 0.12);
 }
 [data-theme="light"] .thread-row:hover { background: rgba(0, 0, 0, 0.04); }
-.thread-text { flex: 1; min-width: 0; }
-.thread-name { font-size: 15px; font-weight: 600; }
+.thread-text {
+  flex: 1;
+  min-width: 0;
+  /* v0.10.42 — Prevents .thread-name + LineBadge content from overflowing
+     the row on narrow viewports (e.g. 1366x768 with DPI scaling).
+     Without this, the row scrolls horizontally and preview text appears
+     mid-string instead of from the beginning. */
+  overflow: hidden;
+}
+.thread-name {
+  font-size: 15px;
+  font-weight: 600;
+  /* v0.10.42 — Truncate long contact names and ensure LineBadge wraps
+     gracefully on small screens. Display: flex keeps the inline name +
+     badge layout but lets the badge sit alongside text correctly. */
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .thread-preview {
   font-size: 13px;
   opacity: 0.6;
@@ -4027,8 +4056,18 @@ body {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  /* v0.10.42 — Force left-alignment defensively; some browsers/Electron
+     versions inherit direction:rtl from parent on narrow viewports. */
+  text-align: left;
+  direction: ltr;
 }
-.thread-time { font-size: 12px; opacity: 0.5; }
+.thread-time {
+  font-size: 12px;
+  opacity: 0.5;
+  /* v0.10.42 — Prevent time from being squeezed/wrapped on narrow rows. */
+  flex-shrink: 0;
+  white-space: nowrap;
+}
 
 /* v0.10.13 — Internal-chat row in the unified Messages list. The
    avatar is a colored circle with the teammate's initials so users

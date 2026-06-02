@@ -24,6 +24,14 @@ export interface ReleaseEntry {
 
 export const WHATS_NEW: ReleaseEntry[] = [
   {
+    version: '0.10.42',
+    date: 'June 2, 2026',
+    highlight: 'Messages list looks right on smaller screens too',
+    changes: [
+      { type: 'fixed', text: 'On laptops at 1366×768 resolution (or any monitor with Windows display scaling at 125%+), thread rows in the Messages tab were rendering with the contact name area empty and the preview text starting mid-sentence — because of CSS layout overflow at narrow widths. Thread rows now truncate names and badges gracefully at any viewport size.' },
+    ],
+  },
+  {
     version: '0.10.41',
     date: 'June 2, 2026',
     highlight: 'Refresh from Pulse shows diagnostic counts',
