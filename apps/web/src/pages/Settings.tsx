@@ -1876,7 +1876,10 @@ function UsersAdminSection() {
     const name = [r.firstName, r.lastName].filter(Boolean).join(' ').toLowerCase();
     if (name.includes(q)) return true;
     if (r.email.toLowerCase().includes(q)) return true;
+    // v0.10.40 — Search across ALL of the user's DIDs, not just the
+    // legacy User.didNumber column.
     if ((r.didNumber ?? '').toLowerCase().includes(q)) return true;
+    if (r.userDids.some((d) => d.didNumber.toLowerCase().includes(q))) return true;
     return false;
   });
   const inactiveCount = rows.filter((r) => !r.isActive).length;
@@ -2023,7 +2026,37 @@ function UsersAdminSection() {
                     {r.isActive ? 'Active' : 'Inactive'}
                   </span>
                 </td>
-                <td className="muted small">{r.didNumber || 'â€”'}</td>
+                <td className="muted small">
+                  {/* v0.10.40 — Show the user's default-assigned line
+                      (from UserDid rows) instead of the legacy
+                      User.didNumber, which doesn't track adds/changes.
+                      If they have more than one line, show "+N" badge. */}
+                  {(() => {
+                    const def = r.userDids.find((d) => d.isDefault) ?? r.userDids[0];
+                    const display = def?.didNumber ?? r.didNumber ?? null;
+                    const extra = Math.max(0, r.userDids.length - 1);
+                    if (!display) return 'â€”';
+                    return (
+                      <span>
+                        {display}
+                        {extra > 0 && (
+                          <span
+                            style={{
+                              marginLeft: 6,
+                              padding: '1px 6px',
+                              borderRadius: 6,
+                              fontSize: '0.7rem',
+                              background: 'rgba(0,0,0,0.06)',
+                            }}
+                            title={`This user has ${extra + 1} lines. Click the kebab → Manage lines to see all.`}
+                          >
+                            +{extra}
+                          </span>
+                        )}
+                      </span>
+                    );
+                  })()}
+                </td>
                 <td className="muted small">
                   {r.lastLoginAt
                     ? new Date(r.lastLoginAt).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })
@@ -3122,6 +3155,13 @@ function RefreshUserFromPulseModal({
   // v0.10.39 — Manual Pulse user_id for pre-wizard users (Ravindra etc.)
   // who don't have an audit log entry yet. Empty string = use auto-resolve.
   const [pulseUserIdStr, setPulseUserIdStr] = useState('');
+  // v0.10.40 — Which of the user's lines should receive the imported
+  // history. Defaults to the user's isDefault DID. Only relevant when the
+  // user has multiple lines.
+  const defaultDidId = (
+    target.userDids.find((d) => d.isDefault) ?? target.userDids[0]
+  )?.id ?? null;
+  const [pickedUserDidId, setPickedUserDidId] = useState<number | null>(defaultDidId);
   const [submitting, setSubmitting] = useState(false);
   const [result, setResult] = useState<RefreshFromPulseResult | null>(null);
   const bodyRef = useRef<HTMLDivElement | null>(null);
@@ -3153,6 +3193,7 @@ function RefreshUserFromPulseModal({
         pulseUserIdOverride: Number.isFinite(pulseUserIdNum) && pulseUserIdNum! > 0
           ? pulseUserIdNum
           : undefined,
+        userDidId: pickedUserDidId ?? undefined,
       });
       setResult(r);
     } catch (err) {
@@ -3194,8 +3235,42 @@ function RefreshUserFromPulseModal({
             >
               <div><strong>User:</strong> {displayName}</div>
               <div><strong>Email:</strong> {target.email}</div>
-              <div><strong>Default line:</strong> {target.didNumber ?? '-'}</div>
+              <div>
+                <strong>Lines on this user:</strong>{' '}
+                {target.userDids.length === 0
+                  ? (target.didNumber ?? '-')
+                  : target.userDids.map((d) => d.didNumber).join(', ')}
+              </div>
             </div>
+
+            {/* v0.10.40 — DID picker. Only shown when the user has more
+                than one line; for single-line users we hide it (defaults
+                to that one line server-side). */}
+            {target.userDids.length > 1 && (
+              <label className="fav-modal-field" style={{ marginBottom: 8 }}>
+                <span className="fav-modal-label">Attach history to which line?</span>
+                <select
+                  className="fav-modal-input"
+                  value={pickedUserDidId ?? ''}
+                  onChange={(e) => setPickedUserDidId(parseInt(e.target.value, 10) || null)}
+                  disabled={submitting}
+                  style={{ colorScheme: 'light dark' }}
+                >
+                  {target.userDids.map((d) => (
+                    <option key={d.id} value={d.id}>
+                      {d.didNumber}
+                      {d.label ? ` — ${d.label}` : ''}
+                      {d.isDefault ? ' (default)' : ''}
+                    </option>
+                  ))}
+                </select>
+                <span className="muted small" style={{ marginTop: 4, display: 'block' }}>
+                  Pick the line whose history should come over from Pulse. Usually
+                  the user's original Pulse number, not their ACE-purchased line.
+                </span>
+              </label>
+            )}
+
             <label className="fav-modal-field" style={{ marginBottom: 8 }}>
               <span className="fav-modal-label">Pulse user ID (only needed first time)</span>
               <input

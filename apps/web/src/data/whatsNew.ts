@@ -24,11 +24,14 @@ export interface ReleaseEntry {
 
 export const WHATS_NEW: ReleaseEntry[] = [
   {
-    version: '0.10.39',
+    version: '0.10.40',
     date: 'June 2, 2026',
-    highlight: 'Refresh from Pulse works for pre-wizard users too',
+    highlight: 'Refresh from Pulse: works for pre-wizard users + handles multi-line users',
     changes: [
-      { type: 'fixed', text: 'The "Refresh from Pulse" button used to fail with "No Pulse user_id on record" for users who were added to ACE before the migrate wizard existed. Now the modal has an optional "Pulse user ID" field where you enter their Pulse user_id (e.g. 55) the first time — after that, ACE remembers and the field can stay blank.' },
+      { type: 'fixed', text: 'The "Refresh from Pulse" button used to fail with "No Pulse user_id on record" for users added to ACE before the migrate wizard existed. The modal now has an optional "Pulse user ID" field — enter their Pulse user_id (e.g. 55) the first time, and ACE remembers it for future refreshes.' },
+      { type: 'new', text: 'If a user has multiple phone lines (e.g. an original Pulse number AND a new ACE-purchased number), the Refresh modal now shows a "Which line?" dropdown so you can pick which line the Pulse history should attach to. Single-line users don\'t see the dropdown — defaults to their one line automatically.' },
+      { type: 'fixed', text: 'The DID column on Settings → Users now shows each user\'s current default line (instead of the legacy first-assigned number which got stale when admins added or changed lines later). Users with more than one line get a "+N" badge so you know they have multiple.' },
+      { type: 'improved', text: 'Search now matches across all of a user\'s lines, not just their original one.' },
     ],
   },
   {

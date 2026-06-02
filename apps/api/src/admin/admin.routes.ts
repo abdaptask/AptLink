@@ -62,6 +62,15 @@ function publicUser(u: {
   didNumber: string | null;
   lastLoginAt: Date | null;
   createdAt: Date;
+  // v0.10.40 — optional UserDids when caller includes them in the select.
+  // Older callers (e.g. POST /admin/users response) don't include it; in
+  // that case we just emit an empty array so the type is consistent.
+  userDids?: Array<{
+    id: number;
+    didNumber: string;
+    label: string | null;
+    isDefault: boolean;
+  }>;
 }) {
   return {
     id: u.id,
@@ -75,6 +84,7 @@ function publicUser(u: {
     didNumber: u.didNumber,
     lastLoginAt: u.lastLoginAt ? u.lastLoginAt.toISOString() : null,
     createdAt: u.createdAt.toISOString(),
+    userDids: u.userDids ?? [],
   };
 }
 
@@ -433,6 +443,15 @@ export async function adminRoutes(app: FastifyInstance) {
           didNumber: true,
           lastLoginAt: true,
           createdAt: true,
+          // v0.10.40 — Include the user's full DID list. The Users table
+          // column displays the isDefault DID (instead of the legacy
+          // User.didNumber column which can be stale), and the Refresh
+          // from Pulse modal uses this list to populate its "Which line?"
+          // dropdown.
+          userDids: {
+            select: { id: true, didNumber: true, label: true, isDefault: true },
+            orderBy: [{ isDefault: 'desc' }, { id: 'asc' }],
+          },
         },
       });
       return { items: rows.map(publicUser) };
@@ -3665,6 +3684,10 @@ export async function adminRoutes(app: FastifyInstance) {
     // backfill writes a new audit log entry with this pulseUserId so
     // future refreshes auto-resolve without needing the override.
     pulseUserIdOverride: z.number().int().positive().optional(),
+    // v0.10.40 — For users with multiple ACE lines, admin picks WHICH
+    // line the imported Pulse history should attach to. If omitted, we
+    // fall back to the user's isDefault DID (single-line behaviour).
+    userDidId: z.number().int().positive().optional(),
   });
   app.post<{ Params: { id: string } }>(
     '/admin/users/:id/refresh-from-pulse',
@@ -3679,26 +3702,40 @@ export async function adminRoutes(app: FastifyInstance) {
       if (!parsed.success) {
         return reply.code(400).send({ ok: false, error: 'Invalid input', details: parsed.error.flatten() });
       }
-      const { pulseUserPassword, daysBack, pulseUserIdOverride } = parsed.data;
+      const { pulseUserPassword, daysBack, pulseUserIdOverride, userDidId: pickedUserDidId } = parsed.data;
 
+      // v0.10.40 — Pull ALL the user's DIDs so admin can pick which one
+      // (multi-line users), with isDefault as the fallback.
       const user = await prisma.user.findUnique({
         where: { id: userId },
         select: {
           id: true, email: true, firstName: true, lastName: true, isActive: true,
           userDids: {
-            where: { isDefault: true },
-            select: { id: true, didNumber: true },
-            take: 1,
+            select: { id: true, didNumber: true, isDefault: true },
+            orderBy: [{ isDefault: 'desc' }, { id: 'asc' }],
           },
         },
       });
       if (!user) return reply.code(404).send({ ok: false, error: 'User not found in ACE' });
       if (!user.isActive) return reply.code(409).send({ ok: false, error: 'User is deactivated' });
-      const did = user.userDids[0];
+
+      // Pick the DID. Priority: explicit userDidId from request > isDefault > first.
+      let did: { id: number; didNumber: string } | undefined;
+      if (pickedUserDidId) {
+        did = user.userDids.find((d) => d.id === pickedUserDidId);
+        if (!did) {
+          return reply.code(404).send({
+            ok: false,
+            error: `Line #${pickedUserDidId} not found on this user`,
+          });
+        }
+      } else {
+        did = user.userDids.find((d) => d.isDefault) ?? user.userDids[0];
+      }
       if (!did) {
         return reply.code(409).send({
           ok: false,
-          error: 'User has no default phone line. Set one up first.',
+          error: 'User has no phone lines. Set one up first.',
         });
       }
 

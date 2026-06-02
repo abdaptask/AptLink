@@ -1279,9 +1279,19 @@ export interface AdminUserRow {
   isActive: boolean;
   provider: string;
   sipUsername: string | null;
+  // Legacy single-DID field. Use userDids for the source of truth.
+  // Kept for backward compatibility with older flows.
   didNumber: string | null;
   lastLoginAt: string | null;
   createdAt: string;
+  // v0.10.40 — Full list of this user's DIDs. Empty array when the
+  // endpoint didn't include them (e.g. POST /admin/users response).
+  userDids: Array<{
+    id: number;
+    didNumber: string;
+    label: string | null;
+    isDefault: boolean;
+  }>;
 }
 
 export async function listAdminUsers(token: string): Promise<AdminUserRow[]> {
@@ -1431,6 +1441,9 @@ export interface RefreshFromPulseInput {
   // v0.10.39 — Manual override for pre-wizard ACE users (no audit log
   // entry yet with their Pulse user_id). Used once seeds the mapping.
   pulseUserIdOverride?: number;
+  // v0.10.40 — Pick WHICH of the user's ACE lines this history attaches
+  // to. Defaults server-side to the user's isDefault DID if omitted.
+  userDidId?: number;
 }
 export interface RefreshFromPulseResult {
   ok: boolean;
