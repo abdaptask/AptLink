@@ -24,6 +24,15 @@ export interface ReleaseEntry {
 
 export const WHATS_NEW: ReleaseEntry[] = [
   {
+    version: '0.10.47',
+    date: 'June 2, 2026',
+    highlight: 'Yesterday\'s activity at a glance',
+    changes: [
+      { type: 'new', text: 'On your first sign-in each day, a small banner at the top shows what happened while you were away: missed calls, new SMS, voicemails. Click X to dismiss; it won\'t reappear until tomorrow. Hides itself entirely if there\'s nothing to summarize.' },
+      { type: 'improved', text: 'Bug-report / suggestion email in Settings → What\'s new now points to support@aptask.com (was it@aptask.com).' },
+    ],
+  },
+  {
     version: '0.10.46',
     date: 'June 2, 2026',
     highlight: 'No migrated SMS gets dropped — period',

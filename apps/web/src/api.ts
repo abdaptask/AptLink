@@ -1385,6 +1385,40 @@ export async function inviteNewUserAutoProvision(
   return body;
 }
 
+// v0.10.47 — Daily activity summary for the "Yesterday's activity"
+// banner. Counts are scoped to the authenticated user (no admin gate).
+export interface ActivitySummary {
+  ok: boolean;
+  since?: string;
+  until?: string;
+  missedCalls?: number;
+  newSms?: number;
+  voicemails?: number;
+  error?: string;
+}
+export async function getActivitySummary(
+  token: string,
+  args: { since: Date; until: Date },
+): Promise<ActivitySummary> {
+  const q = new URLSearchParams({
+    since: args.since.toISOString(),
+    until: args.until.toISOString(),
+  });
+  const res = await fetch(`${API_URL}/me/activity-summary?${q.toString()}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const body = (await res.json().catch(() => ({}))) as ActivitySummary;
+  if (!res.ok) {
+    return {
+      ok: false,
+      error: typeof body === 'object' && 'error' in body
+        ? String((body as { error: unknown }).error)
+        : `HTTP ${res.status}`,
+    };
+  }
+  return body;
+}
+
 // v0.10.37 — Unified "Migrate user from Pulse" wizard. One endpoint that
 // logs into Pulse, creates the ACE user, rebinds the DID, and runs the
 // 30-day backfill — all in one call. Password is sent once over HTTPS,

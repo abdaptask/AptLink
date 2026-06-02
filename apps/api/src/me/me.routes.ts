@@ -388,4 +388,81 @@ export async function meRoutes(app: FastifyInstance) {
       }
     },
   );
+
+  // ── GET /me/activity-summary ────────────────────────────────────────────
+  //
+  // v0.10.47 — Returns counts of activity in a date range for the
+  // authenticated user. Used by the "Daily activity" banner shown on the
+  // first sign-in of each calendar day. Client passes `since` and `until`
+  // in ISO format (with time and timezone) so the banner reflects the
+  // user's local calendar day, not the server's UTC day.
+  //
+  // Returned counts:
+  //   missedCalls  — Call rows with status='missed' or 'no_answer'
+  //   newSms       — Message rows with direction='inbound'
+  //   voicemails   — Voicemail rows
+  //
+  // Cheap query — three Prisma counts. ~50ms total.
+  const ActivitySummarySchema = z.object({
+    since: z.string().datetime(),
+    until: z.string().datetime(),
+  });
+  app.get(
+    '/me/activity-summary',
+    { onRequest: [app.authenticate] },
+    async (request, reply) => {
+      const user = request.user as JwtPayload;
+      const parsed = ActivitySummarySchema.safeParse(request.query);
+      if (!parsed.success) {
+        return reply.code(400).send({
+          ok: false,
+          error: 'since and until must be ISO datetime strings',
+        });
+      }
+      const since = new Date(parsed.data.since);
+      const until = new Date(parsed.data.until);
+      if (Number.isNaN(since.getTime()) || Number.isNaN(until.getTime())) {
+        return reply.code(400).send({ ok: false, error: 'Invalid dates' });
+      }
+      if (since >= until) {
+        return reply.code(400).send({ ok: false, error: 'since must be before until' });
+      }
+
+      const [missedCalls, newSms, voicemails] = await Promise.all([
+        prisma.call.count({
+          where: {
+            userId: user.sub,
+            startedAt: { gte: since, lt: until },
+            status: { in: ['missed', 'no_answer', 'no-answer'] },
+            direction: 'inbound',
+          },
+        }),
+        prisma.message.count({
+          where: {
+            userId: user.sub,
+            sentAt: { gte: since, lt: until },
+            direction: 'inbound',
+          },
+        }),
+        // Voicemail rows use receivedAt (when caller hung up after
+        // leaving the message), not createdAt — the latter is the DB
+        // row insertion time.
+        prisma.voicemail.count({
+          where: {
+            userId: user.sub,
+            receivedAt: { gte: since, lt: until },
+          },
+        }),
+      ]);
+
+      return {
+        ok: true,
+        since: parsed.data.since,
+        until: parsed.data.until,
+        missedCalls,
+        newSms,
+        voicemails,
+      };
+    },
+  );
 }
