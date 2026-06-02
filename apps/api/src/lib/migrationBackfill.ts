@@ -399,7 +399,7 @@ function mapPulseMessageRowToMessage(
 
   // Build phone numbers. Pulse stores user_ids not numbers, but the
   // external contact's number is on chat_user.mobile_no (we JOINed it
-  // in as contact_phone).
+  // in as contact_phone — and as of v0.10.44, fall back to normalized_mobile).
   const last10 = (s: string) => s.replace(/\D/g, '').slice(-10);
   const ourLast10 = last10(ourDidE164);
   let contactE164 = (row.contact_phone ?? '').trim();
@@ -409,6 +409,15 @@ function mapPulseMessageRowToMessage(
     contactE164 = digits.length === 10 ? `+1${digits}` :
       digits.length === 11 && digits.startsWith('1') ? `+${digits}` :
       `+${digits}`;
+  }
+  // v0.10.44 — When chat_user.mobile_no and normalized_mobile are both
+  // null (happened for Sanjyot Waghmare's 284 SMS — all 0 imported under
+  // v0.10.43), synthesize a stable thread key from the chat_user.id so
+  // the message imports rather than being dropped. Format chosen so the
+  // ACE UI can detect synthetic keys and render them as "Unknown
+  // contact" instead of trying to format as a phone number.
+  if (!contactE164 && row.contact_chat_user_id) {
+    contactE164 = `pulse-cu-${row.contact_chat_user_id}`;
   }
   if (!contactE164) return null;
 

@@ -95,6 +95,11 @@ export interface PulseMessageRow {
   contact_phone: string | null;
   contact_first_name: string | null;
   contact_last_name: string | null;
+  // v0.10.44 — The chat_user.id of the external party. Used as a fallback
+  // dedup key for messages where mobile_no is null in Pulse's chat_user
+  // table (which we saw for ~50 different users — newer Pulse records
+  // sometimes only have normalized_mobile, or no phone at all).
+  contact_chat_user_id: number | null;
 }
 
 /**
@@ -112,13 +117,24 @@ export async function getPulseMessagesForUser(args: {
   const p = getPool();
   if (!p) return [];
   try {
+    // v0.10.44 — Improved SELECT:
+    //   1. Try cu.mobile_no first (older Pulse records)
+    //   2. Fall back to cu.normalized_mobile (newer Pulse records)
+    //   3. Surface the chat_user.id so the mapper can synthesize a key
+    //      when both phone columns are null.
+    // The COALESCE+NULLIF combo treats empty strings as null so we don't
+    // accidentally pick an empty string over a non-empty fallback.
     const [rows] = await p.query<mysql.RowDataPacket[]>(
       `SELECT
          m.id, m.sms_id, m.message, m.message_type, m.media, m.status,
          m.from_user_id, m.to_user_id, m.from_type, m.to_type, m.created_at,
-         cu.mobile_no AS contact_phone,
+         COALESCE(
+           NULLIF(TRIM(cu.mobile_no), ''),
+           NULLIF(TRIM(cu.normalized_mobile), '')
+         ) AS contact_phone,
          cu.first_name AS contact_first_name,
-         cu.last_name AS contact_last_name
+         cu.last_name AS contact_last_name,
+         cu.id AS contact_chat_user_id
        FROM messages m
        LEFT JOIN chat_user cu
          ON cu.id = (CASE WHEN m.from_type = 'c' THEN m.from_user_id ELSE m.to_user_id END)

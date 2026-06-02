@@ -24,6 +24,14 @@ export interface ReleaseEntry {
 
 export const WHATS_NEW: ReleaseEntry[] = [
   {
+    version: '0.10.44',
+    date: 'June 2, 2026',
+    highlight: 'SMS import works even when Pulse contact phone is null',
+    changes: [
+      { type: 'fixed', text: 'For some migrated users (Sanjyot Waghmare being the example: 284 SMS in Pulse, 0 imported), every single SMS was being dropped because Pulse\'s chat_user.mobile_no column was null for their contacts. Pulse has a SECOND phone column (normalized_mobile) that\'s populated in newer records; we now check both. As a last resort, if both are null, the message imports under a synthetic thread key based on the chat_user id so it doesn\'t get silently dropped.' },
+    ],
+  },
+  {
     version: '0.10.43',
     date: 'June 2, 2026',
     highlight: 'Messages list fix, take two',
