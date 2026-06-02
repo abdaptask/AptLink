@@ -380,6 +380,8 @@ function mapPulseRestCallRowToCall(
     durationSeconds,
     hangupCause: null,
     recordingUrl: row.recording_url_conferrence ?? null,
+    // v0.10.45 — Anchor to the actual call time.
+    createdAt: startedAt,
     userDidId,
   };
 }
@@ -456,6 +458,11 @@ function mapPulseMessageRowToMessage(
     status,
     sentAt: row.created_at,
     deliveredAt: status === 'delivered' ? row.created_at : null,
+    // v0.10.45 — Without this, Prisma defaults createdAt to NOW() (the
+    // import time), which makes every migrated message look like it
+    // happened at the same instant in the Messages list. Anchor it to
+    // the original Pulse send time instead.
+    createdAt: row.created_at,
     userDidId,
   };
 }
@@ -504,6 +511,10 @@ function mapPulseCallRowToCall(
     durationSeconds,
     hangupCause: row.endReason ?? null,
     recordingUrl: row.recording_url ?? row.voicemail_url ?? null,
+    // v0.10.45 — Anchor createdAt to the actual call time so Recents
+    // shows them in correct chronological order (instead of all at the
+    // import instant).
+    createdAt: row.start_time ?? row.createdAt,
     userDidId,
   };
 }

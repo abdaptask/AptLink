@@ -3824,6 +3824,57 @@ export async function adminRoutes(app: FastifyInstance) {
     },
   );
 
+  // ── POST /admin/maintenance/fix-pulse-timestamps ──────────────────────
+  //
+  // v0.10.45 — One-time cleanup. Pulse-migrated Messages and Calls before
+  // v0.10.45 had Message.createdAt = NOW() (the import time) instead of
+  // the original send/call time. This makes the Messages list and Recents
+  // show all migrated items with the same timestamp. Fix: set createdAt
+  // = sentAt for Messages, createdAt = startedAt for Calls — but only
+  // for rows that look like they came from Pulse (telnyx id starts with
+  // "pulse-" or "pulserest-").
+  //
+  // Idempotent — re-running is safe (just re-sets the same values).
+  app.post(
+    '/admin/maintenance/fix-pulse-timestamps',
+    { onRequest: [app.authenticate, requireAdmin] },
+    async (request) => {
+      const actor = request.user as JwtPayload;
+      const startedAt = Date.now();
+
+      // Messages: createdAt → sentAt
+      const msgResult: number = await prisma.$executeRawUnsafe(`
+        UPDATE messages
+        SET created_at = sent_at
+        WHERE (telnyx_message_id LIKE 'pulse-%' OR telnyx_message_id LIKE 'pulserest-%')
+          AND sent_at IS NOT NULL
+          AND created_at <> sent_at
+      `);
+
+      // Calls: createdAt → startedAt
+      const callResult: number = await prisma.$executeRawUnsafe(`
+        UPDATE calls
+        SET created_at = started_at
+        WHERE (telnyx_call_id LIKE 'pulse-%' OR telnyx_call_id LIKE 'pulserest-%')
+          AND started_at IS NOT NULL
+          AND created_at <> started_at
+      `);
+
+      await recordAudit(actor.sub, 'admin.fix_pulse_timestamps', null, {
+        messagesUpdated: msgResult,
+        callsUpdated: callResult,
+        durationMs: Date.now() - startedAt,
+      });
+
+      return {
+        ok: true,
+        messagesUpdated: msgResult,
+        callsUpdated: callResult,
+        durationMs: Date.now() - startedAt,
+      };
+    },
+  );
+
   // ── POST /admin/users/bulk-refresh-pulse-sms ──────────────────────────
   //
   // v0.10.38 — Re-runs the MySQL SMS backfill for every ACE user who has
