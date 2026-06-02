@@ -5069,7 +5069,7 @@ function WhatsNewSection() {
         style={{ marginTop: '2rem', textAlign: 'center' }}
       >
         Suggestions or bug reports? Email{' '}
-        <a href="mailto:it@aptask.com">it@aptask.com</a>.
+        <a href="mailto:support@aptask.com">support@aptask.com</a>.
       </p>
     </div>
   );

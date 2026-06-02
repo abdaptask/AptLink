@@ -26,6 +26,7 @@ import PostDeclineReply from '../components/PostDeclineReply';
 import SmsNotifier from '../components/SmsNotifier';
 import VoicemailNotifier from '../components/VoicemailNotifier';
 import UpdateBanner from '../components/UpdateBanner';
+import DailyActivityBanner from '../components/DailyActivityBanner';
 import DidSwitcher from '../components/DidSwitcher';
 import { useSip } from '../contexts/SipContext';
 import { ensureNotificationPermission } from '../lib/notify';
@@ -394,6 +395,10 @@ export default function Layout({ user, onLogout }: Props) {
       </header>
 
       <main className="app-content">
+        {/* v0.10.47 — "Yesterday's activity" banner. Shows once per
+            calendar day on first sign-in, dismissible. Hides itself
+            entirely if there's nothing to summarize. */}
+        <DailyActivityBanner />
         <Outlet />
       </main>
 

@@ -3986,6 +3986,63 @@ body {
   align-items: center;
   padding: 16px 20px 12px;
 }
+/* v0.10.47 — Daily activity summary banner */
+.daily-summary-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 16px;
+  margin: 8px 12px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  font-size: 13px;
+}
+[data-theme="light"] .daily-summary-banner {
+  background: rgba(0, 0, 0, 0.03);
+  border-color: rgba(0, 0, 0, 0.08);
+}
+.daily-summary-content {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-width: 0;
+  flex: 1;
+}
+.daily-summary-label {
+  font-weight: 600;
+  white-space: nowrap;
+}
+.daily-summary-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.daily-summary-pill-missed { background: rgba(229, 75, 75, 0.18); color: #ffb3b3; }
+.daily-summary-pill-sms { background: rgba(55, 138, 221, 0.18); color: #9fcdf9; }
+.daily-summary-pill-voicemail { background: rgba(239, 159, 39, 0.18); color: #fbcc7a; }
+[data-theme="light"] .daily-summary-pill-missed { background: #fcebeb; color: #791f1f; }
+[data-theme="light"] .daily-summary-pill-sms { background: #e6f1fb; color: #0c447c; }
+[data-theme="light"] .daily-summary-pill-voicemail { background: #faeeda; color: #633806; }
+.daily-summary-dismiss {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  color: inherit;
+  opacity: 0.5;
+  padding: 4px;
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+.daily-summary-dismiss:hover { opacity: 1; }
+
 .thread-list {
   list-style: none;
   padding: 0;
