@@ -24,6 +24,14 @@ export interface ReleaseEntry {
 
 export const WHATS_NEW: ReleaseEntry[] = [
   {
+    version: '0.10.68',
+    date: 'June 3, 2026',
+    highlight: 'CRITICAL hotfix — restore aggressive SIP re-register on focus',
+    changes: [
+      { type: 'fixed', text: 'Inbound calls routing to voicemail for many users (including admin). The v0.10.62 throttle on the visibility-driven REGISTER was too aggressive — it required 30 seconds of "hidden" time AND a 30-second cooldown before re-registering on tab focus. That left users vulnerable to Telnyx silent eviction (their dialer thought it was registered, Telnyx had dropped them) with no proactive recovery for up to 30 seconds. Reverted to always force a defensive REGISTER on visibility=visible, with only a tight 5-second cooldown to prevent the DevTools-pane-switch storm Nilesh originally saw. Visual flicker may return slightly but inbound call reliability comes back to baseline. The proper fix (Telnyx webhook-driven instant eviction detection) is still the next planned release.' },
+    ],
+  },
+  {
     version: '0.10.67',
     date: 'June 3, 2026',
     highlight: 'Telnyx auto-config for new users + Teams deep-link to desktop + faster unread badge refresh',

@@ -767,15 +767,28 @@ export class SipService {
     }
   }
 
-  // v0.10.62 — Visibility-driven register state.
-  // Track when the document became hidden so we can measure how long we
-  // were away. Track the last forced-register timestamp so we can apply a
-  // cooldown. Without these, we'd hammer Telnyx with a fresh REGISTER on
-  // every tab focus, which Nilesh's console showed in production: dozens
-  // of "forced register (defensive)" log lines in 10 seconds when he had
-  // DevTools docked next to ACE, eventually causing Telnyx to 491 and
-  // triggering a full reconnect cascade.
-  private lastHiddenAt: number | null = null;
+  // v0.10.68 — INCIDENT FIX. Reverted the v0.10.62 "30s + 30s cooldown"
+  // throttle that turned out to cause widespread missed calls (verified by
+  // Abdulla + many other users on 2026-06-03). The throttle made the
+  // defensive register too rare: Telnyx silently evicted users' SIP
+  // Contact, the next visibility event didn't re-register (cooldown not
+  // expired OR absence too short), and inbound calls routed to voicemail
+  // until the 10s heartbeat happened to catch the eviction — which it
+  // often didn't because heartbeat only re-registers when isRegistered()
+  // locally returns false, and Telnyx's silent eviction doesn't flip that
+  // bit.
+  //
+  // New behavior:
+  //  * Always force a fresh REGISTER on visibility=visible (like v0.10.50).
+  //  * Apply a tight cooldown (5s) — enough to suppress the DevTools-docked
+  //    storm Nilesh saw (dozens of forces in 10s), but short enough that
+  //    real recovery still happens within ~5s of a visibility event.
+  //  * Drop the "hidden-for-30s" gate entirely. Brief tab switches DO
+  //    cause Telnyx-side eviction in some carrier/network configurations
+  //    (Indian ISPs especially); we cannot afford to skip the defensive
+  //    register based on a local heuristic.
+  //  * `window.addEventListener('focus', ...)` stays OFF — visibilitychange
+  //    alone covers the case. focus over-fires.
   private lastForcedRegisterAt: number = 0;
 
   private installVisibilityRecovery(): void {
@@ -783,30 +796,17 @@ export class SipService {
     if (this.visibilityHandler) return;
     this.visibilityHandler = () => {
       if (typeof document === 'undefined') return;
-      // v0.10.62 — Track hidden→visible transitions explicitly so we know
-      // how long we were away. Just checking visibilitychange isn't enough:
-      // the event fires for the hidden direction too, and we want a baseline.
-      if (document.visibilityState === 'hidden') {
-        this.lastHiddenAt = Date.now();
-        return;
-      }
       if (document.visibilityState !== 'visible') return;
       if (!this.ua) return;
       try {
         const isRegistered = this.ua.isRegistered?.() ?? false;
         const isConnected = this.ua.isConnected?.() ?? false;
-        const hiddenForMs = this.lastHiddenAt ? Date.now() - this.lastHiddenAt : 0;
         const sinceLastForceMs = Date.now() - this.lastForcedRegisterAt;
         console.log(
           '[sip] visibility=visible — connected:', isConnected,
           'registered:', isRegistered,
-          'hiddenForMs:', hiddenForMs,
           'sinceLastForceMs:', sinceLastForceMs,
         );
-        // Reset the hidden marker so a follow-up visible event (e.g.
-        // window.focus firing right after visibilitychange) doesn't
-        // re-measure the same gap.
-        this.lastHiddenAt = null;
 
         if (!isConnected) {
           // WebSocket died while backgrounded. Full UA rebuild — calling
@@ -815,41 +815,29 @@ export class SipService {
           return;
         }
 
-        // v0.10.62 — Only force a fresh REGISTER when the absence was
-        // long enough to plausibly cause Telnyx-side eviction (>30s).
-        // Brief tab switches don't evict; the original v0.10.50 "always
-        // force" was over-defensive and caused the registrationFailed
-        // cascade visible in Nilesh's console (dev-tools docked next to
-        // ACE → focus events fire on every pane click → forced REGISTERs
-        // collide with each other and with the 10s heartbeat → eventually
-        // Telnyx 491s → full UA tear-down → visible Disconnected flicker).
-        //
-        // Also apply a hard cooldown: even if absence was long, don't
-        // force-register more than once per 30s window. The 10s heartbeat
-        // and Telnyx's own register_expires=600s refresh keep us alive
-        // between these focus events.
-        const LONG_ABSENCE_MS = 30_000;
-        const COOLDOWN_MS = 30_000;
-        const wasAwayLong = hiddenForMs >= LONG_ABSENCE_MS;
+        // v0.10.68 — Always force REGISTER on visibility=visible, except
+        // for a tight 5s cooldown that prevents the DevTools-pane-switch
+        // storm. The 10s heartbeat ALONE doesn't catch silent evictions
+        // reliably because Telnyx doesn't notify the client when it evicts
+        // — JsSIP's local isRegistered() keeps returning true. The
+        // defensive REGISTER on focus is the ONLY thing that proactively
+        // detects + recovers from silent eviction within seconds. Removing
+        // it (as v0.10.62 effectively did by requiring 30s absence) is
+        // what made calls miss.
+        const COOLDOWN_MS = 5_000;
         const cooldownExpired = sinceLastForceMs >= COOLDOWN_MS;
 
-        if (wasAwayLong && cooldownExpired) {
+        if (cooldownExpired) {
           try {
             this.ua.register();
             this.lastForcedRegisterAt = Date.now();
-            console.log(
-              `[sip] visibility=visible — forced register (was away ${Math.round(hiddenForMs / 1000)}s, last force ${Math.round(sinceLastForceMs / 1000)}s ago)`,
-            );
+            console.log('[sip] visibility=visible — forced register (defensive against stale Telnyx Contact)');
           } catch (e) {
             console.warn('[sip] visibility register threw', e);
           }
         } else {
-          // Skip — the absence was short OR we just force-registered.
-          // The 10s heartbeat (refreshRegistration) will catch any real
-          // eviction within ~10s, and Telnyx's register_expires=600s
-          // keeps our Contact valid in the meantime.
           console.log(
-            `[sip] visibility=visible — skipping forced register (wasAwayLong=${wasAwayLong}, cooldownExpired=${cooldownExpired})`,
+            `[sip] visibility=visible — skipping (cooldown ${Math.round((COOLDOWN_MS - sinceLastForceMs) / 1000)}s remaining)`,
           );
         }
       } catch (e) {
@@ -857,11 +845,10 @@ export class SipService {
       }
     };
     document.addEventListener('visibilitychange', this.visibilityHandler);
-    // v0.10.62 — Removed the redundant `window.addEventListener('focus', ...)`
-    // line. Focus events fire on every alt-tab and pane switch (including
-    // moving between DevTools and ACE), and they're a superset of
-    // visibilitychange. Relying on visibilitychange alone gives us one
-    // reliable signal per real hide/show cycle without the over-firing.
+    // v0.10.62 → v0.10.68: still NOT listening to window.focus. focus fires
+    // on every alt-tab including DevTools pane switches, which was the
+    // original concern. visibilitychange alone is fine — actual hide/show
+    // cycles do fire it.
   }
 
   // ---------- Call lifecycle (outbound / inbound common path) ----------
