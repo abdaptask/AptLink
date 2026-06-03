@@ -29,6 +29,8 @@ export interface UpdateMeInput {
   sipUsername?: string | null;
   sipPassword?: string | null;
   didNumber?: string | null;
+  // v0.10.75 — Ringtone slug.
+  ringtone?: string | null;
 }
 
 export async function updateMe(token: string, input: UpdateMeInput): Promise<User> {
