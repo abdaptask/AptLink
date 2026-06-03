@@ -3568,14 +3568,44 @@ function RefreshUserFromPulseModal({
                     Pulse has SMS for this user, but none in the last 30 days.
                   </div>
                 )}
-                {result.pulseCounts.smsLastNDays > 0 &&
-                  (result.messagesInserted ?? 0) === 0 && (
-                  <div className="small" style={{ marginTop: 6, color: '#d70015' }}>
-                    Warning: Pulse has {result.pulseCounts.smsLastNDays} SMS in the last
-                    30 days but ACE didn't import any. This means there's a bug — let the
-                    devs know.
-                  </div>
-                )}
+                {/* v0.10.62 — Fixed the false-positive warning.
+                    Previously this checked only messagesInserted; for users
+                    who'd already been migrated, every "refresh from Pulse"
+                    would hit skipDuplicates (all rows already in ACE),
+                    inserted=0, and the warning would fire alarmingly even
+                    though everything was healthy. Now we sum inserted +
+                    skipped — only warn if the total processed is materially
+                    less than what Pulse claims to have. Allow a small drift
+                    (Pulse count vs. fetch count can differ by a few because
+                    the two queries don't run at the exact same instant). */}
+                {(() => {
+                  const inserted = result.messagesInserted ?? 0;
+                  const skipped = result.messagesSkipped ?? 0;
+                  const accounted = inserted + skipped;
+                  const pulseCount = result.pulseCounts!.smsLastNDays;
+                  // Allow 5% drift OR 5 messages, whichever is larger.
+                  const tolerance = Math.max(5, Math.ceil(pulseCount * 0.05));
+                  const materialGap = pulseCount - accounted > tolerance;
+                  if (pulseCount > 0 && materialGap) {
+                    return (
+                      <div className="small" style={{ marginTop: 6, color: '#d70015' }}>
+                        Warning: Pulse has {pulseCount} SMS in the last 30 days but ACE
+                        only accounted for {accounted} ({inserted} new + {skipped} already
+                        imported). Gap of {pulseCount - accounted} suggests an import bug —
+                        let the devs know.
+                      </div>
+                    );
+                  }
+                  if (pulseCount > 0 && inserted === 0 && skipped > 0) {
+                    return (
+                      <div className="muted small" style={{ marginTop: 6 }}>
+                        All {skipped} of Pulse's last-30-day SMS were already in ACE from a
+                        prior migration. Nothing new to import — this user is up to date.
+                      </div>
+                    );
+                  }
+                  return null;
+                })()}
               </div>
             )}
             {result.errors && result.errors.length > 0 && (

@@ -26,10 +26,11 @@ export const WHATS_NEW: ReleaseEntry[] = [
   {
     version: '0.10.61',
     date: 'June 3, 2026',
-    highlight: 'Fix "Invalid Date" on freshly-sent SMS bubbles',
+    highlight: 'Fixes for Invalid-Date bubbles + misleading Pulse import warning',
     changes: [
       { type: 'fixed', text: 'Sending an SMS no longer shows "Invalid Date, Invalid Date" on the new bubble. The regression came from v0.10.59 when the send helper was extracted into a shared module — it accidentally narrowed the response shape, dropping createdAt and a few other fields that the bubble renderer needs. The bubble now shows the proper timestamp from the moment the message is sent (no refresh needed).' },
       { type: 'fixed', text: 'All four timestamp formatters (Messages, Recents, Voicemail, Chat) now guard against invalid date inputs and render an empty string instead of "Invalid Date, Invalid Date" if a malformed timestamp ever slips through. Defensive layer in case future code paths produce bad dates.' },
+      { type: 'fixed', text: 'Refresh-from-Pulse no longer scares admin with a false-positive bug warning when the user has already been migrated. The previous warning checked only "newly inserted" rows and ignored "already in ACE / skipped as duplicate" — so re-running Refresh on a fully-imported user (every duplicate skipped, 0 new) would alarmingly say "Pulse has X SMS but ACE didn\'t import any — let the devs know." It now correctly sums inserted + skipped and only warns when there\'s a real gap (5% drift tolerance). If everything\'s already imported, you see a calm "All N already in ACE — user is up to date" message instead.' },
     ],
   },
   {
