@@ -26,7 +26,6 @@ import PostDeclineReply from '../components/PostDeclineReply';
 import SmsNotifier from '../components/SmsNotifier';
 import VoicemailNotifier from '../components/VoicemailNotifier';
 import UpdateBanner from '../components/UpdateBanner';
-import DailyActivityBanner from '../components/DailyActivityBanner';
 import { getTenantHoldMusic } from '../api';
 import {
   getHoldMusicDataUrl,
@@ -424,10 +423,9 @@ export default function Layout({ user, onLogout }: Props) {
       </header>
 
       <main className="app-content">
-        {/* v0.10.47 — "Yesterday's activity" banner. Shows once per
-            calendar day on first sign-in, dismissible. Hides itself
-            entirely if there's nothing to summarize. */}
-        <DailyActivityBanner />
+        {/* v0.10.50 — DailyActivityBanner removed per product decision.
+            Endpoint /me/activity-summary remains in case we re-introduce
+            the banner in a different form later (e.g. AI-generated). */}
         <Outlet />
       </main>
 

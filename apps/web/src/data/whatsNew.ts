@@ -24,6 +24,16 @@ export interface ReleaseEntry {
 
 export const WHATS_NEW: ReleaseEntry[] = [
   {
+    version: '0.10.50',
+    date: 'June 3, 2026',
+    highlight: 'Fewer missed calls on return to desktop + hold music lockdown',
+    changes: [
+      { type: 'fixed', text: 'When you walked away from your desktop and came back to find a missed call that should have rung, the dialer was assuming its SIP registration was still valid even though Telnyx had silently evicted it. The dialer now force-refreshes its registration with Telnyx the moment your window regains focus — no waiting for the next 10-second heartbeat to maybe-catch-it. Cuts missed-call rate after long idle periods significantly.' },
+      { type: 'improved', text: 'Hold music: users now see the toggle to enable/disable, but only admins can upload, replace, or remove the audio file. The admin\'s tenant default is the source of truth. Reduces accidental "I uploaded my favourite song" moments.' },
+      { type: 'improved', text: 'Removed the "Yesterday\'s activity" banner that appeared on first sign-in each day. We\'ll come back to this in a different form (maybe an AI summary) once we land a few other priorities.' },
+    ],
+  },
+  {
     version: '0.10.49',
     date: 'June 2, 2026',
     highlight: 'Critical SMS import fix — Pulse SMS imports now actually work',

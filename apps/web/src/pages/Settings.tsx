@@ -981,10 +981,10 @@ function HoldMusicSection() {
   return (
     <div className="settings-section">
       <p className="settings-blurb">
-        Play music to the other party when you put a call on hold. Without
-        this, they hear silence (which usually makes them assume the call
-        dropped). Pick any MP3, WAV, or M4A file under 2 MB â€” it will loop
-        while the call is held. Stored on this device only.
+        {isAdmin
+          ? <>Play music to the other party when you put a call on hold. Without this, they hear silence (which usually makes them assume the call dropped). As an admin, you can upload a file here for your own device, or use the <em>Set as tenant default</em> button below to distribute it to every user automatically.</>
+          : <>Plays music to the other party when you put a call on hold. The audio file is configured by your admin and applies tenant-wide. Toggle below to enable or disable it for your own calls.</>
+        }
       </p>
 
       <div className="pref-list">
@@ -992,7 +992,7 @@ function HoldMusicSection() {
           <div className="pref-text">
             <div className="pref-label">Enable hold music</div>
             <div className="pref-desc">
-              {dataUrl ? `Using: ${filename ?? 'uploaded file'}` : 'No file uploaded yet.'}
+              {dataUrl ? `Using: ${filename ?? 'uploaded file'}` : 'No file configured yet.'}
             </div>
           </div>
           <label className="pref-switch">
@@ -1007,29 +1007,37 @@ function HoldMusicSection() {
         </div>
       </div>
 
-      <input
-        ref={fileRef}
-        type="file"
-        accept="audio/*,.mp3,.wav,.ogg,.m4a,.aac"
-        onChange={handleFile}
-        style={{ display: 'none' }}
-      />
+      {/* v0.10.50 — Upload / Replace / Preview / Remove are now
+          admin-only. Regular users can still toggle on/off but cannot
+          change the file itself; the admin's tenant default is the
+          source of truth and gets auto-applied on sign-in. */}
+      {isAdmin && (
+        <>
+          <input
+            ref={fileRef}
+            type="file"
+            accept="audio/*,.mp3,.wav,.ogg,.m4a,.aac"
+            onChange={handleFile}
+            style={{ display: 'none' }}
+          />
 
-      <div className="device-actions" style={{ marginTop: '0.8rem' }}>
-        <button type="button" className="device-action primary" onClick={pickFile}>
-          <Upload size={14} /> {dataUrl ? 'Replace file' : 'Upload audio file'}
-        </button>
-        {dataUrl && (
-          <>
-            <button type="button" className="device-action" onClick={togglePreview}>
-              {previewing ? <><PauseCircle size={14} /> Stop preview</> : <><PlayCircle size={14} /> Preview</>}
+          <div className="device-actions" style={{ marginTop: '0.8rem' }}>
+            <button type="button" className="device-action primary" onClick={pickFile}>
+              <Upload size={14} /> {dataUrl ? 'Replace file' : 'Upload audio file'}
             </button>
-            <button type="button" className="device-action danger" onClick={clear}>
-              Remove file
-            </button>
-          </>
-        )}
-      </div>
+            {dataUrl && (
+              <>
+                <button type="button" className="device-action" onClick={togglePreview}>
+                  {previewing ? <><PauseCircle size={14} /> Stop preview</> : <><PlayCircle size={14} /> Preview</>}
+                </button>
+                <button type="button" className="device-action danger" onClick={clear}>
+                  Remove file
+                </button>
+              </>
+            )}
+          </div>
+        </>
+      )}
 
       {error && <div className="error" style={{ marginTop: '0.6rem' }}>{error}</div>}
 

@@ -731,9 +731,26 @@ export class SipService {
           // WebSocket died while backgrounded. Full UA rebuild — calling
           // start() on a dead UA often leaves it stuck.
           this.reconnect();
-        } else if (!isRegistered) {
-          // Socket alive, but registration lapsed. Force a new REGISTER.
-          try { this.ua.register(); } catch (e) { console.warn('[sip] visibility register threw', e); }
+        } else {
+          // v0.10.50 — ALWAYS force a fresh REGISTER on focus, regardless
+          // of local isRegistered state. The local state can lie: Telnyx
+          // may have silently evicted our Contact while the window was
+          // idle (laptop sleep, network blip during background period),
+          // but JsSIP's last-known state still says "registered". User
+          // returns to the app expecting calls to ring, but they go
+          // straight to voicemail because Telnyx no longer routes to us.
+          // ua.register() is idempotent on Telnyx side, so re-registering
+          // an already-valid Contact has zero cost; re-registering a
+          // stale one fixes the silent-eviction case. The 491 race that
+          // motivated the v0.10.17 fix only happens when the heartbeat
+          // double-registers on every 10s tick — focus events are rare
+          // enough that the same 491 race isn't a concern.
+          try {
+            this.ua.register();
+            console.log('[sip] visibility=visible — forced register (defensive against stale Telnyx Contact)');
+          } catch (e) {
+            console.warn('[sip] visibility register threw', e);
+          }
         }
       } catch (e) {
         console.warn('[sip] visibility handler error', e);
