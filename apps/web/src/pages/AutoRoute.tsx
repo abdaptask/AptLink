@@ -49,6 +49,22 @@ export default function AutoRoute({ action }: AutoRouteProps) {
       return;
     }
 
+    // v0.10.67 — If we're ALREADY inside the Electron desktop app, skip
+    // the protocol launch entirely. Trying ace-dialer:// from inside
+    // Electron either does nothing (if the protocol handler defers to
+    // the running instance) or bounces the user out to a "no handler"
+    // browser dialog. Just navigate directly to the destination route
+    // inside this same Electron window.
+    const inElectron = typeof window !== 'undefined' && !!(window as { ace?: unknown }).ace;
+    if (inElectron) {
+      const webRoute =
+        action === 'call'
+          ? `/keypad?to=${encodeURIComponent(to)}`
+          : `/messages?to=${encodeURIComponent(to)}`;
+      navigate(webRoute, { replace: true });
+      return;
+    }
+
     // v0.10.6 — switched from a hidden-iframe protocol launch to
     // window.location.href. Modern Chrome / Edge block iframe-driven
     // custom-protocol launches as a silent-redirect security measure,
@@ -75,13 +91,19 @@ export default function AutoRoute({ action }: AutoRouteProps) {
     }
     setProtocolTried(true);
 
+    // v0.10.67 — Lengthened the fallback from 3s to 8s. On Windows,
+    // Edge's "Open ACE Dialer?" dialog stays up indefinitely waiting
+    // for the user to click. 3s was too short — the page navigated to
+    // the web fallback BEFORE the user finished clicking "Allow", so
+    // they ended up in the web app even though they wanted desktop.
+    // 8s gives a comfortable window to interact with the prompt.
     const timer = setTimeout(() => {
       const webRoute =
         action === 'call'
           ? `/keypad?to=${encodeURIComponent(to)}`
           : `/messages?to=${encodeURIComponent(to)}`;
       navigate(webRoute, { replace: true });
-    }, 3000);
+    }, 8000);
 
     return () => clearTimeout(timer);
   }, [to, action, navigate]);

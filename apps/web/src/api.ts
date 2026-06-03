@@ -1765,6 +1765,11 @@ export interface MigrateFromPulseInput {
   // Accepts E.164, 11-digit, 10-digit US, or formatted strings — server
   // normalizes to E.164.
   didOverride?: string;
+  // v0.10.64 — Country for Telnyx anchorsite selection.
+  // 'IN' → Chennai (low latency for the 95% India team)
+  // anything else → 'Latency' (Telnyx picks per-call)
+  // Default 'IN' if omitted by the client.
+  country?: string;
 }
 export interface MigrateFromPulseResult {
   ok: boolean;

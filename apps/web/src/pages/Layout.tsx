@@ -104,10 +104,17 @@ export default function Layout({ user, onLogout }: Props) {
     // Also refresh when any tab visit event fires (clears the badge instantly).
     const onTabVisit = () => { void refresh(); };
     window.addEventListener('ace:tabVisited', onTabVisit);
+    // v0.10.67 — Also refresh when any page fires
+    // `ace:unreadCountChanged` (e.g. voicemail listened, SMS thread opened
+    // and marked read). Without this, the badge could lag up to 15s
+    // behind reality and users complained that even after listening to
+    // a voicemail it still showed unread.
+    window.addEventListener('ace:unreadCountChanged', onTabVisit);
     return () => {
       cancelled = true;
       window.clearInterval(id);
       window.removeEventListener('ace:tabVisited', onTabVisit);
+      window.removeEventListener('ace:unreadCountChanged', onTabVisit);
     };
   }, []);
 

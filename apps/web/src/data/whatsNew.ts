@@ -24,6 +24,16 @@ export interface ReleaseEntry {
 
 export const WHATS_NEW: ReleaseEntry[] = [
   {
+    version: '0.10.67',
+    date: 'June 3, 2026',
+    highlight: 'Telnyx auto-config for new users + Teams deep-link to desktop + faster unread badge refresh',
+    changes: [
+      { type: 'new', text: 'Every new or migrated user now automatically gets the standard ACE Telnyx configuration applied to their Credential Connection and DID — no more manual setup in the Telnyx Portal. Anchor site picked by country (India → Chennai, US/Other → latency-optimized). DID defaults: HD voice enabled, CNAM listing enabled with caller ID name "ApTask", voicemail enabled with PIN 12345. The Migrate from Pulse modal has a new "Country" dropdown so the right anchor site is applied per user. All settings beyond anchor come from your master template Connection in Telnyx — set its ID via the existing TELNYX_TEMPLATE_CONNECTION_ID env var.' },
+      { type: 'fixed', text: 'Teams notification Reply / Call buttons now correctly deep-link into the desktop ACE Dialer instead of dumping you to the web. If you\'re already running ACE inside Electron, the redirect skips the protocol-launch step entirely and just navigates inside the same window. The browser-side fallback timeout extended from 3s to 8s so the "Open ACE Dialer?" prompt has time to be clicked.' },
+      { type: 'fixed', text: 'Unread badges (Messages, Voicemail) now clear immediately when you read an SMS thread or listen to a voicemail. Previously the bottom-nav badge stayed at the pre-action count for up to 15 seconds (the next poll interval). Now a custom event fires the moment the read/listen action persists, and the badge refreshes instantly.' },
+    ],
+  },
+  {
     version: '0.10.66',
     date: 'June 3, 2026',
     highlight: 'Multi-number favorites — Cell / Home / Work / Other per contact',

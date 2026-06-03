@@ -395,9 +395,17 @@ function ThreadDetail({ number, onBack }: ThreadDetailProps) {
     markThreadVisited(number);
     const token = sessionStorage.getItem('ace_token');
     if (token) {
-      void markThreadRead(token, number).catch((e) => {
-        console.warn('[messages] markThreadRead failed', e);
-      });
+      void markThreadRead(token, number)
+        .then(() => {
+          // v0.10.67 — Refresh the Layout badge counter immediately.
+          // Without this, opening a thread marks it read server-side but
+          // the bottom-nav "Messages" badge stays at the old count for
+          // up to 15 seconds (the next badge-poll tick).
+          window.dispatchEvent(new CustomEvent('ace:unreadCountChanged'));
+        })
+        .catch((e) => {
+          console.warn('[messages] markThreadRead failed', e);
+        });
     }
   }, [number, messages.length]);
   const [loading, setLoading] = useState(true);

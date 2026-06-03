@@ -205,6 +205,11 @@ export default function Voicemail() {
         setItems((prev) =>
           prev.map((p) => (p.id === vm.id ? { ...p, listenedAt: new Date().toISOString() } : p)),
         );
+        // v0.10.67 — Poke the Layout badge counter to refresh immediately
+        // instead of waiting for the 15s interval. Without this, the user
+        // sees the voicemail expand and start playing but the bottom-nav
+        // badge stays at the pre-listen count for up to 15 seconds.
+        window.dispatchEvent(new CustomEvent('ace:unreadCountChanged'));
       } catch {
         /* ignore */
       }
@@ -246,6 +251,8 @@ export default function Voicemail() {
     setSelected(new Set());
     try {
       await bulkMarkVoicemails(token, ids, listened);
+      // v0.10.67 — Refresh badge count immediately.
+      window.dispatchEvent(new CustomEvent('ace:unreadCountChanged'));
     } catch {
       /* ignore — list reloads on next poll */
     }
@@ -264,6 +271,8 @@ export default function Voicemail() {
             : p,
         ),
       );
+      // v0.10.67 — Refresh badge count immediately.
+      window.dispatchEvent(new CustomEvent('ace:unreadCountChanged'));
     } catch {
       /* ignore */
     }

@@ -23,6 +23,13 @@ import { prisma } from '@ace/db';
 import bcrypt from 'bcryptjs';
 import { config } from '../config.js';
 import * as telnyx from '../telnyx/numbers.js';
+// v0.10.64 — Per-user Telnyx defaults (anchor site, HD voice, CNAM,
+// voicemail PIN). Applied after every new Credential Connection / DID
+// assignment so admin doesn't have to remember the long list of settings.
+import {
+  applyAceConnectionDefaults,
+  applyAcePhoneNumberDefaults,
+} from '../telnyx/applyDefaults.js';
 import { sendWelcomeEmail, sendLineAssignedEmail } from '../email/sendgrid.js';
 import { sendLineAssignedCard } from '../lib/teamsNotify.js';
 import { backfillMigratedDidHistory } from '../lib/migrationBackfill.js';
@@ -120,6 +127,9 @@ const UpdateSchema = z.object({
   localPassword: z.string().min(8).max(200).nullable().optional(),
   // v0.10.60 — Per-user beta opt-in for Connection Health.
   connectionHealthBeta: z.boolean().optional(),
+  // v0.10.64 — Country for Telnyx anchorsite selection. Editable per
+  // user from the kebab menu so admin can fix it after-the-fact.
+  country: z.string().trim().max(8).nullable().optional(),
 });
 
 // Phase 5 (#189) — bulk import schema. Each row mirrors the CSV column set.
@@ -563,6 +573,10 @@ export async function adminRoutes(app: FastifyInstance) {
         unassignedDidNumber: z.string().optional(),
         isAdmin: z.boolean().optional(),
         sendEmail: z.boolean().default(true),
+        // v0.10.64 — Country for Telnyx anchorsite selection. Defaults
+        // to IN (Chennai anchor) since 95% of users are in India. US
+        // users → "Latency" routing. Admin overrides per user.
+        country: z.string().trim().min(0).max(8).optional().default('IN'),
       });
       const parsed = InviteNewSchema.safeParse(request.body);
       if (!parsed.success) {
@@ -572,6 +586,8 @@ export async function adminRoutes(app: FastifyInstance) {
         email, firstName, lastName,
         didMode, newDidAreaCode, unassignedDidNumber,
         isAdmin: makeAdmin, sendEmail,
+        // v0.10.64 — country drives anchorsite_override.
+        country,
       } = parsed.data;
 
       if (didMode === 'unassigned' && !unassignedDidNumber) {
@@ -661,6 +677,18 @@ export async function adminRoutes(app: FastifyInstance) {
         step('create Telnyx Credential Connection (fallback — no template)', true);
       }
 
+      // v0.10.64 — Apply per-user ACE connection defaults (anchorsite by
+      // country). Best-effort; non-fatal — admin can re-apply later from
+      // the per-user kebab menu.
+      const connDefaults = await applyAceConnectionDefaults(connectionId, country);
+      step(
+        connDefaults.ok
+          ? `apply ACE connection defaults (anchorsite for country=${country ?? 'IN'})`
+          : 'apply ACE connection defaults — non-fatal warning',
+        connDefaults.ok,
+        connDefaults.ok ? undefined : JSON.stringify(connDefaults.detail),
+      );
+
       // 2 + 3) Get a DID and route it to the new connection. Two paths:
       //   - 'unassigned': look up an already-owned DID, assign it (no purchase)
       //   - 'new':        search Telnyx inventory, purchase, route on order
@@ -699,7 +727,10 @@ export async function adminRoutes(app: FastifyInstance) {
         step(`purchase DID ${targetDid} (routed to new connection)`, true);
       }
 
-      // 4) Bind the DID to ACE's messaging profile so SMS works
+      // 4) Bind the DID to ACE's messaging profile so SMS works.
+      // v0.10.64 — While we're looking up the DID anyway, also apply ACE
+      // phone-number defaults (HD voice + CNAM=ApTask + voicemail+PIN).
+      // Both happen in one lookup pass.
       if (config.telnyxMessagingProfileId) {
         const lookup = await telnyx.findNumberByE164(targetDid);
         if (!lookup.ok || !lookup.data) {
@@ -714,6 +745,17 @@ export async function adminRoutes(app: FastifyInstance) {
           } else {
             step('bind DID to ACE messaging profile', false, JSON.stringify(bind.error));
           }
+          // v0.10.64 — Apply per-DID ACE defaults (HD voice + CNAM + VM).
+          const phoneDefaults = await applyAcePhoneNumberDefaults(lookup.data.id);
+          step(
+            phoneDefaults.voice.ok && phoneDefaults.voicemail.ok
+              ? 'apply ACE DID defaults (HD voice + CNAM + voicemail + PIN)'
+              : 'apply ACE DID defaults — partial/failed (non-fatal)',
+            phoneDefaults.voice.ok && phoneDefaults.voicemail.ok,
+            phoneDefaults.voice.ok && phoneDefaults.voicemail.ok
+              ? undefined
+              : `voice=${JSON.stringify(phoneDefaults.voice.detail)} voicemail=${JSON.stringify(phoneDefaults.voicemail.detail)}`,
+          );
         }
       } else {
         step('bind messaging profile', false,
@@ -771,6 +813,8 @@ export async function adminRoutes(app: FastifyInstance) {
               // Clear lastLoginAt so the "Accepted" status only triggers
               // when the recycled user actually signs in again.
               lastLoginAt: null,
+              // v0.10.64 — Persist country for future Telnyx defaults syncs.
+              country,
             },
             select: userSelect,
           })
@@ -785,6 +829,8 @@ export async function adminRoutes(app: FastifyInstance) {
               isAdmin: !!makeAdmin,
               isActive: true,
               provider: 'microsoft',
+              // v0.10.64 — country drives Telnyx anchorsite selection.
+              country,
             },
             select: userSelect,
           });
@@ -882,6 +928,8 @@ export async function adminRoutes(app: FastifyInstance) {
       set('sipUsername', target.sipUsername, parsed.data.sipUsername ?? undefined);
       // v0.10.60 — Beta opt-in toggle.
       set('connectionHealthBeta', target.connectionHealthBeta, parsed.data.connectionHealthBeta);
+      // v0.10.64 — Country tag for Telnyx anchor-site selection.
+      set('country', target.country, parsed.data.country ?? undefined);
       if (parsed.data.sipPassword !== undefined) {
         data.sipPassword = parsed.data.sipPassword;
         auditMeta.sipPassword = { changed: true };
@@ -2668,6 +2716,20 @@ export async function adminRoutes(app: FastifyInstance) {
         }
       }
 
+      // v0.10.64 — Apply per-DID ACE defaults (HD voice + CNAM + voicemail
+      // + PIN=12345). Non-fatal; admin can re-apply later if it failed.
+      const phoneDefaults = await applyAcePhoneNumberDefaults(telnyxNumberId);
+      if (!phoneDefaults.voice.ok || !phoneDefaults.voicemail.ok) {
+        request.log.warn(
+          {
+            numberId: telnyxNumberId,
+            voice: phoneDefaults.voice,
+            voicemail: phoneDefaults.voicemail,
+          },
+          '[admin.user_dids.add] applyAcePhoneNumberDefaults partial/failed',
+        );
+      }
+
       // If admin marked this as the new default, unset isDefault on all
       // existing UserDids for this user. Then insert the new row.
       if (isDefault) {
@@ -3422,6 +3484,10 @@ export async function adminRoutes(app: FastifyInstance) {
     // 10-digit US (4706168494), or with separators ((470) 616-8494).
     // Server normalizes to E.164.
     didOverride: z.string().trim().min(0).max(32).optional(),
+    // v0.10.64 — User's country, used to pick Telnyx anchorsite_override
+    // ("IN" → Chennai; everything else → "Latency"). Defaults to IN since
+    // 95% of ApTask users are in India.
+    country: z.string().trim().min(0).max(8).optional().default('IN'),
   });
   app.post(
     '/admin/users/migrate-from-pulse',
@@ -3433,7 +3499,7 @@ export async function adminRoutes(app: FastifyInstance) {
       if (!parsed.success) {
         return reply.code(400).send({ error: 'Invalid input', details: parsed.error.flatten() });
       }
-      const { pulseEmail, pulsePassword, isAdmin: makeAdmin, daysBack, didOverride } = parsed.data;
+      const { pulseEmail, pulsePassword, isAdmin: makeAdmin, daysBack, didOverride, country } = parsed.data;
       const normEmail = pulseEmail.trim().toLowerCase();
 
       const steps: Array<{ step: string; ok: boolean; error?: string }> = [];
@@ -3564,6 +3630,18 @@ export async function adminRoutes(app: FastifyInstance) {
         step('create Telnyx Credential Connection (no template)', true);
       }
 
+      // v0.10.64 — Apply per-user Telnyx connection defaults (anchorsite
+      // based on country). Best-effort; non-fatal. Log a step either way
+      // so admin can see what happened.
+      const connDefaults = await applyAceConnectionDefaults(connectionId, country);
+      step(
+        connDefaults.ok
+          ? `apply ACE connection defaults (anchorsite for country=${country ?? 'IN'})`
+          : `apply ACE connection defaults — non-fatal warning`,
+        connDefaults.ok,
+        connDefaults.ok ? undefined : JSON.stringify(connDefaults.detail),
+      );
+
       // 6) Rebind the Pulse DID to the new ACE connection
       const rebind = await telnyx.assignDidToConnection(telnyxNumberId, connectionId);
       if (!rebind.ok) {
@@ -3571,6 +3649,19 @@ export async function adminRoutes(app: FastifyInstance) {
         return reply.code(502).send({ ok: false, error: 'DID rebind failed', steps });
       }
       step(`rebind DID ${e164} from Pulse to ACE connection ${connectionId}`, true);
+
+      // v0.10.64 — Apply per-DID Telnyx defaults (HD voice, CNAM = ApTask,
+      // voicemail enabled, voicemail PIN = 12345). Best-effort; non-fatal.
+      const phoneDefaults = await applyAcePhoneNumberDefaults(telnyxNumberId);
+      step(
+        phoneDefaults.voice.ok && phoneDefaults.voicemail.ok
+          ? 'apply ACE DID defaults (HD voice + CNAM + voicemail + PIN)'
+          : 'apply ACE DID defaults — partial/failed (non-fatal)',
+        phoneDefaults.voice.ok && phoneDefaults.voicemail.ok,
+        phoneDefaults.voice.ok && phoneDefaults.voicemail.ok
+          ? undefined
+          : `voice=${JSON.stringify(phoneDefaults.voice.detail)} voicemail=${JSON.stringify(phoneDefaults.voicemail.detail)}`,
+      );
 
       // 7) Bind to ACE messaging profile (SMS routing)
       if (config.telnyxMessagingProfileId) {
@@ -3612,6 +3703,9 @@ export async function adminRoutes(app: FastifyInstance) {
               isActive: true,
               provider: 'microsoft',
               lastLoginAt: null,
+              // v0.10.64 — Persist country so future refresh-from-pulse
+              // and Telnyx config syncs use the correct anchorsite.
+              country,
             },
             select: userSelect,
           })
@@ -3625,6 +3719,8 @@ export async function adminRoutes(app: FastifyInstance) {
               isAdmin: !!makeAdmin,
               isActive: true,
               provider: 'microsoft',
+              // v0.10.64 — country drives Telnyx anchorsite selection.
+              country,
             },
             select: userSelect,
           });

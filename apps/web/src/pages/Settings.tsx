@@ -2938,6 +2938,9 @@ function MigrateFromPulseModal({
   // v0.10.58 — Optional manual DID override for cases where Pulse has stale
   // or wrong data on the user's profile. Leave blank to trust Pulse.
   const [didOverride, setDidOverride] = useState('');
+  // v0.10.64 — Country for Telnyx anchorsite selection. Default IN since
+  // 95% of ApTask users are in India.
+  const [country, setCountry] = useState<'IN' | 'US' | 'Other'>('IN');
   const [submitting, setSubmitting] = useState(false);
   const [result, setResult] = useState<MigrateFromPulseResult | null>(null);
   const bodyRef = useRef<HTMLDivElement | null>(null);
@@ -2970,6 +2973,8 @@ function MigrateFromPulseModal({
         // v0.10.58 — Only send when admin actually typed something; empty
         // string means "trust Pulse" on the server.
         didOverride: didOverride.trim() || undefined,
+        // v0.10.64 — Country drives Telnyx anchorsite (India → Chennai).
+        country,
       });
       setResult(r);
     } catch (err) {
@@ -3052,6 +3057,29 @@ function MigrateFromPulseModal({
                   Only fill this if Pulse has the wrong number on the user. When
                   provided, ACE ignores Pulse's voip_number and looks up this
                   number on Telnyx instead. Audited.
+                </span>
+              </label>
+
+              {/* v0.10.64 — Country picker. Drives Telnyx anchorsite_override
+                  on the newly-created Credential Connection. India → Chennai
+                  anchor (lowest latency for the 95% in-country); US/Other →
+                  "Latency" routing (Telnyx picks closest site per-call). */}
+              <label className="fav-modal-field" style={{ marginBottom: 8 }}>
+                <span className="fav-modal-label">Country</span>
+                <select
+                  className="fav-modal-input"
+                  value={country}
+                  onChange={(e) => setCountry(e.target.value as 'IN' | 'US' | 'Other')}
+                  disabled={submitting}
+                >
+                  <option value="IN">India (Chennai anchor)</option>
+                  <option value="US">United States (Latency)</option>
+                  <option value="Other">Other (Latency)</option>
+                </select>
+                <span className="muted small" style={{ marginTop: 4, display: 'block' }}>
+                  Picks the Telnyx anchor site closest to this user. India users
+                  get Chennai routing; everyone else uses Telnyx's latency-based
+                  per-call picker. Can be edited later from the user's row.
                 </span>
               </label>
               <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8, fontSize: '0.92rem' }}>
