@@ -4316,7 +4316,11 @@ body {
      stays consistent for short messages. */
   font-family: inherit;
   min-height: 38px;
-  max-height: 160px;
+  /* v0.10.54 — Bumped from 160px to 220px. JS auto-resize (Messages.tsx)
+     caps at 200px and toggles overflow-y. Without this CSS bump, CSS
+     was clamping the box at 160px even when a template needed 180px to
+     show fully — leaving the user scrolling inside a tiny box. */
+  max-height: 220px;
   padding: 8px 14px;
   border-radius: 18px;
   border: 1px solid rgba(255, 255, 255, 0.12);

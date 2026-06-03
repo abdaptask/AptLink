@@ -24,6 +24,15 @@ export interface ReleaseEntry {
 
 export const WHATS_NEW: ReleaseEntry[] = [
   {
+    version: '0.10.54',
+    date: 'June 3, 2026',
+    highlight: 'SMS templates feel right',
+    changes: [
+      { type: 'fixed', text: 'Picking a template now auto-fills the recruiter\'s own name into {recruiter} (was being left as the literal placeholder). Combined with {firstName} auto-fill from the contact, a cold-outreach template now reads "Hi Jean, this is Abdulla from ApTask..." the instant you pick it.' },
+      { type: 'fixed', text: 'SMS compose box now auto-grows to show the full message after picking a template. Previously the box stayed one line tall, hiding most of the content and forcing you to scroll inside a tiny strip. The box now expands to fit content up to about 9 lines, then scrolls.' },
+    ],
+  },
+  {
     version: '0.10.53',
     date: 'June 3, 2026',
     highlight: 'Admin visibility into blocked numbers + override',
