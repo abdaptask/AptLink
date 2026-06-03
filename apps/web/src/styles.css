@@ -1064,8 +1064,23 @@ body {
   padding: 1rem 1.5rem 2rem;
   display: flex;
   flex-direction: column;
-  justify-content: flex-end;
+  /* v0.10.73 — Switched from justify-content:flex-end to flex-start,
+     and moved the bottom-stick behavior onto the dial-action row via
+     margin-top:auto. Reason: flex-end on a too-short container caused
+     the FIRST children (number-input + 1-2-3 keypad row) to overflow
+     ABOVE the visible area and get clipped (no scroll). flex-start
+     means content stacks from the top down — number input always
+     visible, keypad always visible, dial button still hugs the bottom
+     on tall viewports via .dialpad-actions { margin-top: auto }.
+     Verified at 480px viewport (125% scaling on minHeight=600 from
+     pre-v0.10.73 builds, where Roshni was). */
+  justify-content: flex-start;
   min-height: 100%;
+  /* Belt-and-suspenders: if content STILL exceeds the viewport (e.g.
+     a user has DPI scaling cranked to 150%+ AND window dragged tiny),
+     scroll instead of clip. Internal scrolling on the dialpad container
+     itself rather than the page body, so the bottom-nav stays in place. */
+  overflow-y: auto;
 }
 /* ============ DIALPAD TOP STRIP (hint + status) ============ */
 .dialpad-top {
@@ -1187,6 +1202,13 @@ body {
   justify-items: center;
   padding-top: 1.5rem;
   align-items: center;
+  /* v0.10.73 — Push to the bottom of the dialpad container when there's
+     extra room (so the dial button visually anchors at the bottom on
+     tall viewports — matches the look that the old justify-content:flex-end
+     on .dialpad gave us). When the dialpad is SHORTER than its content,
+     this stops being effective and the actions naturally follow the
+     content stack, with the user able to scroll. Best of both. */
+  margin-top: auto;
 }
 .call-btn {
   background: #34c759;

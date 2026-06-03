@@ -131,8 +131,17 @@ function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
+    // v0.10.73 — Bumped minWidth/minHeight to ensure the dialpad fits at
+    // common Windows DPI scalings. At 125% scaling (very common on
+    // 1920×1080 laptops), the previous minHeight=600 gave CSS only ~480px
+    // of vertical space — not enough for the full keypad. The top row
+    // (1-2-3 + number input) was clipping off the visible area in
+    // Roshni's case. New values give ~640 CSS pixels at 125% which fits
+    // the keypad comfortably; the new in-app overflow:auto on .dialpad
+    // is the belt-and-suspenders fallback when the user still drags the
+    // window smaller than this.
     minWidth: 900,
-    minHeight: 600,
+    minHeight: 800,
     title: 'ACE Dialer',
     backgroundColor: '#000',
     show: false,
