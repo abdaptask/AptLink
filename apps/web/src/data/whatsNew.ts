@@ -24,6 +24,16 @@ export interface ReleaseEntry {
 
 export const WHATS_NEW: ReleaseEntry[] = [
   {
+    version: '0.10.73',
+    date: 'June 3, 2026',
+    highlight: 'Dialer no longer clips at small window sizes / 125% DPI scaling',
+    changes: [
+      { type: 'fixed', text: 'On smaller Electron windows (especially at 125%+ Windows DPI scaling — common on 1920×1080 laptops), the dialpad\'s "1 2 3" row and number input were getting clipped off the top of the visible area. The layout used bottom-anchored flex with no overflow handling, so when content exceeded the viewport, the FIRST children overflowed UP and got hidden. Switched to top-anchored stacking with the dial button held to the bottom via margin-top:auto — visually identical on tall viewports, content stays visible on short ones.' },
+      { type: 'fixed', text: 'Added internal scrolling on the dialpad container as a fallback for users with very small windows or extreme DPI scaling (150%+) where even the new layout overflows.' },
+      { type: 'improved', text: 'Desktop app minimum window height bumped from 600 to 800 pixels. At 125% Windows DPI scaling this gives ~640 CSS pixels of usable space — enough for the full keypad to render comfortably. Users can no longer drag the window smaller than what works.' },
+    ],
+  },
+  {
     version: '0.10.72',
     date: 'June 3, 2026',
     highlight: 'Friendly explanations when SMS send fails',
