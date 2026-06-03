@@ -55,23 +55,24 @@ const EMOJI_OPTIONS = [
 ];
 
 function formatRelative(iso: string): string {
+  // v0.10.55 — Always include time-of-day so users can scan when each SMS
+  // landed, not just which day. See Recents.tsx for full rationale.
   const date = new Date(iso);
   const now = new Date();
+  const timeStr = date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
   const sameDay =
     date.getFullYear() === now.getFullYear() &&
     date.getMonth() === now.getMonth() &&
     date.getDate() === now.getDate();
-  if (sameDay) {
-    return date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-  }
+  if (sameDay) return timeStr;
   const yesterday = new Date(now);
   yesterday.setDate(now.getDate() - 1);
   const isYesterday =
     date.getFullYear() === yesterday.getFullYear() &&
     date.getMonth() === yesterday.getMonth() &&
     date.getDate() === yesterday.getDate();
-  if (isYesterday) return 'Yesterday';
-  return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
+  if (isYesterday) return `Yesterday, ${timeStr}`;
+  return `${date.toLocaleDateString([], { month: 'short', day: 'numeric' })}, ${timeStr}`;
 }
 
 // v0.10.13 — Discriminated row type for the unified list. SMS rows
@@ -593,6 +594,43 @@ function ThreadDetail({ number, onBack }: ThreadDetailProps) {
     }
   };
 
+  // v0.10.55 — Paste-to-attach for MMS.
+  // When the user copies an image (screenshot, Snipping Tool, drag from
+  // browser, etc.) and pastes into the compose box, intercept the paste,
+  // upload each image item via the same uploadMedia flow the file-picker
+  // uses, and append to the attached list. Non-image clipboard content
+  // (plain text, formatted text) falls through to default browser paste
+  // behavior so typing "Ctrl+V some pasted text" still works.
+  const handlePaste = async (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const items = e.clipboardData?.items;
+    if (!items || items.length === 0) return;
+    const imageFiles: File[] = [];
+    for (let i = 0; i < items.length; i += 1) {
+      const it = items[i];
+      if (it.kind === 'file' && it.type.startsWith('image/')) {
+        const f = it.getAsFile();
+        if (f) imageFiles.push(f);
+      }
+    }
+    if (imageFiles.length === 0) return; // not an image paste — let default fire
+    e.preventDefault();
+    const token = sessionStorage.getItem('ace_token');
+    if (!token) return;
+    setUploading(true);
+    try {
+      for (const file of imageFiles) {
+        // Some browsers give pasted images a name of "image.png" without an
+        // extension at all; uploadMedia + the API are tolerant of that.
+        const { url } = await uploadMedia(token, file);
+        setAttached((a) => [...a, url]);
+      }
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setUploading(false);
+    }
+  };
+
   return (
     <div className="thread-detail">
       <div className="thread-header">
@@ -909,6 +947,7 @@ function ThreadDetail({ number, onBack }: ThreadDetailProps) {
           value={draft}
           rows={1}
           onChange={(e) => setDraft(e.target.value)}
+          onPaste={(e) => void handlePaste(e)}
           onKeyDown={(e) => {
             if (e.key === 'Enter' && !e.shiftKey) {
               e.preventDefault();

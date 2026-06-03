@@ -43,16 +43,25 @@ function formatNumber(raw: string): string {
 }
 
 function formatTime(iso: string): string {
+  // v0.10.55 — Always show time-of-day. Yesterday and older dates were
+  // dropping the time, which made it impossible to tell when a voicemail
+  // actually came in. See Recents.tsx for the full pattern.
   const date = new Date(iso);
   const now = new Date();
+  const timeStr = date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
   const sameDay =
     date.getFullYear() === now.getFullYear() &&
     date.getMonth() === now.getMonth() &&
     date.getDate() === now.getDate();
-  if (sameDay) {
-    return date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-  }
-  return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
+  if (sameDay) return timeStr;
+  const yesterday = new Date(now);
+  yesterday.setDate(now.getDate() - 1);
+  const isYesterday =
+    date.getFullYear() === yesterday.getFullYear() &&
+    date.getMonth() === yesterday.getMonth() &&
+    date.getDate() === yesterday.getDate();
+  if (isYesterday) return `Yesterday, ${timeStr}`;
+  return `${date.toLocaleDateString([], { month: 'short', day: 'numeric' })}, ${timeStr}`;
 }
 
 export default function Voicemail() {

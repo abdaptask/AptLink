@@ -4,6 +4,7 @@
 // plus a chronological timeline when the user wants to drill in.
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { prisma } from '@ace/db';
+import { dedupeCallLegs } from '../calls/calls.routes.js';
 
 interface JwtPayload {
   sub: number;
@@ -58,12 +59,17 @@ export async function contactsRoutes(app: FastifyInstance) {
     const messages = allMessages
       .filter((m) => last10Digits(m.threadKey) === want)
       .slice(0, limit);
-    const calls = allCalls
-      .filter((c) => {
-        const other = c.direction === 'inbound' ? c.fromNumber : c.toNumber;
-        return last10Digits(other ?? '') === want;
-      })
-      .slice(0, limit);
+    // v0.10.55 — Collapse Telnyx Leg A + Leg B into one row per physical call.
+    // Telnyx fires webhooks on BOTH legs of a single call (client SIP leg and
+    // PSTN destination leg) — each with its own call_control_id, so naive
+    // findMany returns 2 rows per call. The /calls Recents endpoint already
+    // ran rows through dedupeCallLegs; the contact-history modal was missing
+    // that step and showed 6 rows for 3 calls. Apply the same dedup here.
+    const callsRaw = allCalls.filter((c) => {
+      const other = c.direction === 'inbound' ? c.fromNumber : c.toNumber;
+      return last10Digits(other ?? '') === want;
+    });
+    const calls = dedupeCallLegs(callsRaw).slice(0, limit);
     const voicemails = allVoicemails
       .filter((v) => last10Digits(v.fromNumber) === want)
       .slice(0, limit);

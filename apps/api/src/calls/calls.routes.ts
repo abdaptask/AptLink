@@ -100,7 +100,7 @@ function pickBetter<T extends {
 //      startedAt within 60s of each other. This catches the SDK-side
 //      renderer ghost row that has no sessionId yet AND any Telnyx leg that
 //      got assigned a different sessionId.
-function dedupeCallLegs<T extends {
+export function dedupeCallLegs<T extends {
   sessionId?: string | null;
   status?: string | null;
   startedAt?: Date | string | null;

@@ -20,23 +20,28 @@ function formatNumber(raw: string): string {
 }
 
 function formatTime(iso: string): string {
+  // v0.10.55 — Always include time-of-day so users can tell WHEN a call/SMS/VM
+  // landed, not just which day. Previously "Yesterday" and "Jun 1" carried no
+  // time, which made it impossible to scan recents for the latest activity.
+  // Today  → "9:37 AM"
+  // Y'day  → "Yesterday, 9:37 AM"
+  // Older  → "Jun 1, 9:37 AM"
   const date = new Date(iso);
   const now = new Date();
+  const timeStr = date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
   const sameDay =
     date.getFullYear() === now.getFullYear() &&
     date.getMonth() === now.getMonth() &&
     date.getDate() === now.getDate();
-  if (sameDay) {
-    return date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-  }
+  if (sameDay) return timeStr;
   const yesterday = new Date(now);
   yesterday.setDate(now.getDate() - 1);
   const isYesterday =
     date.getFullYear() === yesterday.getFullYear() &&
     date.getMonth() === yesterday.getMonth() &&
     date.getDate() === yesterday.getDate();
-  if (isYesterday) return 'Yesterday';
-  return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
+  if (isYesterday) return `Yesterday, ${timeStr}`;
+  return `${date.toLocaleDateString([], { month: 'short', day: 'numeric' })}, ${timeStr}`;
 }
 
 function isMissed(c: CallRecord): boolean {

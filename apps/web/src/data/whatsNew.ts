@@ -24,6 +24,16 @@ export interface ReleaseEntry {
 
 export const WHATS_NEW: ReleaseEntry[] = [
   {
+    version: '0.10.55',
+    date: 'June 3, 2026',
+    highlight: 'Cleaner call history + paste-to-send images + timestamps everywhere',
+    changes: [
+      { type: 'fixed', text: 'Interaction history modal no longer shows duplicate rows for the same call. A single call could appear as two entries (one labeled "originator_cancel" and one "Canceled", or two rows with slightly different durations) because Telnyx fires events for both legs of a call. Recents already collapsed these — the per-contact history modal was missing the same step.' },
+      { type: 'new', text: 'Paste an image directly into the message box to send as MMS. Copy a screenshot (Snipping Tool, Print Screen, Cmd+Shift+4, drag from another window), click into a thread, press Ctrl+V (or ⌘+V), and the image uploads as an attachment without you needing to save it to disk first. Plain text paste still works as before.' },
+      { type: 'improved', text: 'Recents, Messages, Voicemail, and Chat rows now show the time-of-day on every row, not just on rows from today. "Yesterday" becomes "Yesterday, 9:37 AM"; "Jun 1" becomes "Jun 1, 9:37 AM". You can scan when each call/SMS/voicemail actually landed.' },
+    ],
+  },
+  {
     version: '0.10.54',
     date: 'June 3, 2026',
     highlight: 'SMS templates feel right',
