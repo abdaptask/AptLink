@@ -24,6 +24,16 @@ export interface ReleaseEntry {
 
 export const WHATS_NEW: ReleaseEntry[] = [
   {
+    version: '0.10.76',
+    date: 'June 3, 2026',
+    highlight: 'Admin can upload custom ringtones — replaces the built-in beeps',
+    changes: [
+      { type: 'new', text: 'Settings → Admin → Ringtones lets admin upload audio files (MP3 / WAV) for the whole tenant. Each ringtone gets a name. Every user sees the full library in Settings → Personal → Ringtone above the built-in synthesized options. Pick "Office" or "Phone Booth" or whatever you upload — sounds far better than the built-in beeps.' },
+      { type: 'new', text: 'Admin can rename, hide (soft-delete), or fully delete uploads. Hiding keeps the audio in the DB but removes from user picker; useful for seasonal ringtones. Hard delete removes entirely; anyone currently using that ringtone falls back to the default.' },
+      { type: 'improved', text: 'Cap: 400KB per audio file (covers a 5-10 second MP3 at typical bitrate). Audio is stored as base64 in Postgres — same pattern as Hold Music. Every user warms the local cache at login so an incoming call plays the right uploaded sound instantly, no network round-trip.' },
+    ],
+  },
+  {
     version: '0.10.75',
     date: 'June 3, 2026',
     highlight: 'Pick your own ringtone',

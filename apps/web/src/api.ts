@@ -1611,6 +1611,75 @@ export async function seedSmsTemplateDefaults(token: string): Promise<{ ok: bool
   return body as { ok: boolean; inserted: number; skipped: number };
 }
 
+// v0.10.76 — Admin-uploaded ringtones (tenant-wide library).
+export interface UploadedRingtone {
+  id: number;
+  name: string;
+  dataUrl: string;
+  sortOrder: number;
+  isActive?: boolean;
+  uploadedBy?: number | null;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export async function listMyRingtones(token: string): Promise<UploadedRingtone[]> {
+  const res = await fetch(`${API_URL}/me/ringtones`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) return [];
+  const json = (await res.json()) as { ringtones?: UploadedRingtone[] };
+  return json.ringtones ?? [];
+}
+
+export async function listAdminRingtones(token: string): Promise<UploadedRingtone[]> {
+  const res = await fetch(`${API_URL}/admin/ringtones`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) return [];
+  const json = (await res.json()) as { ringtones?: UploadedRingtone[] };
+  return json.ringtones ?? [];
+}
+
+export async function createRingtone(
+  token: string,
+  input: { name: string; dataUrl: string; sortOrder?: number },
+): Promise<UploadedRingtone | { error: string }> {
+  const res = await fetch(`${API_URL}/admin/ringtones`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify(input),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) return { error: (body as { error?: string }).error ?? `HTTP ${res.status}` };
+  return body as UploadedRingtone;
+}
+
+export async function updateRingtone(
+  token: string,
+  id: number,
+  input: { name?: string; sortOrder?: number; isActive?: boolean },
+): Promise<UploadedRingtone | { error: string }> {
+  const res = await fetch(`${API_URL}/admin/ringtones/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify(input),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) return { error: (body as { error?: string }).error ?? `HTTP ${res.status}` };
+  return body as UploadedRingtone;
+}
+
+export async function deleteRingtone(token: string, id: number): Promise<{ ok: boolean; error?: string }> {
+  const res = await fetch(`${API_URL}/admin/ringtones/${id}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) return { ok: false, error: (body as { error?: string }).error ?? `HTTP ${res.status}` };
+  return body as { ok: boolean };
+}
+
 // v0.10.74 — Admin Praise / Announcements.
 export type PraiseCategory = 'new_hire' | 'new_offer' | 'birthday' | 'anniversary' | 'custom';
 

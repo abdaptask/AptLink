@@ -94,6 +94,13 @@ import {
   createPraise,
   deletePraise,
   type Praise,
+  // v0.10.76 — Admin-uploaded ringtones.
+  listMyRingtones,
+  listAdminRingtones,
+  createRingtone,
+  updateRingtone,
+  deleteRingtone,
+  type UploadedRingtone,
   listUnassignedTelnyxNumbers,
   type InviteNewUserResult,
   type UnassignedTelnyxNumber,
@@ -216,6 +223,8 @@ const SECTIONS: SectionDef[] = [
   { key: 'sms-templates', category: 'Admin', label: 'SMS templates', icon: MessageSquare, blurb: 'Curate the recruiter SMS playbook for all users', Component: SmsTemplatesAdminSection, adminOnly: true },
   // v0.10.74 — Admin Praise / Announcements.
   { key: 'praise', category: 'Admin', label: 'Send praise', icon: Sparkles, blurb: 'Celebrate a new hire, offer, birthday, anniversary — one user or broadcast', Component: PraiseAdminSection, adminOnly: true },
+  // v0.10.76 — Admin-uploaded ringtones (tenant-wide library).
+  { key: 'ringtones-admin', category: 'Admin', label: 'Ringtones', icon: Bell, blurb: 'Upload custom ringtones — every user can pick from the list', Component: RingtonesAdminSection, adminOnly: true },
   // v0.10.51 — Admin view of all users' blocked numbers + override.
   { key: 'blocked-admin', category: 'Admin', label: 'Blocked numbers (all users)', icon: ShieldOff, blurb: 'See who blocked which numbers and why; override blocks', Component: BlockedNumbersAdminSection, adminOnly: true },
   // v0.10.63 — Pending Users section removed. The bulk-stage-then-invite
@@ -1494,8 +1503,22 @@ function RingtoneSection() {
   const [previewing, setPreviewing] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // v0.10.76 — Admin-uploaded ringtones, shown at top of picker.
+  const [uploaded, setUploaded] = useState<UploadedRingtone[]>([]);
 
   const presets = getRingtonePresets();
+
+  useEffect(() => {
+    const token = sessionStorage.getItem('ace_token');
+    if (!token) return;
+    void listMyRingtones(token).then((rows) => {
+      setUploaded(rows);
+      // Re-warm the cache for any rows that landed.
+      for (const r of rows) {
+        sessionStorage.setItem(`ace_uploaded_ringtone_${r.id}`, r.dataUrl);
+      }
+    });
+  }, []);
 
   function preview(slug: string) {
     // Stop whatever's playing first.
@@ -1503,7 +1526,7 @@ function RingtoneSection() {
     setPreviewing(slug);
     // Play ~3 seconds then auto-stop. Most ringtones complete one or
     // two cycles in that window so user hears the cadence.
-    ringtone.start(slug as RingtoneSlug, 3500);
+    ringtone.start(slug, 3500);
     window.setTimeout(() => {
       setPreviewing((p) => (p === slug ? null : p));
     }, 3600);
@@ -1531,9 +1554,48 @@ function RingtoneSection() {
     <div className="settings-section">
       <p className="settings-blurb">
         Pick the sound that plays when someone calls you. The choice follows
-        your account across devices — sign in on a different machine and it
-        comes with you.
+        your account across devices.
       </p>
+
+      {uploaded.length > 0 && (
+        <>
+          <h4 style={{ marginTop: 4, marginBottom: 8, fontSize: '0.85rem', textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--text-muted)' }}>
+            Admin uploads
+          </h4>
+          <ul className="ringtone-list">
+            {uploaded.map((r) => {
+              const slug = `upload:${r.id}`;
+              return (
+                <li key={r.id} className={`ringtone-row${selected === slug ? ' selected' : ''}`}>
+                  <label className="ringtone-pick">
+                    <input
+                      type="radio"
+                      name="ringtone"
+                      value={slug}
+                      checked={selected === slug}
+                      onChange={() => void handleSelect(slug)}
+                    />
+                    <span className="ringtone-name">{r.name}</span>
+                    <span className="ringtone-hint muted">Uploaded</span>
+                  </label>
+                  <button
+                    type="button"
+                    className="device-action"
+                    onClick={() => preview(slug)}
+                    aria-label={`Preview ${r.name} ringtone`}
+                  >
+                    {previewing === slug ? '◼ Stop' : '▶ Play'}
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        </>
+      )}
+
+      <h4 style={{ marginTop: uploaded.length > 0 ? 18 : 4, marginBottom: 8, fontSize: '0.85rem', textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--text-muted)' }}>
+        Built-in
+      </h4>
       <ul className="ringtone-list">
         {presets.map((p) => (
           <li key={p.slug} className={`ringtone-row${selected === p.slug ? ' selected' : ''}`}>
@@ -5912,6 +5974,210 @@ function SmsTemplateEditModal({
 // messages where the subject is external to ACE), write the body, send.
 // History list below shows the last 100 praises this admin has sent
 // with delete affordance per row.
+// v0.10.76 — Admin Ringtones library section.
+//
+// Mirror of HoldMusicSection's upload pattern, but for a LIST of files
+// instead of one. Admin picks an audio file, gives it a name, hits
+// Upload — backend stores base64 in Ringtone.dataUrl. The full list
+// renders below with rename / preview / activate-toggle / delete
+// affordances per row.
+function RingtonesAdminSection() {
+  const [list, setList] = useState<UploadedRingtone[]>([]);
+  const [name, setName] = useState('');
+  const [file, setFile] = useState<File | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [okMsg, setOkMsg] = useState<string | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+  const previewAudioRef = useRef<HTMLAudioElement | null>(null);
+  const [previewingId, setPreviewingId] = useState<number | null>(null);
+
+  function refresh() {
+    const token = sessionStorage.getItem('ace_token');
+    if (!token) return;
+    void listAdminRingtones(token).then(setList);
+  }
+  useEffect(refresh, []);
+
+  async function fileToDataUrl(f: File): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as string);
+      reader.onerror = () => reject(reader.error);
+      reader.readAsDataURL(f);
+    });
+  }
+
+  async function handleUpload() {
+    setError(null);
+    setOkMsg(null);
+    if (!file) { setError('Pick an audio file first.'); return; }
+    if (!name.trim()) { setError('Give this ringtone a name (e.g. "Office", "Phone Booth").'); return; }
+    // Reject anything >400KB raw; base64 will inflate ~33% to ~530KB.
+    if (file.size > 400_000) {
+      setError(`File is ${Math.round(file.size / 1024)}KB — please use a shorter or more compressed clip (under 400KB raw).`);
+      return;
+    }
+    const token = sessionStorage.getItem('ace_token');
+    if (!token) return;
+    setUploading(true);
+    try {
+      const dataUrl = await fileToDataUrl(file);
+      const r = await createRingtone(token, { name: name.trim(), dataUrl });
+      if ('error' in r) {
+        setError(r.error);
+      } else {
+        setOkMsg(`"${r.name}" uploaded. Every user can pick it from their Settings → Personal → Ringtone.`);
+        setName('');
+        setFile(null);
+        if (fileRef.current) fileRef.current.value = '';
+        refresh();
+      }
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  function preview(r: UploadedRingtone) {
+    // Stop any current preview.
+    if (previewAudioRef.current) {
+      try { previewAudioRef.current.pause(); } catch { /* noop */ }
+      previewAudioRef.current = null;
+    }
+    if (previewingId === r.id) {
+      setPreviewingId(null);
+      return;
+    }
+    const audio = new Audio(r.dataUrl);
+    audio.loop = false;
+    previewAudioRef.current = audio;
+    setPreviewingId(r.id);
+    audio.onended = () => setPreviewingId((p) => (p === r.id ? null : p));
+    void audio.play().catch((e) => {
+      setError(`Preview failed: ${e.message}`);
+      setPreviewingId(null);
+    });
+  }
+
+  async function handleRename(id: number, current: string) {
+    const next = prompt('Rename ringtone:', current);
+    if (next === null) return;
+    const trimmed = next.trim();
+    if (!trimmed || trimmed === current) return;
+    const token = sessionStorage.getItem('ace_token');
+    if (!token) return;
+    const r = await updateRingtone(token, id, { name: trimmed });
+    if ('error' in r) alert(`Rename failed: ${r.error}`);
+    else refresh();
+  }
+
+  async function handleToggle(id: number, makeActive: boolean) {
+    const token = sessionStorage.getItem('ace_token');
+    if (!token) return;
+    const r = await updateRingtone(token, id, { isActive: makeActive });
+    if ('error' in r) alert(`Toggle failed: ${r.error}`);
+    else refresh();
+  }
+
+  async function handleDelete(id: number, label: string) {
+    if (!confirm(`Delete "${label}"? Anyone currently using it falls back to the default ring.`)) return;
+    const token = sessionStorage.getItem('ace_token');
+    if (!token) return;
+    const r = await deleteRingtone(token, id);
+    if (!r.ok) alert(`Delete failed: ${r.error}`);
+    else refresh();
+  }
+
+  return (
+    <div className="settings-section">
+      <p className="settings-blurb">
+        Upload custom ringtones for everyone in the tenant. Each user picks
+        their favorite from Settings → Personal → Ringtone. Short MP3 or
+        WAV clips work best — keep them under 400KB (a 5-10 second clip
+        at typical MP3 bitrates).
+      </p>
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 16, maxWidth: 520 }}>
+        <label className="fav-modal-field">
+          <span className="fav-modal-label">Name</span>
+          <input
+            type="text"
+            className="fav-modal-input"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder='e.g. "Office", "Phone Booth", "Doorbell"'
+            disabled={uploading}
+          />
+        </label>
+        <label className="fav-modal-field">
+          <span className="fav-modal-label">Audio file</span>
+          <input
+            ref={fileRef}
+            type="file"
+            accept="audio/*"
+            onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+            disabled={uploading}
+          />
+          {file && (
+            <span className="muted small" style={{ marginTop: 4, display: 'block' }}>
+              {file.name} ({Math.round(file.size / 1024)}KB)
+            </span>
+          )}
+        </label>
+        {error && <p className="error small">{error}</p>}
+        {okMsg && <p className="muted small" style={{ color: '#34c759' }}>{okMsg}</p>}
+        <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+          <button
+            type="button"
+            className="device-action primary"
+            onClick={handleUpload}
+            disabled={uploading || !file || !name.trim()}
+          >
+            {uploading ? 'Uploading…' : 'Upload ringtone'}
+          </button>
+        </div>
+      </div>
+
+      {list.length > 0 && (
+        <>
+          <h4 style={{ marginBottom: 8 }}>Library ({list.length})</h4>
+          <ul className="ringtone-list">
+            {list.map((r) => (
+              <li key={r.id} className="ringtone-row" style={{ opacity: r.isActive === false ? 0.55 : 1 }}>
+                <div className="ringtone-pick" style={{ cursor: 'default' }}>
+                  <span className="ringtone-name">
+                    {r.name}
+                    {r.isActive === false && <span className="muted small" style={{ marginLeft: 8 }}>(hidden)</span>}
+                  </span>
+                  <span className="ringtone-hint muted">
+                    {Math.round(r.dataUrl.length / 1024)}KB · sort {r.sortOrder}
+                  </span>
+                </div>
+                <div style={{ display: 'flex', gap: 6 }}>
+                  <button type="button" className="device-action" onClick={() => preview(r)}>
+                    {previewingId === r.id ? '◼ Stop' : '▶ Play'}
+                  </button>
+                  <button type="button" className="device-action" onClick={() => handleRename(r.id, r.name)}>Rename</button>
+                  <button
+                    type="button"
+                    className="device-action"
+                    onClick={() => handleToggle(r.id, r.isActive === false)}
+                  >
+                    {r.isActive === false ? 'Show' : 'Hide'}
+                  </button>
+                  <button type="button" className="device-action" onClick={() => handleDelete(r.id, r.name)}>Delete</button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+    </div>
+  );
+}
+
 function PraiseAdminSection() {
   const [category, setCategory] = useState<PraiseCategoryUI>('new_offer');
   const [targetMode, setTargetMode] = useState<'one' | 'broadcast'>('one');

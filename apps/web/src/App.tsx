@@ -42,6 +42,32 @@ function persistSipCreds(u: User | null): void {
   // read it synchronously when an incoming call rings.
   if (u?.ringtone) sessionStorage.setItem('ace_ringtone', u.ringtone);
   else sessionStorage.removeItem('ace_ringtone');
+  // v0.10.76 — Warm the cache of admin-uploaded ringtones so the
+  // ringtone service can play 'upload:<id>' references synchronously
+  // when a call comes in. Without this, the first inbound call after
+  // login would fall back to the default preset while we round-trip
+  // to fetch the audio.
+  void (async () => {
+    try {
+      const token = sessionStorage.getItem('ace_token');
+      if (!token) return;
+      const { listMyRingtones } = await import('./api');
+      const ringtones = await listMyRingtones(token);
+      // Clear previous cache entries (different user might have had different uploads).
+      const keysToRemove: string[] = [];
+      for (let i = 0; i < sessionStorage.length; i += 1) {
+        const k = sessionStorage.key(i);
+        if (k?.startsWith('ace_uploaded_ringtone_')) keysToRemove.push(k);
+      }
+      for (const k of keysToRemove) sessionStorage.removeItem(k);
+      // Cache fresh.
+      for (const r of ringtones) {
+        sessionStorage.setItem(`ace_uploaded_ringtone_${r.id}`, r.dataUrl);
+      }
+    } catch (e) {
+      console.warn('[ringtones] warm cache failed', e);
+    }
+  })();
   // Notify SipContext so it can register against Telnyx now that the creds
   // are in sessionStorage. This kills the login-race where SipContext's
   // useEffect read empty creds and went to 'failed' before User loaded. (#212)

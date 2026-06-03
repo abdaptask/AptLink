@@ -125,20 +125,64 @@ class Ringtone {
   /** When non-null, auto-stops after this many ms (used for previews). */
   private autoStopTimer: ReturnType<typeof setTimeout> | null = null;
 
+  /** v0.10.76 — When playing an admin-uploaded ringtone instead of a
+   *  synthesized preset, we use an HTMLAudioElement. Kept separately from
+   *  the AudioContext-based synthesis path so stop() can tear down either. */
+  private audioEl: HTMLAudioElement | null = null;
+
   /**
    * Start the ringtone. Pass a slug to play that specific preset; omit to
    * use the current user's saved choice. Pass durationMs to auto-stop
    * after a given duration (for previews).
+   *
+   * v0.10.76 — `slug` can also be a literal data URL or 'upload:<id>'
+   * reference for admin-uploaded ringtones. When it's an admin upload,
+   * we use an HTMLAudioElement loop instead of the synthesis path.
+   * For 'upload:<id>' the caller must have already resolved the data URL
+   * via listMyRingtones() and stored it under
+   * sessionStorage[`ace_uploaded_ringtone_<id>`] — done at /me/ringtones
+   * fetch time so playback doesn't need a network round-trip.
    */
-  start(slug?: RingtoneSlug, durationMs?: number): void {
+  start(slug?: string, durationMs?: number): void {
     if (this.playing) this.stop();
 
     // Honour user notification prefs — silent if ringtone disabled.
     const prefs = getNotificationPrefs();
     if (!prefs.ringtone) return;
 
-    const presetSlug = slug ?? getCurrentRingtoneSlug();
-    const preset = PRESETS[presetSlug] ?? PRESETS[DEFAULT_RINGTONE];
+    const effectiveSlug = slug ?? getCurrentRingtoneSlug();
+
+    // v0.10.76 — Admin-uploaded ringtone path. Slug looks like
+    // 'upload:<id>'; we look up the cached data URL in sessionStorage,
+    // bail to the default if unavailable.
+    if (effectiveSlug.startsWith('upload:')) {
+      const id = effectiveSlug.slice('upload:'.length);
+      const dataUrl = sessionStorage.getItem(`ace_uploaded_ringtone_${id}`);
+      if (dataUrl) {
+        this.playing = true;
+        this.audioEl = new Audio(dataUrl);
+        this.audioEl.loop = true;
+        const vol = Math.max(0, Math.min(1, getNotificationPrefs().ringtoneVolume));
+        this.audioEl.volume = vol;
+        void this.audioEl.play().catch((e) => {
+          console.warn('[ringtone] uploaded play failed, falling back to default preset', e);
+          this.stop();
+          // Re-enter with the default preset as fallback.
+          this.start(DEFAULT_RINGTONE, durationMs);
+        });
+        if (typeof durationMs === 'number' && durationMs > 0) {
+          this.autoStopTimer = setTimeout(() => this.stop(), durationMs);
+        }
+        return;
+      }
+      // Cache miss — fall back to default preset. Caller should ensure
+      // listMyRingtones() has been called once on login so the cache is warm.
+      console.warn(`[ringtone] uploaded ringtone ${id} not in cache, using default`);
+    }
+
+    // Synthesized preset path.
+    const presetSlug = (PRESETS[effectiveSlug as RingtoneSlug] ? effectiveSlug : DEFAULT_RINGTONE) as RingtoneSlug;
+    const preset = PRESETS[presetSlug];
 
     this.playing = true;
 
@@ -197,6 +241,14 @@ class Ringtone {
     if (this.autoStopTimer) {
       clearTimeout(this.autoStopTimer);
       this.autoStopTimer = null;
+    }
+    // v0.10.76 — Tear down the uploaded-ringtone audio element if active.
+    if (this.audioEl) {
+      try {
+        this.audioEl.pause();
+        this.audioEl.src = '';
+      } catch { /* harmless */ }
+      this.audioEl = null;
     }
     if (this.interval) {
       clearInterval(this.interval);

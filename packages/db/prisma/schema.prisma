@@ -572,6 +572,47 @@ model SmsTemplate {
   @@map("sms_templates")
 }
 
+/// v0.10.76 — Tenant-wide library of admin-uploaded ringtones.
+///
+/// Admin uploads audio files (MP3/WAV) in Settings → Admin → Ringtones;
+/// every user sees the full active list in their per-user picker
+/// (Settings → Personal → Ringtone). The synthesized presets defined in
+/// services/ringtone.ts ('classic' / 'modern' / 'chime' / 'pulse')
+/// remain as fallbacks shown alongside any uploads.
+///
+/// Audio is stored as a base64 data URL in the `dataUrl` column. Same
+/// pattern as the v0.10.48 hold-music feature; expects short clips
+/// (~3-10s, ~50-200KB) so the embedded data stays manageable in Postgres
+/// rows and JSON payloads.
+///
+/// User.ringtone references either:
+///   - synthesized preset slug:  'classic' | 'modern' | 'chime' | 'pulse'
+///   - admin upload:             'upload:<id>'  (e.g. 'upload:7')
+/// services/ringtone.ts picks playback path based on the prefix.
+model Ringtone {
+  id          Int      @id @default(autoincrement())
+  /// Display label shown in the user picker (e.g. "Office", "Phone Booth").
+  name        String
+  /// base64 data URL — "data:audio/mpeg;base64,<payload>". Same shape the
+  /// hold-music feature uses.
+  dataUrl     String   @map("data_url")
+  /// Display order within the picker. Lower = shown first. Admin can
+  /// reorder by editing this value (UI uses 10/20/30 increments so insert
+  /// is cheap).
+  sortOrder   Int      @default(100) @map("sort_order")
+  /// Soft delete — admin can disable a ringtone without losing the audio,
+  /// hides it from the user picker but doesn't break existing User.ringtone
+  /// references (services/ringtone.ts falls back to the default preset).
+  isActive    Boolean  @default(true) @map("is_active")
+  /// User ID of the admin who uploaded it. Nullable for system seeds.
+  uploadedBy  Int?     @map("uploaded_by")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt      @map("updated_at")
+
+  @@index([isActive, sortOrder])
+  @@map("ringtones")
+}
+
 /// v0.10.74 — Admin Praise / Announcements.
 ///
 /// Admin-curated celebratory messages (new hire announcement, offer
