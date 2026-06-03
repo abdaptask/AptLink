@@ -1385,6 +1385,45 @@ export async function inviteNewUserAutoProvision(
   return body;
 }
 
+// v0.10.51 — Admin visibility into all users' blocked numbers + override.
+export interface AdminBlockedNumber {
+  id: number;
+  number: string;
+  reason: string | null;
+  createdAt: string;
+  userId: number;
+  user: {
+    id: number;
+    email: string;
+    firstName: string | null;
+    lastName: string | null;
+    isActive: boolean;
+  };
+}
+export async function listAdminBlockedNumbers(token: string): Promise<AdminBlockedNumber[]> {
+  const res = await fetch(`${API_URL}/admin/blocked-numbers`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) return [];
+  const body = (await res.json().catch(() => ({}))) as { ok?: boolean; items?: AdminBlockedNumber[] };
+  return body.items ?? [];
+}
+export async function adminRemoveBlockedNumber(token: string, id: number): Promise<{ ok: boolean; error?: string }> {
+  const res = await fetch(`${API_URL}/admin/blocked-numbers/${id}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    return {
+      ok: false,
+      error: typeof body === 'object' && 'error' in body
+        ? String((body as { error: unknown }).error) : `HTTP ${res.status}`,
+    };
+  }
+  return body as { ok: boolean };
+}
+
 // v0.10.52 — Tenant SMS templates.
 export interface SmsTemplate {
   id: number;

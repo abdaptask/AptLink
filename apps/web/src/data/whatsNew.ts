@@ -24,6 +24,15 @@ export interface ReleaseEntry {
 
 export const WHATS_NEW: ReleaseEntry[] = [
   {
+    version: '0.10.53',
+    date: 'June 3, 2026',
+    highlight: 'Admin visibility into blocked numbers + override',
+    changes: [
+      { type: 'new', text: 'Settings → Blocked numbers (all users) (admin only). One screen showing every block created by every user on the team, the reason they gave, when, and which user. Searchable by user / number / reason. Click "Override" on any row to remove a block on a user\'s behalf — the action is recorded in the audit log.' },
+      { type: 'improved', text: 'The Blocked numbers page (for regular users) now reminds users to add a reason: "Your admin can see every block on the team and may need context." Helps admins audit blocks intelligently.' },
+    ],
+  },
+  {
     version: '0.10.52',
     date: 'June 3, 2026',
     highlight: 'Recruiter SMS templates — pick from a playbook',
