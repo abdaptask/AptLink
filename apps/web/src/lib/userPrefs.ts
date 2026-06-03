@@ -64,7 +64,10 @@ export interface FavoriteContact {
   /** Server-side row id. Populated once the POST returns; undefined for
    *  optimistically-added entries that haven't synced yet. */
   id?: number;
-  /** E.164 number (or whatever the user typed). Stored as-is. */
+  /** E.164 number (or whatever the user typed). Stored as-is.
+   *  v0.10.66 — Still treated as the "primary" number for tap-to-call. The
+   *  full list of numbers (with labels Cell/Home/Work/Other) lives on
+   *  `numbers` below. The primary is also mirrored as one of those rows. */
   phone: string;
   /** Optional display label. Computed from firstName+lastName when those are
    *  set; falls back to JobDiva name / formatted phone otherwise. */
@@ -75,6 +78,18 @@ export interface FavoriteContact {
   lastName?: string | null;
   /** Timestamp it was starred (used for default sort). */
   addedAt: string;
+  /** v0.10.66 — Multi-number support. Each contact can carry several phone
+   *  numbers (Cell / Home / Work / Other) each labeled and ordered. The
+   *  primary number is mirrored as one of these rows AND on `phone` above
+   *  for back-compat. Optional during the transition window — pre-v0.10.66
+   *  cached entries don't have it; treat undefined as "primary-only". */
+  numbers?: Array<{
+    id: number;
+    phone: string;
+    label: string;
+    sortOrder: number;
+    isPrimary: boolean;
+  }>;
 }
 
 const FAVORITES_KEY = 'ace_favorites';
@@ -105,6 +120,8 @@ function rowToContact(row: FavoriteRow): FavoriteContact {
     lastName: row.lastName,
     label: row.label,
     addedAt: row.addedAt,
+    // v0.10.66 — Forward the numbers list when the server included it.
+    numbers: row.numbers,
   };
 }
 

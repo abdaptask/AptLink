@@ -24,6 +24,16 @@ export interface ReleaseEntry {
 
 export const WHATS_NEW: ReleaseEntry[] = [
   {
+    version: '0.10.66',
+    date: 'June 3, 2026',
+    highlight: 'Multi-number favorites — Cell / Home / Work / Other per contact',
+    changes: [
+      { type: 'new', text: 'A favorite can now carry multiple labeled phone numbers. Each favorite still shows as one row in the list (no clutter), but if it has more than one number, tap the chevron on the right to expand and see each number with its own label (Cell / Home / Work / Other) and its own call, SMS, and block buttons.' },
+      { type: 'new', text: 'Add additional numbers to an existing favorite by expanding the row and clicking "Add number" at the bottom. Each number gets its own label from a quick-pick dropdown. Existing favorites with a single number stay exactly as they were — they\'re automatically backfilled with label "Mobile" so nothing visible changes for them.' },
+      { type: 'improved', text: 'Per-number block: blocking from the favorite\'s expanded view only blocks the specific number tapped, not all of the contact\'s lines. So you can block someone\'s work number without losing their cell.' },
+    ],
+  },
+  {
     version: '0.10.63',
     date: 'June 3, 2026',
     highlight: 'Remove Pending Users section from Settings',

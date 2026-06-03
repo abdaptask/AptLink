@@ -3177,7 +3177,142 @@ body {
   gap: 0.6rem;
   padding: 0.7rem 1rem;
   border-bottom: 0.5px solid var(--border);
+  /* v0.10.66 — Switch to flex-wrap so the expanded numbers list can flow
+     onto its own row below the main favorite-main + favorite-actions row.
+     The flex children with width:auto don't wrap; only the numbers list
+     (width:100%) breaks to a new line. */
+  flex-wrap: wrap;
 }
+.favorite-row.expanded {
+  background: rgba(10, 132, 255, 0.04);
+}
+[data-theme="light"] .favorite-row.expanded {
+  background: rgba(10, 132, 255, 0.06);
+}
+
+/* v0.10.66 — Multi-number favorite UI */
+.favorite-numbers-count {
+  display: inline-block;
+  margin-left: 0.5rem;
+  font-size: 0.7rem;
+  font-weight: 500;
+  color: var(--text-muted);
+  background: rgba(255, 255, 255, 0.08);
+  padding: 0.05rem 0.4rem;
+  border-radius: 999px;
+  vertical-align: middle;
+}
+[data-theme="light"] .favorite-numbers-count {
+  background: rgba(0, 0, 0, 0.06);
+}
+.favorite-numbers-list {
+  list-style: none;
+  margin: 0.4rem 0 0;
+  padding: 0;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  border-top: 0.5px solid var(--border);
+  padding-top: 0.5rem;
+}
+.favorite-number-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.5rem 0.4rem 3rem; /* indent so it visually nests under the avatar */
+  border-radius: 6px;
+}
+.favorite-number-row:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+[data-theme="light"] .favorite-number-row:hover {
+  background: rgba(0, 0, 0, 0.03);
+}
+.favorite-number-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.favorite-number-label {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+.favorite-number-primary-pill {
+  display: inline-block;
+  margin-left: 0.4rem;
+  font-size: 0.62rem;
+  background: rgba(52, 199, 89, 0.18);
+  color: #34c759;
+  padding: 0.05rem 0.35rem;
+  border-radius: 999px;
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 600;
+}
+.favorite-number-phone {
+  font-size: 0.92rem;
+  color: var(--text);
+  font-feature-settings: 'tnum';
+}
+.favorite-number-actions {
+  display: flex;
+  gap: 0.2rem;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+/* Inline "Add number" form */
+.favorite-number-add-cta {
+  padding: 0.4rem 0.5rem 0.4rem 3rem;
+  display: flex;
+  align-items: center;
+}
+.favorite-number-add-cta .callback-ico {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+.favorite-number-add-form {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+  padding: 0.4rem 0.5rem 0.4rem 3rem;
+  flex-wrap: wrap;
+}
+.favorite-number-add-form select,
+.favorite-number-add-form input {
+  font-size: 0.85rem;
+  padding: 0.3rem 0.5rem;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text);
+}
+[data-theme="light"] .favorite-number-add-form select,
+[data-theme="light"] .favorite-number-add-form input {
+  background: #fff;
+}
+.favorite-number-add-form input { flex: 1; min-width: 120px; }
+.favorite-number-add-form button {
+  font-size: 0.85rem;
+  padding: 0.3rem 0.7rem;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text);
+  cursor: pointer;
+}
+[data-theme="light"] .favorite-number-add-form button {
+  background: #fff;
+}
+.favorite-number-add-form button:disabled { opacity: 0.5; cursor: not-allowed; }
 .favorite-main {
   flex: 1;
   display: flex;

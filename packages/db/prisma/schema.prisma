@@ -92,6 +92,13 @@ model User {
   /// Once pilot validates the behavior, we flip the default to true in a
   /// follow-up migration.
   connectionHealthBeta Boolean @default(false) @map("connection_health_beta")
+  /// v0.10.64 — Country tag for Telnyx anchor-site selection. "IN" → Chennai
+  /// anchor; "US" or anything else → Latency-optimized anchor (existing
+  /// default). Set when admin invites or migrates the user; defaults to NULL
+  /// for existing users until admin fills it in. The migrate-from-pulse and
+  /// invite-new-user flows pass this through to applyAceConnectionDefaults
+  /// which PATCHes the new Credential Connection's anchorsite_override.
+  country         String?   @map("country")
   lastLoginAt     DateTime? @map("last_login_at")
   createdAt       DateTime  @default(now()) @map("created_at")
   updatedAt       DateTime  @updatedAt      @map("updated_at")
@@ -186,6 +193,12 @@ model Favorite {
   id        Int      @id @default(autoincrement())
   userId    Int      @map("user_id")
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// v0.10.66 — Kept as the "primary" phone for back-compat. New code reads
+  /// the full list from FavoriteNumber. On v0.10.66 backfill, every existing
+  /// Favorite gets one FavoriteNumber row with label="Mobile" containing
+  /// this phone value. Future favorites still write this column on create
+  /// (set to the primary number) so older clients that haven't picked up
+  /// the multi-number UI yet continue to function.
   phone     String   // E.164 normalized
   firstName String?  @map("first_name")
   lastName  String?  @map("last_name")
@@ -194,9 +207,49 @@ model Favorite {
   label     String?
   addedAt   DateTime @default(now()) @map("added_at")
 
+  /// v0.10.66 — One Favorite can now carry multiple labeled phone numbers
+  /// (Cell, Home, Work, Other). The legacy Favorite.phone above is always
+  /// mirrored as one of these rows for back-compat.
+  numbers   FavoriteNumber[]
+
   @@unique([userId, phone])
   @@index([userId])
   @@map("favorites")
+}
+
+/// v0.10.66 — Multi-number favorites.
+///
+/// One Favorite can have many FavoriteNumber children (Cell/Home/Work/Other).
+/// The favorite's display info (firstName, lastName) lives on Favorite;
+/// each FavoriteNumber carries a label + an E.164 phone + a sort order.
+///
+/// Backfill (v0.10.66 migration): every existing Favorite row gets exactly
+/// one FavoriteNumber created with label="Mobile" (per product decision),
+/// phone=Favorite.phone, sortOrder=0, isPrimary=true.
+model FavoriteNumber {
+  id         Int      @id @default(autoincrement())
+  favoriteId Int      @map("favorite_id")
+  favorite   Favorite @relation(fields: [favoriteId], references: [id], onDelete: Cascade)
+  /// E.164 normalized.
+  phone      String
+  /// Free-form label — but the UI offers Cell / Home / Work / Other as quick
+  /// picks. Stored as plain text so admins can add their own (e.g. "Office",
+  /// "Vacation", "Spouse"). Capped at 24 chars at API validation time.
+  label      String   @default("Mobile")
+  /// Display order within the favorite's number list. Lower = shown first.
+  /// The primary number is sortOrder=0 by convention; UI adds 10/20/30 etc.
+  sortOrder  Int      @default(0) @map("sort_order")
+  /// True for exactly ONE number per favorite — the default tap target.
+  /// Backfilled rows get isPrimary=true. New favorites set isPrimary=true
+  /// on the first number added; admin can move primary later.
+  isPrimary  Boolean  @default(false) @map("is_primary")
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt      @map("updated_at")
+
+  /// Don't allow the same E.164 twice on the same favorite.
+  @@unique([favoriteId, phone])
+  @@index([favoriteId])
+  @@map("favorite_numbers")
 }
 
 /// Phase 6.8 — Number blocking.

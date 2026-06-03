@@ -1016,6 +1016,15 @@ export async function removeBlockedNumber(token: string, id: number): Promise<vo
 // cache hydrated from these endpoints at app boot.
 // ===========================================================================
 
+// v0.10.66 — Multi-number favorites.
+export interface FavoriteNumberRow {
+  id: number;
+  phone: string;
+  label: string;
+  sortOrder: number;
+  isPrimary: boolean;
+}
+
 export interface FavoriteRow {
   id: number;
   phone: string;
@@ -1023,6 +1032,9 @@ export interface FavoriteRow {
   lastName: string | null;
   label: string | null;
   addedAt: string;
+  // v0.10.66 — Optional for back-compat with older API responses; server
+  // always returns it from /favorites GET/POST/PATCH on v0.10.66+.
+  numbers?: FavoriteNumberRow[];
 }
 
 export async function listFavorites(token: string): Promise<FavoriteRow[]> {
@@ -1088,6 +1100,58 @@ export async function deleteFavoriteApi(token: string, id: number): Promise<void
     headers: { Authorization: `Bearer ${token}` },
   });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
+}
+
+// v0.10.66 — Per-favorite number management.
+export async function addFavoriteNumber(
+  token: string,
+  favoriteId: number,
+  input: { phone: string; label?: string; isPrimary?: boolean },
+): Promise<FavoriteNumberRow | { error: string }> {
+  const res = await fetch(`${API_URL}/favorites/${favoriteId}/numbers`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify(input),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    return { error: (body as { error?: string; message?: string }).message ?? (body as { error?: string }).error ?? `HTTP ${res.status}` };
+  }
+  return body as FavoriteNumberRow;
+}
+
+export async function patchFavoriteNumber(
+  token: string,
+  favoriteId: number,
+  numberId: number,
+  input: { phone?: string; label?: string; isPrimary?: boolean; sortOrder?: number },
+): Promise<FavoriteNumberRow | { error: string }> {
+  const res = await fetch(`${API_URL}/favorites/${favoriteId}/numbers/${numberId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify(input),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    return { error: (body as { error?: string }).error ?? `HTTP ${res.status}` };
+  }
+  return body as FavoriteNumberRow;
+}
+
+export async function deleteFavoriteNumber(
+  token: string,
+  favoriteId: number,
+  numberId: number,
+): Promise<{ ok: boolean; error?: string }> {
+  const res = await fetch(`${API_URL}/favorites/${favoriteId}/numbers/${numberId}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    return { ok: false, error: (body as { error?: string; message?: string }).message ?? (body as { error?: string }).error ?? `HTTP ${res.status}` };
+  }
+  return body as { ok: boolean };
 }
 
 
