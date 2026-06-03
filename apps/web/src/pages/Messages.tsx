@@ -2,7 +2,7 @@
 // thread list on the left (or full screen on narrow), thread detail on the right.
 import { useEffect, useState, useCallback, useRef, useMemo } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Send, ArrowLeft, RefreshCcw, MessageSquarePlus, Image as ImageIcon, Search, X, Zap, Phone, History, Star, Ban, Smile, FileText } from 'lucide-react';
+import { Send, ArrowLeft, RefreshCcw, MessageSquarePlus, Image as ImageIcon, Search, X, Zap, Phone, History, Star, Ban, Smile, FileText, Clock, Trash2, Pencil } from 'lucide-react';
 import {
   getThreads,
   getThread,
@@ -27,6 +27,12 @@ import {
   // v0.10.54 — Used to resolve {recruiter} placeholder to the user's
   // first name when picking a template.
   getMe,
+  // v0.10.59 — Scheduled SMS.
+  listMyScheduledMessages,
+  createScheduledMessage,
+  updateScheduledMessage,
+  cancelScheduledMessage,
+  type ScheduledMessage,
 } from '../api';
 import { useJobDivaContact, getCachedJobDivaName } from '../hooks/useJobDivaContact';
 import { useSip } from '../contexts/SipContext';
@@ -73,6 +79,36 @@ function formatRelative(iso: string): string {
     date.getDate() === yesterday.getDate();
   if (isYesterday) return `Yesterday, ${timeStr}`;
   return `${date.toLocaleDateString([], { month: 'short', day: 'numeric' })}, ${timeStr}`;
+}
+
+// v0.10.59 — "Will fire at..." labels for scheduled messages.
+// More verbose than formatRelative: caller wants to see WHEN it goes out,
+// not when it was created. Same time-of-day on every label.
+function formatScheduledFor(iso: string): string {
+  const date = new Date(iso);
+  const now = new Date();
+  const timeStr = date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  const sameDay =
+    date.getFullYear() === now.getFullYear() &&
+    date.getMonth() === now.getMonth() &&
+    date.getDate() === now.getDate();
+  if (sameDay) return `today, ${timeStr}`;
+  const tomorrow = new Date(now);
+  tomorrow.setDate(now.getDate() + 1);
+  const isTomorrow =
+    date.getFullYear() === tomorrow.getFullYear() &&
+    date.getMonth() === tomorrow.getMonth() &&
+    date.getDate() === tomorrow.getDate();
+  if (isTomorrow) return `tomorrow, ${timeStr}`;
+  return `${date.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })}, ${timeStr}`;
+}
+
+// v0.10.59 — Convert a Date to the "yyyy-MM-ddTHH:mm" format that the
+// HTML <input type="datetime-local"> control expects/produces. Pad each
+// component to keep the parser happy.
+function toLocalDatetimeInputValue(d: Date): string {
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
 // v0.10.13 — Discriminated row type for the unified list. SMS rows
@@ -384,6 +420,18 @@ function ThreadDetail({ number, onBack }: ThreadDetailProps) {
   // for the first render after picking).
   const [recruiterFirstName, setRecruiterFirstName] = useState<string>('');
 
+  // v0.10.59 — Scheduled-message state for this thread.
+  // pendingSchedules: list of un-sent (status='pending') rows for this contact
+  //                   so we can show a banner at the top of the thread.
+  // showScheduleModal: opens the schedule-picker. Either null (create new)
+  //                    or a ScheduledMessage row (edit existing).
+  const [pendingSchedules, setPendingSchedules] = useState<ScheduledMessage[]>([]);
+  const [showScheduleModal, setShowScheduleModal] = useState<
+    | null
+    | { mode: 'create' }
+    | { mode: 'edit'; row: ScheduledMessage }
+  >(null);
+
   // v0.10.54 — Auto-grow the compose textarea so the whole drafted
   // message is visible without scrolling. Previously rows=1 was hard-
   // coded, so picking a long template (e.g. cold outreach) clipped to
@@ -403,6 +451,21 @@ function ThreadDetail({ number, onBack }: ThreadDetailProps) {
       })
       .catch(() => undefined);
   }, []);
+
+  // v0.10.59 — Load pending scheduled messages for THIS thread on mount and
+  // whenever a new one is created/edited/canceled. Cheap query (server caps
+  // at 200) so we just refetch instead of locally mutating.
+  const loadPendingSchedules = useCallback(() => {
+    const token = sessionStorage.getItem('ace_token');
+    if (!token || !number) return;
+    listMyScheduledMessages(token, { status: 'pending', threadKey: number })
+      .then((rows) => setPendingSchedules(rows))
+      .catch(() => undefined);
+  }, [number]);
+  useEffect(() => {
+    loadPendingSchedules();
+  }, [loadPendingSchedules]);
+
   const composeInputRef = useRef<HTMLTextAreaElement>(null);
   useEffect(() => {
     const refresh = () => setLocalQuickReplies(getQuickReplies());
@@ -814,6 +877,52 @@ function ThreadDetail({ number, onBack }: ThreadDetailProps) {
 
       {error && <div className="error" style={{ margin: '0 1rem' }}>{error}</div>}
 
+      {/* v0.10.59 — Pending scheduled-message strip. Sits above the conversation
+          stream so the user always sees what's queued to fire for this contact.
+          Each row shows when it'll send + a preview, with edit/cancel buttons. */}
+      {pendingSchedules.length > 0 && (
+        <div className="pending-schedules">
+          {pendingSchedules.map((row) => (
+            <div key={row.id} className="pending-schedule-row">
+              <Clock size={14} className="pending-schedule-icon" aria-hidden="true" />
+              <div className="pending-schedule-text">
+                <div className="pending-schedule-when">
+                  Scheduled for {formatScheduledFor(row.scheduledFor)}
+                </div>
+                <div className="pending-schedule-preview" title={row.body}>
+                  {row.body || (row.mediaUrls.length > 0 ? `${row.mediaUrls.length} attachment${row.mediaUrls.length === 1 ? '' : 's'}` : '(empty)')}
+                </div>
+              </div>
+              <button
+                type="button"
+                className="icon-btn pending-schedule-action"
+                onClick={() => setShowScheduleModal({ mode: 'edit', row })}
+                title="Edit scheduled message"
+                aria-label="Edit scheduled message"
+              >
+                <Pencil size={14} />
+              </button>
+              <button
+                type="button"
+                className="icon-btn pending-schedule-action"
+                onClick={async () => {
+                  if (!window.confirm('Cancel this scheduled message?')) return;
+                  const token = sessionStorage.getItem('ace_token');
+                  if (!token) return;
+                  const r = await cancelScheduledMessage(token, row.id);
+                  if (r.ok) loadPendingSchedules();
+                  else setError(r.error ?? 'Cancel failed');
+                }}
+                title="Cancel scheduled message"
+                aria-label="Cancel scheduled message"
+              >
+                <Trash2 size={14} />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
       <div className="msg-stream" ref={scrollRef}>
         {loading && messages.length === 0 && <div className="muted">Loading…</div>}
         {messages.map((m) => (
@@ -965,6 +1074,21 @@ function ThreadDetail({ number, onBack }: ThreadDetailProps) {
             📎 {attached.length}
           </span>
         )}
+        {/* v0.10.59 — Schedule button. Disabled when there's no draft +
+            no attachments (nothing to schedule). Opens the date/time
+            picker; on confirm, calls POST /me/scheduled-messages with the
+            current draft + attached, then clears the compose row same
+            as Send does. */}
+        <button
+          type="button"
+          className="icon-btn compose-icon-btn"
+          onClick={() => setShowScheduleModal({ mode: 'create' })}
+          disabled={sending || (!draft.trim() && attached.length === 0)}
+          aria-label="Schedule send"
+          title="Schedule send"
+        >
+          <Clock size={18} />
+        </button>
         <button
           type="button"
           className="send-btn"
@@ -1103,6 +1227,257 @@ function ThreadDetail({ number, onBack }: ThreadDetailProps) {
           onClose={() => setShowHistory(false)}
         />
       )}
+
+      {/* v0.10.59 — Schedule SMS picker. Two modes:
+          - create: starts from the current draft + attached.
+          - edit:   pre-fills from an existing pending row. */}
+      {showScheduleModal && (
+        <ScheduleMessageModal
+          mode={showScheduleModal.mode}
+          initial={showScheduleModal.mode === 'edit' ? showScheduleModal.row : null}
+          toNumber={number}
+          draftBody={draft}
+          draftMediaUrls={attached}
+          contactLabel={displayName}
+          onClose={() => setShowScheduleModal(null)}
+          onSaved={(_row, fromCreate) => {
+            setShowScheduleModal(null);
+            loadPendingSchedules();
+            if (fromCreate) {
+              // Treat scheduled-send as "draft handed off" — clear the
+              // compose row so the user can't accidentally hit Send too.
+              setDraft('');
+              setAttached([]);
+            }
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+// v0.10.59 — Date/time picker modal for scheduling an SMS/MMS to send later.
+//
+// Two modes:
+//  - 'create' starts from the current compose-row draft (body + attachments).
+//    User picks a fire time, hits Schedule, we POST to /me/scheduled-messages,
+//    parent clears the draft.
+//  - 'edit' pre-fills from an existing pending row. User can revise body
+//    and/or time. We PATCH on save.
+//
+// Quick-pick buttons under the time input fill common cases:
+//  +1 hour, tomorrow 9am, Monday 9am. Power users can override with the
+//  raw datetime-local control.
+function ScheduleMessageModal({
+  mode,
+  initial,
+  toNumber,
+  draftBody,
+  draftMediaUrls,
+  contactLabel,
+  onClose,
+  onSaved,
+}: {
+  mode: 'create' | 'edit';
+  initial: ScheduledMessage | null;
+  toNumber: string;
+  draftBody: string;
+  draftMediaUrls: string[];
+  contactLabel: string;
+  onClose: () => void;
+  onSaved: (row: ScheduledMessage, fromCreate: boolean) => void;
+}) {
+  // Default time: +1 hour from now (rounded to next minute). For edit
+  // mode, pre-fill from the existing row.
+  const defaultDt = useMemo(() => {
+    if (initial) return new Date(initial.scheduledFor);
+    const d = new Date();
+    d.setSeconds(0, 0);
+    d.setHours(d.getHours() + 1);
+    return d;
+  }, [initial]);
+
+  const [whenStr, setWhenStr] = useState(() => toLocalDatetimeInputValue(defaultDt));
+  const [body, setBody] = useState(() => initial?.body ?? draftBody);
+  const [mediaUrls] = useState<string[]>(() => initial?.mediaUrls ?? draftMediaUrls);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Apply a quick-pick to the input.
+  const setQuick = (target: Date) => {
+    target.setSeconds(0, 0);
+    setWhenStr(toLocalDatetimeInputValue(target));
+  };
+
+  // Close on Escape.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !submitting) onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [submitting, onClose]);
+
+  const canSubmit = (() => {
+    if (submitting) return false;
+    if (body.trim() === '' && mediaUrls.length === 0) return false;
+    const when = new Date(whenStr);
+    if (Number.isNaN(when.getTime())) return false;
+    if (when.getTime() < Date.now() - 5_000) return false;
+    return true;
+  })();
+
+  async function handleSave() {
+    setError(null);
+    const token = sessionStorage.getItem('ace_token');
+    if (!token) return;
+    const when = new Date(whenStr);
+    if (Number.isNaN(when.getTime())) {
+      setError('Pick a valid date and time');
+      return;
+    }
+    setSubmitting(true);
+    try {
+      if (mode === 'create') {
+        const r = await createScheduledMessage(token, {
+          toNumber,
+          body: body.trim() || undefined,
+          mediaUrls: mediaUrls.length > 0 ? mediaUrls : undefined,
+          scheduledFor: when.toISOString(),
+        });
+        if ('error' in r) {
+          setError(r.error);
+        } else {
+          onSaved(r, true);
+        }
+      } else if (initial) {
+        const r = await updateScheduledMessage(token, initial.id, {
+          body,
+          scheduledFor: when.toISOString(),
+        });
+        if ('error' in r) {
+          setError(r.error);
+        } else {
+          onSaved(r, false);
+        }
+      }
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div className="compose-modal" onClick={submitting ? undefined : onClose}>
+      <div
+        className="fav-modal"
+        onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-labelledby="schedule-msg-title"
+        style={{ maxWidth: 480 }}
+      >
+        <div className="fav-modal-header">
+          <Clock size={18} className="fav-modal-icon" />
+          <h3 id="schedule-msg-title">
+            {mode === 'create' ? 'Schedule message' : 'Edit scheduled message'}
+          </h3>
+        </div>
+        <p className="muted small" style={{ marginTop: 0 }}>
+          Will send to <strong>{contactLabel}</strong> at the time below. Fires
+          within ~30 seconds of the scheduled time.
+        </p>
+
+        <label className="fav-modal-field" style={{ marginBottom: 8 }}>
+          <span className="fav-modal-label">When</span>
+          <input
+            type="datetime-local"
+            className="fav-modal-input"
+            value={whenStr}
+            onChange={(e) => setWhenStr(e.target.value)}
+            disabled={submitting}
+          />
+        </label>
+
+        <div className="schedule-quickpicks">
+          <button
+            type="button"
+            className="device-action"
+            onClick={() => setQuick(new Date(Date.now() + 60 * 60_000))}
+            disabled={submitting}
+          >
+            +1 hour
+          </button>
+          <button
+            type="button"
+            className="device-action"
+            onClick={() => {
+              const d = new Date();
+              d.setDate(d.getDate() + 1);
+              d.setHours(9, 0, 0, 0);
+              setQuick(d);
+            }}
+            disabled={submitting}
+          >
+            Tomorrow 9am
+          </button>
+          <button
+            type="button"
+            className="device-action"
+            onClick={() => {
+              // Next Monday 9am — if today is Monday, +7 days.
+              const d = new Date();
+              const day = d.getDay(); // 0 = Sun, 1 = Mon
+              const offset = day === 1 ? 7 : ((8 - day) % 7);
+              d.setDate(d.getDate() + offset);
+              d.setHours(9, 0, 0, 0);
+              setQuick(d);
+            }}
+            disabled={submitting}
+          >
+            Monday 9am
+          </button>
+        </div>
+
+        <label className="fav-modal-field" style={{ marginTop: 12 }}>
+          <span className="fav-modal-label">Message</span>
+          <textarea
+            className="fav-modal-input"
+            value={body}
+            onChange={(e) => setBody(e.target.value)}
+            rows={4}
+            disabled={submitting}
+            placeholder={mediaUrls.length > 0 ? '(attachment only — body optional)' : 'Type your message...'}
+          />
+        </label>
+        {mediaUrls.length > 0 && (
+          <div className="muted small" style={{ marginTop: 4 }}>
+            {mediaUrls.length} attachment{mediaUrls.length === 1 ? '' : 's'} attached
+            {mode === 'edit' && ' (attachments can\'t be changed when editing — cancel + reschedule to swap)'}
+          </div>
+        )}
+
+        {error && (
+          <div className="error" style={{ marginTop: 12 }}>{error}</div>
+        )}
+
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 16 }}>
+          <button
+            type="button"
+            className="device-action"
+            onClick={onClose}
+            disabled={submitting}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="device-action primary"
+            onClick={handleSave}
+            disabled={!canSubmit}
+          >
+            {submitting ? 'Saving...' : mode === 'create' ? 'Schedule' : 'Save changes'}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

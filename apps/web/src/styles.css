@@ -4286,6 +4286,64 @@ body {
 }
 .thread-header-name { font-size: 16px; font-weight: 600; }
 
+/* v0.10.59 — Pending scheduled-messages strip. Sits between the thread
+   header and the conversation stream. Each row is a one-line summary
+   with edit + cancel icons. Subtle background so it reads as "pending /
+   not yet sent" without being noisy. */
+.pending-schedules {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 16px;
+  background: rgba(245, 158, 11, 0.06);
+  border-bottom: 1px solid rgba(245, 158, 11, 0.18);
+}
+[data-theme="light"] .pending-schedules {
+  background: rgba(245, 158, 11, 0.10);
+  border-color: rgba(245, 158, 11, 0.25);
+}
+.pending-schedule-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.pending-schedule-icon { color: #f59e0b; flex-shrink: 0; }
+.pending-schedule-text {
+  flex: 1;
+  min-width: 0;
+}
+.pending-schedule-when {
+  font-size: 12px;
+  font-weight: 600;
+  color: #f59e0b;
+  text-transform: lowercase;
+}
+.pending-schedule-preview {
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  opacity: 0.85;
+}
+.pending-schedule-action {
+  flex-shrink: 0;
+  opacity: 0.7;
+}
+.pending-schedule-action:hover { opacity: 1; }
+
+/* v0.10.59 — Schedule modal quick-pick row (+1 hour / Tomorrow 9am / Monday 9am).
+   Compact horizontal strip of small chip-style buttons. */
+.schedule-quickpicks {
+  display: flex;
+  gap: 6px;
+  margin-top: 4px;
+  flex-wrap: wrap;
+}
+.schedule-quickpicks .device-action {
+  font-size: 12px;
+  padding: 4px 10px;
+}
+
 .msg-stream {
   flex: 1;
   overflow-y: auto;

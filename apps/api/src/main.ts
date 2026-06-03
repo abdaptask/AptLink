@@ -14,6 +14,8 @@ import { callsRoutes } from './calls/calls.routes.js';
 import { favoritesRoutes } from './favorites/favorites.routes.js';
 import { internalChatRoutes } from './internalChat/internalChat.routes.js';
 import { messagesRoutes } from './messages/messages.routes.js';
+import { scheduledMessagesRoutes } from './messages/scheduledMessages.routes.js';
+import { startScheduledMessageWorker } from './messages/scheduledMessageWorker.js';
 import { voicemailsRoutes } from './voicemails/voicemails.routes.js';
 import { voicemailGreetingRoutes } from './voicemailGreeting/voicemailGreeting.routes.js';
 import { jobDivaRoutes } from './jobdiva/jobdiva.routes.js';
@@ -95,6 +97,7 @@ await app.register(callsRoutes);
 await app.register(favoritesRoutes);
 await app.register(internalChatRoutes);
 await app.register(messagesRoutes);
+await app.register(scheduledMessagesRoutes);
 await app.register(voicemailsRoutes);
 await app.register(voicemailGreetingRoutes);
 await app.register(jobDivaRoutes);
@@ -106,6 +109,10 @@ const host = '0.0.0.0';
 try {
   await app.listen({ port: config.port, host });
   app.log.info({ port: config.port, host }, `[${SERVICE_NAME}] listening`);
+  // v0.10.59 — Start the scheduled-message worker AFTER the HTTP server
+  // is listening, so a slow boot doesn't queue up duplicate ticks before
+  // the API is ready to serve health checks.
+  startScheduledMessageWorker(app.log);
 } catch (err) {
   app.log.error(err);
   process.exit(1);

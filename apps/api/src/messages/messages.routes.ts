@@ -6,6 +6,7 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { prisma } from '@ace/db';
 import { config } from '../config.js';
+import { sendMessageImmediate } from './sendMessage.js';
 
 interface JwtPayload {
   sub: number;
@@ -182,119 +183,28 @@ export async function messagesRoutes(app: FastifyInstance) {
       }
 
       const to = toE164(body.to);
-      // v0.10.0 — Use whichever UserDid the user has currently selected
-      // as their active outbound identity (via the dialer header dropdown).
-      // Multi-DID support: a user with multiple numbers picks one via
-      // /me/active-did, which sets User.activeUserDidId; we resolve that
-      // pointer here. Fallback chain (cheapest first):
-      //   1. User.activeUserDidId → UserDid.didNumber
-      //   2. UserDid where isDefault=true for this user
-      //   3. (refuse) — user has no UserDid rows at all
-      // We deliberately DO NOT fall back to the legacy User.didNumber
-      // column — the migration backfill (2026-05-user-dids.sql) ensures
-      // every active user with did_number has a matching UserDid row, so
-      // there's no production case where this would matter. Refusing
-      // surfaces the misconfiguration to admin.
-      //
-      // Preserved from v0.9.14: NEVER fall back to config.pilotFromNumber.
-      // Refuse with 409 instead so we don't silently leak the pilot DID
-      // to recipients.
-      const dbUser = await prisma.user.findUnique({
-        where: { id: user.sub },
-        select: {
-          email: true,
-          activeUserDidId: true,
-          userDids: {
-            orderBy: [{ isDefault: 'desc' }, { createdAt: 'asc' }],
-            select: { id: true, didNumber: true, isDefault: true },
-          },
-        },
+
+      // v0.10.59 — Delegate to the shared sendMessageImmediate helper so
+      // the scheduled-message worker uses the exact same codepath. Status
+      // code translation happens here based on the result.code.
+      const result = await sendMessageImmediate({
+        userId: user.sub,
+        toNumber: to,
+        body: body.body ?? '',
+        mediaUrls: body.mediaUrls ?? [],
       });
-      let fromNumber: string | null = null;
-      // v0.10.0 Task 5 — also capture the matched UserDid id so we can
-      // stamp it on the outbound Message row. The Recents/Messages UI
-      // reads this to render the line badge.
-      let fromUserDidId: number | null = null;
-      if (dbUser?.activeUserDidId) {
-        const active = dbUser.userDids.find((d) => d.id === dbUser.activeUserDidId);
-        if (active) {
-          fromNumber = active.didNumber;
-          fromUserDidId = active.id;
+      if (!result.ok) {
+        if (result.code === 'no_did_assigned') {
+          app.log.warn({ userId: user.sub }, '[messages] outbound SMS refused: no DID');
+          return reply.code(409).send({ error: result.code, message: result.message });
         }
-      }
-      if (!fromNumber && dbUser?.userDids?.length) {
-        // No active pointer set (or it pointed at a deleted row) — fall
-        // back to the default UserDid, which is the first row by sort.
-        fromNumber = dbUser.userDids[0].didNumber;
-        fromUserDidId = dbUser.userDids[0].id;
-      }
-      if (!fromNumber) {
-        app.log.warn(
-          { userId: user.sub, email: dbUser?.email },
-          '[messages] outbound SMS refused: user has no assigned DID',
-        );
-        return reply.code(409).send({
-          error: 'no_did_assigned',
-          message: 'Your account has no phone number (DID) assigned. Ask an admin to assign one in Users → your row before sending SMS.',
-        });
-      }
-      const text = body.body ?? '';
-      const mediaUrls = body.mediaUrls ?? [];
-
-      // Call Telnyx Messaging API.
-      const telnyxBody: Record<string, unknown> = {
-        from: fromNumber,
-        to,
-        text,
-      };
-      if (mediaUrls.length > 0) telnyxBody.media_urls = mediaUrls;
-      // v0.9.14 — Deliberately DO NOT set messaging_profile_id. Telnyx routes
-      // the SMS via whatever profile the `from` DID is bound to. Passing
-      // messaging_profile_id alongside a specific `from` can confuse Telnyx's
-      // sender-selection (in some configs it substitutes from the profile's
-      // pool) — exactly the substitution that caused users' texts to arrive
-      // from the pilot DID instead of their own. The DID's own profile
-      // binding handles routing; we don't need to over-specify.
-
-      let telnyxResponse: { id?: string; status?: string; errors?: unknown } = {};
-      try {
-        const res = await fetch('https://api.telnyx.com/v2/messages', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${config.telnyxApiKey}`,
-          },
-          body: JSON.stringify(telnyxBody),
-        });
-        const json = (await res.json()) as { data?: typeof telnyxResponse; errors?: unknown };
-        if (!res.ok) {
-          app.log.warn({ status: res.status, errors: json.errors }, '[messages] telnyx send failed');
-          return reply.code(502).send({ error: 'telnyx_send_failed', details: json.errors });
+        if (result.code === 'config_missing') {
+          return reply.code(500).send({ error: result.message });
         }
-        telnyxResponse = json.data ?? {};
-      } catch (e) {
-        app.log.error({ err: e }, '[messages] telnyx request error');
-        return reply.code(502).send({ error: 'telnyx_request_failed' });
+        app.log.warn({ code: result.code, detail: result.detail }, '[messages] send failed');
+        return reply.code(502).send({ error: result.code, message: result.message, details: result.detail });
       }
-
-      const telnyxMessageId = telnyxResponse.id ?? `local-${Date.now()}`;
-      const saved = await prisma.message.create({
-        data: {
-          userId: user.sub,
-          telnyxMessageId,
-          threadKey: to,
-          direction: 'outbound',
-          fromNumber,
-          toNumber: to,
-          body: text,
-          mediaUrls,
-          status: telnyxResponse.status ?? 'queued',
-          // v0.10.0 Task 5 — line badge tag for the Messages UI.
-          userDidId: fromUserDidId,
-          sentAt: new Date(),
-        },
-      });
-      return saved;
+      return result.message;
     }
   );
 

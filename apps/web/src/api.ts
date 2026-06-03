@@ -1498,6 +1498,98 @@ export async function seedSmsTemplateDefaults(token: string): Promise<{ ok: bool
   return body as { ok: boolean; inserted: number; skipped: number };
 }
 
+// v0.10.59 — Scheduled messages (one-off).
+export interface ScheduledMessage {
+  id: number;
+  toNumber: string;
+  body: string;
+  mediaUrls: string[];
+  scheduledFor: string;       // ISO
+  userDidId: number | null;
+  status: 'pending' | 'sending' | 'sent' | 'failed' | 'canceled';
+  attempts?: number;
+  lastError?: string | null;
+  telnyxMessageId?: string | null;
+  sentAt?: string | null;
+  createdAt: string;
+}
+export interface ScheduledMessageInput {
+  toNumber: string;
+  body?: string;
+  mediaUrls?: string[];
+  scheduledFor: string;       // ISO UTC
+  userDidId?: number;
+}
+export interface ScheduledMessagePatch {
+  body?: string;
+  mediaUrls?: string[];
+  scheduledFor?: string;      // ISO UTC
+}
+
+export async function listMyScheduledMessages(
+  token: string,
+  opts?: { status?: 'pending' | 'sent' | 'failed' | 'canceled' | 'all'; threadKey?: string },
+): Promise<ScheduledMessage[]> {
+  const params = new URLSearchParams();
+  if (opts?.status) params.set('status', opts.status);
+  if (opts?.threadKey) params.set('threadKey', opts.threadKey);
+  const qs = params.toString() ? `?${params.toString()}` : '';
+  const res = await fetch(`${API_URL}/me/scheduled-messages${qs}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) return [];
+  const json = (await res.json()) as { scheduledMessages?: ScheduledMessage[] };
+  return json.scheduledMessages ?? [];
+}
+
+export async function createScheduledMessage(
+  token: string,
+  input: ScheduledMessageInput,
+): Promise<ScheduledMessage | { error: string }> {
+  const res = await fetch(`${API_URL}/me/scheduled-messages`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify(input),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    return { error: (body as { error?: string }).error ?? `HTTP ${res.status}` };
+  }
+  return body as ScheduledMessage;
+}
+
+export async function updateScheduledMessage(
+  token: string,
+  id: number,
+  patch: ScheduledMessagePatch,
+): Promise<ScheduledMessage | { error: string }> {
+  const res = await fetch(`${API_URL}/me/scheduled-messages/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify(patch),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    return { error: (body as { error?: string }).error ?? `HTTP ${res.status}` };
+  }
+  return body as ScheduledMessage;
+}
+
+export async function cancelScheduledMessage(
+  token: string,
+  id: number,
+): Promise<{ ok: boolean; error?: string }> {
+  const res = await fetch(`${API_URL}/me/scheduled-messages/${id}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    return { ok: false, error: (body as { error?: string }).error ?? `HTTP ${res.status}` };
+  }
+  return body as { ok: boolean };
+}
+
 // v0.10.48 — Tenant hold music. Read by every user; written by admin.
 export interface TenantHoldMusic {
   ok: boolean;

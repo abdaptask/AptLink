@@ -24,6 +24,16 @@ export interface ReleaseEntry {
 
 export const WHATS_NEW: ReleaseEntry[] = [
   {
+    version: '0.10.59',
+    date: 'June 3, 2026',
+    highlight: 'Schedule an SMS or MMS to send later',
+    changes: [
+      { type: 'new', text: 'New clock icon next to the Send button in any SMS thread. Click it, pick a date and time, and the message goes into a queue that fires automatically at that moment — even if you\'ve closed the dialer. Works for plain SMS and for MMS with attachments. Quick-pick buttons for "+1 hour", "Tomorrow 9am", and "Monday 9am" cover the common cases; pick a custom datetime for anything else.' },
+      { type: 'new', text: 'Pending scheduled messages now show as an amber strip at the top of the thread so you always see what\'s queued for that contact. Edit or cancel before it fires — once it sends, the strip disappears and the message appears in the conversation like any other outbound SMS.' },
+      { type: 'new', text: 'Scheduled messages send from the DID you had selected when you scheduled them, even if you later switch your active line. So a recruiter who scheduled "send Monday 9am from Sales line" doesn\'t accidentally fire it from their personal DID on Monday.' },
+    ],
+  },
+  {
     version: '0.10.58',
     date: 'June 3, 2026',
     highlight: 'Manual DID override on Pulse migration',
