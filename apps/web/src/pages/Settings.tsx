@@ -86,6 +86,9 @@ import {
   archiveSmsTemplate,
   seedSmsTemplateDefaults,
   type SmsTemplate,
+  listAdminBlockedNumbers,
+  adminRemoveBlockedNumber,
+  type AdminBlockedNumber,
   listUnassignedTelnyxNumbers,
   type InviteNewUserResult,
   type UnassignedTelnyxNumber,
@@ -199,6 +202,8 @@ const SECTIONS: SectionDef[] = [
   { key: 'users', category: 'Admin', label: 'Users', icon: Users, blurb: 'Invite, promote, deactivate (admin only)', Component: UsersAdminSection, adminOnly: true },
   // v0.10.52 — Tenant SMS templates (admin only).
   { key: 'sms-templates', category: 'Admin', label: 'SMS templates', icon: MessageSquare, blurb: 'Curate the recruiter SMS playbook for all users', Component: SmsTemplatesAdminSection, adminOnly: true },
+  // v0.10.51 — Admin view of all users' blocked numbers + override.
+  { key: 'blocked-admin', category: 'Admin', label: 'Blocked numbers (all users)', icon: ShieldOff, blurb: 'See who blocked which numbers and why; override blocks', Component: BlockedNumbersAdminSection, adminOnly: true },
   { key: 'pending-users', category: 'Admin', label: 'Pending Users', icon: UserPlus, blurb: 'Stage + invite Pulse users to ACE (admin only)', Component: PendingUsersSection, adminOnly: true },
   { key: 'audit-log', category: 'Admin', label: 'Audit log', icon: ScrollText, blurb: 'Recent admin actions (admin only)', Component: AuditLogSection, adminOnly: true },
   // v0.10.22 — Tenant-wide MS Graph connection for Teams notifications.
@@ -1811,8 +1816,12 @@ function BlockedNumbersSection() {
       <h2 className="settings-title">Blocked numbers</h2>
       <p className="settings-blurb">
         Calls from these numbers are rejected at the carrier and never ring
-        the dialer. Text messages from these numbers are silently dropped â€”
+        the dialer. Text messages from these numbers are silently dropped —
         they never appear in your inbox and you get no notification.
+        <br /><br />
+        <strong>Please add a reason.</strong> Your admin can see every block on
+        the team and may need context (spam, ex-employee, harassment, etc).
+        If a block was a mistake, your admin can override it.
       </p>
 
       {/* Add form */}
@@ -5171,6 +5180,148 @@ function TeamsConnectionSection() {
 // Data lives in apps/web/src/data/whatsNew.ts so adding a new version
 // is a single-file edit.
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// v0.10.51 — Admin view of all users' blocked numbers.
+//
+// Admin can see EVERY user's blocklist with reason + who blocked. Override
+// (delete) any block. The override fires an audit log entry so the
+// previously-blocking user can see in their personal blocklist later
+// that the block was removed by an admin (we don't auto-notify, but the
+// audit trail exists for accountability).
+// ---------------------------------------------------------------------------
+
+function BlockedNumbersAdminSection() {
+  const [items, setItems] = useState<AdminBlockedNumber[] | null>(null);
+  const [search, setSearch] = useState('');
+  const [busy, setBusy] = useState<number | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function reload() {
+    const token = sessionStorage.getItem('ace_token');
+    if (!token) return;
+    try {
+      const rows = await listAdminBlockedNumbers(token);
+      setItems(rows);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+
+  useEffect(() => { void reload(); }, []);
+
+  async function handleOverride(row: AdminBlockedNumber) {
+    const userName = [row.user.firstName, row.user.lastName].filter(Boolean).join(' ').trim() || row.user.email;
+    if (!confirm(
+      `Remove ${userName}'s block on ${row.number}?\n` +
+      `Reason given: "${row.reason ?? '(no reason)'}".\n\n` +
+      `Future calls and SMS from this number will reach ${userName} again. The admin override is recorded in the audit log.`,
+    )) return;
+    const token = sessionStorage.getItem('ace_token');
+    if (!token) return;
+    setBusy(row.id);
+    setError(null);
+    const r = await adminRemoveBlockedNumber(token, row.id);
+    setBusy(null);
+    if (r.ok) {
+      setItems((prev) => (prev ?? []).filter((x) => x.id !== row.id));
+    } else {
+      setError(r.error ?? 'Failed to remove block');
+    }
+  }
+
+  if (items === null && !error) {
+    return <div className="muted">Loading…</div>;
+  }
+
+  const filtered = (items ?? []).filter((r) => {
+    const q = search.trim().toLowerCase();
+    if (!q) return true;
+    const userName = [r.user.firstName, r.user.lastName].filter(Boolean).join(' ').toLowerCase();
+    if (userName.includes(q)) return true;
+    if (r.user.email.toLowerCase().includes(q)) return true;
+    if (r.number.toLowerCase().includes(q)) return true;
+    if ((r.reason ?? '').toLowerCase().includes(q)) return true;
+    return false;
+  });
+
+  return (
+    <div className="settings-section">
+      <p className="settings-blurb">
+        Every block created by any user on the team, with the reason they gave
+        and when. Click <strong>Override</strong> to remove a block on someone's
+        behalf — the action is recorded in the audit log under your account.
+      </p>
+
+      <div className="search-bar" style={{ marginBottom: 12 }}>
+        <input
+          type="search"
+          className="search-input"
+          placeholder="Search by user, number, or reason"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          style={{ width: '100%' }}
+        />
+      </div>
+
+      {error && <div className="error" style={{ marginBottom: 12 }}>{error}</div>}
+
+      {filtered.length === 0 ? (
+        <div className="muted" style={{ padding: '2rem 0' }}>
+          {(items ?? []).length === 0
+            ? 'No blocks across the team yet.'
+            : 'No blocks match that search.'}
+        </div>
+      ) : (
+        <table className="users-admin-table" style={{ width: '100%' }}>
+          <thead>
+            <tr>
+              <th>User</th>
+              <th>Number</th>
+              <th>Reason</th>
+              <th>Blocked</th>
+              <th aria-label="actions" />
+            </tr>
+          </thead>
+          <tbody>
+            {filtered.map((r) => {
+              const name = [r.user.firstName, r.user.lastName].filter(Boolean).join(' ').trim();
+              return (
+                <tr key={r.id}>
+                  <td>
+                    <div>{name || r.user.email}</div>
+                    {name && (
+                      <div className="muted small">{r.user.email}</div>
+                    )}
+                    {!r.user.isActive && (
+                      <div className="muted small" style={{ color: '#d70015' }}>inactive</div>
+                    )}
+                  </td>
+                  <td style={{ fontFamily: 'monospace', fontSize: 13 }}>{r.number}</td>
+                  <td className="muted small">{r.reason ?? <em>(no reason)</em>}</td>
+                  <td className="muted small">
+                    {new Date(r.createdAt).toLocaleString()}
+                  </td>
+                  <td style={{ textAlign: 'right' }}>
+                    <button
+                      type="button"
+                      className="device-action danger"
+                      onClick={() => handleOverride(r)}
+                      disabled={busy === r.id}
+                      title="Remove this block on the user's behalf"
+                    >
+                      {busy === r.id ? 'Removing…' : 'Override'}
+                    </button>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
+}
 
 // ---------------------------------------------------------------------------
 // v0.10.52 — SMS Templates admin section.

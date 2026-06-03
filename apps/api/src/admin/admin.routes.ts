@@ -3824,6 +3824,69 @@ export async function adminRoutes(app: FastifyInstance) {
     },
   );
 
+  // ── Admin blocked-number visibility + override (v0.10.51) ──────────────
+  //
+  // Per-user blocklists already exist (see apps/api/src/blocked/blocked.routes.ts).
+  // What's new here: admin can see EVERY user's blocks in one place and
+  // remove any block (override). Useful when a user accidentally blocks
+  // an important contact or when management needs to audit who's
+  // filtering calls and why.
+  //
+  // Endpoints:
+  //   GET    /admin/blocked-numbers       — list ALL blocks across all users
+  //   DELETE /admin/blocked-numbers/:id   — remove any block (admin override)
+  app.get(
+    '/admin/blocked-numbers',
+    { onRequest: [app.authenticate, requireAdmin] },
+    async () => {
+      const rows = await prisma.blockedNumber.findMany({
+        orderBy: { createdAt: 'desc' },
+        select: {
+          id: true,
+          number: true,
+          reason: true,
+          createdAt: true,
+          userId: true,
+          user: {
+            select: {
+              id: true,
+              email: true,
+              firstName: true,
+              lastName: true,
+              isActive: true,
+            },
+          },
+        },
+      });
+      return { ok: true, items: rows };
+    },
+  );
+
+  app.delete<{ Params: { id: string } }>(
+    '/admin/blocked-numbers/:id',
+    { onRequest: [app.authenticate, requireAdmin] },
+    async (request, reply) => {
+      const actor = request.user as JwtPayload;
+      const id = Number(request.params.id);
+      if (!Number.isFinite(id)) return reply.code(400).send({ ok: false, error: 'Invalid id' });
+      // Look up first so we can audit the (userId, number) pair we removed.
+      const existing = await prisma.blockedNumber.findUnique({
+        where: { id },
+        select: { id: true, userId: true, number: true, reason: true },
+      });
+      if (!existing) {
+        return reply.code(404).send({ ok: false, error: 'Block not found' });
+      }
+      await prisma.blockedNumber.delete({ where: { id } });
+      await recordAudit(actor.sub, 'admin.block_override_removed', existing.userId, {
+        blockId: id,
+        number: existing.number,
+        reason: existing.reason,
+      });
+      return { ok: true, removed: existing };
+    },
+  );
+
   // ── SMS templates (v0.10.52) ────────────────────────────────────────────
   //
   // Tenant-wide recruiter SMS playbook. Admin curates the list; users see
