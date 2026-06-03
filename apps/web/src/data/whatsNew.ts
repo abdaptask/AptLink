@@ -24,6 +24,15 @@ export interface ReleaseEntry {
 
 export const WHATS_NEW: ReleaseEntry[] = [
   {
+    version: '0.10.75',
+    date: 'June 3, 2026',
+    highlight: 'Pick your own ringtone',
+    changes: [
+      { type: 'new', text: 'Settings → Personal → Ringtone lets you pick which sound plays when someone calls. Four options: Classic (standard North American ring), Modern (brighter + faster), Chime (single soft swell — least intrusive), Pulse (low + fast — for noisy environments). Each option has a Play button so you can preview before saving — no commitments to a sound you\'ve never heard.' },
+      { type: 'improved', text: 'Your ringtone choice follows your account across devices. Sign in on a different machine and you get the same ring. All ringtones are synthesized in-browser (no audio files to download) so the dialer bundle stays tiny.' },
+    ],
+  },
+  {
     version: '0.10.74',
     date: 'June 3, 2026',
     highlight: 'Send Praise — celebrate new hires, offers, birthdays from inside ACE',

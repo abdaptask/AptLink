@@ -38,6 +38,10 @@ function persistSipCreds(u: User | null): void {
   // 'reconnecting' state). Default false when missing on the server response.
   if (u?.connectionHealthBeta) sessionStorage.setItem('ace_conn_health_beta', '1');
   else sessionStorage.removeItem('ace_conn_health_beta');
+  // v0.10.75 — Persist ringtone preference so services/ringtone.ts can
+  // read it synchronously when an incoming call rings.
+  if (u?.ringtone) sessionStorage.setItem('ace_ringtone', u.ringtone);
+  else sessionStorage.removeItem('ace_ringtone');
   // Notify SipContext so it can register against Telnyx now that the creds
   // are in sessionStorage. This kills the login-race where SipContext's
   // useEffect read empty creds and went to 'failed' before User loaded. (#212)

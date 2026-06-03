@@ -126,6 +126,8 @@ import {
   disconnectMsGraph,
   type MsGraphStatus,
 } from '../api';
+// v0.10.75 — Ringtone picker uses the synthesized ringtone engine.
+import { ringtone, getRingtonePresets, type RingtoneSlug } from '../services/ringtone';
 import {
   DEFAULT_QUICK_REPLIES,
   getQuickReplies,
@@ -186,6 +188,8 @@ const SECTIONS: SectionDef[] = [
   { key: 'microphone', category: 'Calling', label: 'Microphone', icon: Mic, blurb: 'Input device', Component: MicrophoneSection },
   { key: 'speaker', category: 'Calling', label: 'Speaker', icon: Volume2, blurb: 'Output device', Component: SpeakerSection },
   { key: 'notifications', category: 'Personal', label: 'Notifications', icon: Bell, blurb: 'Calls + SMS alerts', Component: NotificationsSection },
+  // v0.10.75 — Per-user ringtone preference.
+  { key: 'ringtone', category: 'Personal', label: 'Ringtone', icon: Bell, blurb: 'Pick the sound your incoming calls play', Component: RingtoneSection },
   // v0.10.0 Pillar 2 — Teams notifications.
   { key: 'teams', category: 'Personal', label: 'Teams notifications', icon: MessageSquare, blurb: 'Forward missed calls / SMS / voicemails to a Teams channel', Component: TeamsNotificationsSection },
   { key: 'quick-replies', category: 'Personal', label: 'Quick replies', icon: MessageSquare, blurb: 'SMS templates', Component: QuickRepliesSection },
@@ -1476,6 +1480,87 @@ function DeviceList({
           {selected === d.deviceId && <Check size={18} />}
         </button>
       ))}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// v0.10.75 — Ringtone picker section
+// ---------------------------------------------------------------------------
+function RingtoneSection() {
+  const [selected, setSelected] = useState<string>(() => {
+    return sessionStorage.getItem('ace_ringtone') || 'classic';
+  });
+  const [previewing, setPreviewing] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const presets = getRingtonePresets();
+
+  function preview(slug: string) {
+    // Stop whatever's playing first.
+    ringtone.stop();
+    setPreviewing(slug);
+    // Play ~3 seconds then auto-stop. Most ringtones complete one or
+    // two cycles in that window so user hears the cadence.
+    ringtone.start(slug as RingtoneSlug, 3500);
+    window.setTimeout(() => {
+      setPreviewing((p) => (p === slug ? null : p));
+    }, 3600);
+  }
+
+  async function handleSelect(slug: string) {
+    setError(null);
+    setSelected(slug);
+    // Optimistic — write sessionStorage first so a ringing call mid-save
+    // already uses the new preset.
+    sessionStorage.setItem('ace_ringtone', slug);
+    const token = sessionStorage.getItem('ace_token');
+    if (!token) return;
+    setSaving(true);
+    try {
+      await updateMe(token, { ringtone: slug });
+    } catch (e) {
+      setError(`Saved locally but couldn't sync to server: ${(e as Error).message}`);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="settings-section">
+      <p className="settings-blurb">
+        Pick the sound that plays when someone calls you. The choice follows
+        your account across devices — sign in on a different machine and it
+        comes with you.
+      </p>
+      <ul className="ringtone-list">
+        {presets.map((p) => (
+          <li key={p.slug} className={`ringtone-row${selected === p.slug ? ' selected' : ''}`}>
+            <label className="ringtone-pick">
+              <input
+                type="radio"
+                name="ringtone"
+                value={p.slug}
+                checked={selected === p.slug}
+                onChange={() => void handleSelect(p.slug)}
+              />
+              <span className="ringtone-name">{p.label}</span>
+              <span className="ringtone-hint muted">{p.hint}</span>
+            </label>
+            <button
+              type="button"
+              className="device-action"
+              onClick={() => preview(p.slug)}
+              aria-label={`Preview ${p.label} ringtone`}
+            >
+              {previewing === p.slug ? '◼ Stop' : '▶ Play'}
+            </button>
+          </li>
+        ))}
+      </ul>
+      {saving && <p className="muted small" style={{ marginTop: 8 }}>Saving…</p>}
+      {error && <p className="error small" style={{ marginTop: 8 }}>{error}</p>}
     </div>
   );
 }

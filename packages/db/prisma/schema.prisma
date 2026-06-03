@@ -99,6 +99,11 @@ model User {
   /// invite-new-user flows pass this through to applyAceConnectionDefaults
   /// which PATCHes the new Credential Connection's anchorsite_override.
   country         String?   @map("country")
+  /// v0.10.75 — Ringtone preference. One of: 'classic' | 'modern' | 'chime'
+  /// | 'pulse'. NULL = use the system default ('classic'). User picks from
+  /// Settings → Personal → Ringtone. Persisted server-side so the choice
+  /// follows the user across devices.
+  ringtone        String?   @map("ringtone")
   lastLoginAt     DateTime? @map("last_login_at")
   createdAt       DateTime  @default(now()) @map("created_at")
   updatedAt       DateTime  @updatedAt      @map("updated_at")

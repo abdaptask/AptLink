@@ -1358,6 +1358,42 @@ body {
 [data-theme="light"] .contacts-quickpick-phone { color: var(--text-muted); }
 [data-theme="light"] .contacts-quickpick-section { color: var(--text-muted); }
 
+/* ============ v0.10.75 RINGTONE PICKER ============ */
+.ringtone-list {
+  list-style: none;
+  padding: 0;
+  margin: 8px 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-width: 540px;
+}
+.ringtone-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+.ringtone-row.selected {
+  border-color: #0a84ff;
+  background: rgba(10, 132, 255, 0.08);
+}
+[data-theme="light"] .ringtone-row { background: rgba(0, 0, 0, 0.02); border-color: rgba(0, 0, 0, 0.08); }
+[data-theme="light"] .ringtone-row.selected { background: rgba(10, 132, 255, 0.07); }
+.ringtone-pick {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  cursor: pointer;
+}
+.ringtone-pick input { margin-right: 8px; }
+.ringtone-name { font-size: 0.95rem; font-weight: 500; }
+.ringtone-hint { font-size: 0.78rem; }
+
 /* ============ v0.10.74 PRAISE MODAL + ADMIN SECTION ============ */
 /* Big celebratory pop-over shown to recipients when admin sends a praise.
    Full-viewport backdrop dims everything; centered modal sits on top

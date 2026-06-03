@@ -18,6 +18,9 @@ export interface User {
   // v0.10.60 — Beta opt-in for the Connection Health smoothing + webhook
   // recovery behavior. Optional for back-compat with older API responses.
   connectionHealthBeta?: boolean;
+  // v0.10.75 — Ringtone preference. One of the bundled slugs in
+  // services/ringtone.ts. NULL = use the default ('classic').
+  ringtone?: string | null;
 }
 
 export interface UpdateMeInput {

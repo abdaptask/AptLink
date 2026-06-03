@@ -87,6 +87,9 @@ export async function authRoutes(app: FastifyInstance) {
       // recovery behavior. Client reads this on login and toggles its
       // disconnect-display debounce + socket.io reconnect listener.
       connectionHealthBeta: user.connectionHealthBeta,
+      // v0.10.75 — Ringtone preference ('classic' / 'modern' / 'chime' /
+      // 'pulse'). NULL means use the default.
+      ringtone: user.ringtone,
     };
   });
 
@@ -99,6 +102,11 @@ export async function authRoutes(app: FastifyInstance) {
     sipUsername: z.string().optional(),
     sipPassword: z.string().optional(),
     didNumber: z.string().optional(),
+    // v0.10.75 — Ringtone preference. Accept any of the bundled slugs; we
+    // don't validate against the exact union here so future presets added
+    // on the client don't require an API redeploy. Client UI restricts to
+    // the valid set.
+    ringtone: z.string().max(32).nullable().optional(),
   });
   app.patch('/auth/me', { onRequest: [app.authenticate] }, async (request: FastifyRequest, reply) => {
     const jwtUser = request.user as JwtPayload;
@@ -125,6 +133,8 @@ export async function authRoutes(app: FastifyInstance) {
               : `+${cleaned}`
         : null;
     }
+    // v0.10.75 — Ringtone slug pass-through.
+    if (b.ringtone !== undefined) updates.ringtone = b.ringtone || null;
 
     try {
       const updated = await prisma.user.update({
