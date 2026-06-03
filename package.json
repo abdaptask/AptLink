@@ -1,6 +1,6 @@
 {
   "name": "acedialerv4",
-  "version": "0.10.55",
+  "version": "0.10.56",
   "private": true,
   "description": "ACE Dialer 2.0 backend monorepo",
   "workspaces": [

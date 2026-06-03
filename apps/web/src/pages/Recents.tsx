@@ -108,6 +108,13 @@ export default function Recents() {
   // (The CallRecord rows themselves don't know about the blocklist — that
   // status is server-side and only applies to FUTURE inbound calls.) (#159)
   const [blockedThisSession, setBlockedThisSession] = useState<Set<string>>(new Set());
+  // v0.10.55 — Copy-on-tap toast.
+  // Tapping a row used to immediately dial the contact, which is dangerous
+  // (accidental call) and unhelpful when the user just wants to grab the
+  // number. New behavior: row tap copies the number to clipboard and
+  // briefly shows a "Copied X" pill. The Phone icon on the right of the
+  // row is now an actual button for placing the call.
+  const [copiedNumber, setCopiedNumber] = useState<string | null>(null);
   const { sipState, call } = useSip();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -188,6 +195,41 @@ export default function Recents() {
     navigate('/in-call');
   }
 
+  // v0.10.55 — Row-tap copy. Writes to system clipboard (when available)
+  // and shows a brief floating toast. Falls back to a hidden textarea
+  // execCommand-copy on browsers without async clipboard. Toast lives in
+  // state and auto-dismisses after 1800ms.
+  function handleCopyNumber(c: CallRecord) {
+    const target = c.direction === 'inbound' ? c.fromNumber : c.toNumber;
+    if (!target) return;
+    const pretty = formatPhone(target) || target;
+    const writePromise = navigator.clipboard?.writeText
+      ? navigator.clipboard.writeText(target)
+      : Promise.reject(new Error('no async clipboard'));
+    writePromise
+      .catch(() => {
+        // Fallback for older browsers / non-secure contexts.
+        try {
+          const ta = document.createElement('textarea');
+          ta.value = target;
+          ta.style.position = 'fixed';
+          ta.style.opacity = '0';
+          document.body.appendChild(ta);
+          ta.select();
+          document.execCommand('copy');
+          document.body.removeChild(ta);
+        } catch {
+          /* swallow — user can still long-press to copy manually */
+        }
+      })
+      .finally(() => {
+        setCopiedNumber(pretty);
+        window.setTimeout(() => {
+          setCopiedNumber((current) => (current === pretty ? null : current));
+        }, 1800);
+      });
+  }
+
   function handleSendSms(c: CallRecord) {
     const target = c.direction === 'inbound' ? c.fromNumber : c.toNumber;
     if (!target) return;
@@ -262,6 +304,14 @@ export default function Recents() {
 
   return (
     <div className="recents">
+      {/* v0.10.55 — Copy-number toast. Mounted at the page level (not per
+          row) so it lives in a single fixed position and doesn't shift the
+          row layout. Auto-dismisses via the setTimeout in handleCopyNumber. */}
+      {copiedNumber && (
+        <div className="copy-toast" role="status" aria-live="polite">
+          Copied {copiedNumber}
+        </div>
+      )}
       {contactFilter && (
         <button
           type="button"
@@ -331,6 +381,7 @@ export default function Recents() {
               expanded={expandedId === c.id}
               blockedHere={sessionBlocked}
               onCallBack={() => handleCallBack(c)}
+              onCopy={() => handleCopyNumber(c)}
               onSendSms={() => handleSendSms(c)}
               onToggleFavorite={() => handleToggleFavorite(c)}
               onBlock={() => handleBlock(c)}
@@ -436,6 +487,7 @@ function RecentRow({
   expanded,
   blockedHere,
   onCallBack,
+  onCopy,
   onSendSms,
   onToggleFavorite,
   onBlock,
@@ -445,6 +497,8 @@ function RecentRow({
   expanded: boolean;
   blockedHere: boolean;
   onCallBack: () => void;
+  // v0.10.55 — Row tap copies the number instead of dialing.
+  onCopy: () => void;
   onSendSms: () => void;
   onToggleFavorite: () => void;
   onBlock: () => void;
@@ -459,7 +513,11 @@ function RecentRow({
   const displayName = getFavoriteName(number) ?? jd?.name ?? formatNumber(number);
   return (
     <li className={`call-row${missed ? ' missed' : ''}${expanded ? ' expanded' : ''}`}>
-      <div className="call-row-main" onClick={onCallBack}>
+      {/* v0.10.55 — Row tap now copies the number to clipboard (see onCopy).
+          Dial action moved to the Phone icon button on the right so users
+          can still call in one tap. Title attribute teaches users about
+          the new behavior. */}
+      <div className="call-row-main" onClick={onCopy} title="Tap to copy number">
         <div className="call-left">
           {callIcon(c)}
           <div className="call-text">
@@ -535,7 +593,22 @@ function RecentRow({
               <Ban size={16} />
             </button>
           )}
-          <Phone size={18} className="callback-ico" aria-hidden="true" />
+          {/* v0.10.55 — Phone icon is now a real button (was decorative).
+              Previously the row tap dialed; now the row tap copies, so the
+              call action moved here. stopPropagation so we don't also fire
+              the row's copy handler. */}
+          <button
+            type="button"
+            className="callback-ico call-ico"
+            aria-label="Call this number"
+            title="Call this number"
+            onClick={(e) => {
+              e.stopPropagation();
+              onCallBack();
+            }}
+          >
+            <Phone size={18} />
+          </button>
         </div>
       </div>
       {expanded && c.recordingUrl && (

@@ -2636,6 +2636,33 @@ body {
   max-width: 480px;
   margin: 0 auto;
   padding: 0.5rem 0 2rem;
+  /* v0.10.55 — Establish a positioning context for the copy-toast so it
+     pins to this page rather than escaping into the layout. */
+  position: relative;
+}
+
+/* v0.10.55 — Copy-to-clipboard confirmation pill. Fixed-position so it sits
+   above the row layout regardless of scroll, mid-page so it's visible on
+   any DID. Auto-dismissed by the JS timeout in handleCopyNumber. */
+.copy-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 96px;
+  transform: translateX(-50%);
+  background: rgba(33, 33, 33, 0.95);
+  color: #fff;
+  padding: 0.55rem 0.95rem;
+  border-radius: 999px;
+  font-size: 0.9rem;
+  font-weight: 500;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.25);
+  z-index: 5000;
+  pointer-events: none;
+  animation: copyToastIn 0.18s ease-out;
+}
+@keyframes copyToastIn {
+  from { opacity: 0; transform: translate(-50%, 6px); }
+  to   { opacity: 1; transform: translate(-50%, 0); }
 }
 .recents-header {
   display: flex;

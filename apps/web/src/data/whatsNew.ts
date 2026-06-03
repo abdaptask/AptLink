@@ -24,13 +24,21 @@ export interface ReleaseEntry {
 
 export const WHATS_NEW: ReleaseEntry[] = [
   {
+    version: '0.10.56',
+    date: 'June 3, 2026',
+    highlight: 'Timestamps everywhere + safer Recents row tap',
+    changes: [
+      { type: 'improved', text: 'Recents, Messages, Voicemail, and Chat rows now show the time-of-day on every row, not just on rows from today. "Yesterday" becomes "Yesterday, 9:37 AM"; "Jun 1" becomes "Jun 1, 9:37 AM". You can scan when each call/SMS/voicemail actually landed.' },
+      { type: 'improved', text: 'Tapping a Recents row no longer auto-dials. It now copies the number to your clipboard and shows a brief "Copied" pill. To actually place the call, tap the new Phone icon on the right of the row. The SMS, favorite, and block buttons keep working as before. This stops accidental redials from a stray click and lets you paste the number into another app (a text, an email, a CRM record).' },
+    ],
+  },
+  {
     version: '0.10.55',
     date: 'June 3, 2026',
-    highlight: 'Cleaner call history + paste-to-send images + timestamps everywhere',
+    highlight: 'Cleaner call history + paste-to-send images',
     changes: [
       { type: 'fixed', text: 'Interaction history modal no longer shows duplicate rows for the same call. A single call could appear as two entries (one labeled "originator_cancel" and one "Canceled", or two rows with slightly different durations) because Telnyx fires events for both legs of a call. Recents already collapsed these — the per-contact history modal was missing the same step.' },
       { type: 'new', text: 'Paste an image directly into the message box to send as MMS. Copy a screenshot (Snipping Tool, Print Screen, Cmd+Shift+4, drag from another window), click into a thread, press Ctrl+V (or ⌘+V), and the image uploads as an attachment without you needing to save it to disk first. Plain text paste still works as before.' },
-      { type: 'improved', text: 'Recents, Messages, Voicemail, and Chat rows now show the time-of-day on every row, not just on rows from today. "Yesterday" becomes "Yesterday, 9:37 AM"; "Jun 1" becomes "Jun 1, 9:37 AM". You can scan when each call/SMS/voicemail actually landed.' },
     ],
   },
   {
