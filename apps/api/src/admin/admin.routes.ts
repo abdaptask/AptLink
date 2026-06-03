@@ -72,6 +72,9 @@ function publicUser(u: {
     label: string | null;
     isDefault: boolean;
   }>;
+  // v0.10.60 — Beta flag. Optional because legacy SELECT clauses may not
+  // include it; treated as false when missing.
+  connectionHealthBeta?: boolean;
 }) {
   return {
     id: u.id,
@@ -86,6 +89,7 @@ function publicUser(u: {
     lastLoginAt: u.lastLoginAt ? u.lastLoginAt.toISOString() : null,
     createdAt: u.createdAt.toISOString(),
     userDids: u.userDids ?? [],
+    connectionHealthBeta: u.connectionHealthBeta ?? false,
   };
 }
 
@@ -935,6 +939,11 @@ export async function adminRoutes(app: FastifyInstance) {
           id: true, email: true, firstName: true, lastName: true,
           isAdmin: true, isActive: true, provider: true,
           sipUsername: true, didNumber: true, lastLoginAt: true, createdAt: true,
+          // v0.10.60 — Echo the beta flag back so the admin UI can update
+          // the kebab menu state without a full Users re-fetch. Without
+          // this, the kebab kept showing "Enable" after a toggle because
+          // r.connectionHealthBeta came back undefined.
+          connectionHealthBeta: true,
         },
       });
 
