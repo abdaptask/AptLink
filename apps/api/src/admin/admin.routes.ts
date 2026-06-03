@@ -3397,6 +3397,15 @@ export async function adminRoutes(app: FastifyInstance) {
     pulsePassword: z.string().min(1).max(200),
     isAdmin: z.boolean().optional().default(false),
     daysBack: z.number().int().min(1).max(90).optional().default(30),
+    // v0.10.58 — Optional manual DID override. When provided, the migration
+    // ignores whatever voip_number / caller_phone_number Pulse returned in
+    // the JWT and uses this number for the Telnyx lookup + UserDid creation.
+    // Use case: Pulse data is stale or wrong (verified case: Roshni Sahani
+    // — Pulse stored 4706008030 but her real Telnyx DID is 4706168494).
+    // Accepted formats: E.164 (+14706168494), 11-digit (14706168494),
+    // 10-digit US (4706168494), or with separators ((470) 616-8494).
+    // Server normalizes to E.164.
+    didOverride: z.string().trim().min(0).max(32).optional(),
   });
   app.post(
     '/admin/users/migrate-from-pulse',
@@ -3408,7 +3417,7 @@ export async function adminRoutes(app: FastifyInstance) {
       if (!parsed.success) {
         return reply.code(400).send({ error: 'Invalid input', details: parsed.error.flatten() });
       }
-      const { pulseEmail, pulsePassword, isAdmin: makeAdmin, daysBack } = parsed.data;
+      const { pulseEmail, pulsePassword, isAdmin: makeAdmin, daysBack, didOverride } = parsed.data;
       const normEmail = pulseEmail.trim().toLowerCase();
 
       const steps: Array<{ step: string; ok: boolean; error?: string }> = [];
@@ -3430,10 +3439,23 @@ export async function adminRoutes(app: FastifyInstance) {
       }
       step(`decode Pulse JWT (user_id=${payload.id}, name=${payload.first_name ?? ''} ${payload.last_name ?? ''})`, true);
 
-      // 2) Verify Pulse user has a voip_number we can migrate
-      const rawVoip = (payload.voip_number ?? payload.caller_phone_number ?? '').trim();
+      // 2) Verify we have a voip_number we can migrate.
+      //
+      // v0.10.58 — When admin supplies didOverride, ignore Pulse's stored
+      // voip_number/caller_phone_number entirely and use the override.
+      // Use case: Pulse has stale or wrong data on the user's record
+      // (verified case: Roshni Sahani — Pulse stored 4706008030 but her
+      // real Telnyx DID is 4706168494). The override lets us migrate
+      // without first having to fix Pulse data. The override value is
+      // also logged into the step list and audit so we have a record
+      // that admin manually supplied the number.
+      const didOverrideTrimmed = (didOverride ?? '').trim();
+      const usingOverride = didOverrideTrimmed.length > 0;
+      const rawVoip = usingOverride
+        ? didOverrideTrimmed
+        : (payload.voip_number ?? payload.caller_phone_number ?? '').trim();
       if (!rawVoip) {
-        step('extract voip_number from Pulse profile', false, 'Pulse user has no voip_number / caller_phone_number assigned');
+        step('extract voip_number from Pulse profile', false, 'Pulse user has no voip_number / caller_phone_number assigned (and no override supplied)');
         return reply.code(422).send({ ok: false, error: 'This Pulse user has no phone number to migrate', steps });
       }
       const voipDigits = rawVoip.replace(/\D/g, '');
@@ -3442,7 +3464,13 @@ export async function adminRoutes(app: FastifyInstance) {
         : voipDigits.length === 10
           ? `+1${voipDigits}`
           : rawVoip.startsWith('+') ? rawVoip : `+${voipDigits}`;
-      step(`extract voip_number (${e164})`, true);
+      // Surface the override clearly in the step list so admin can audit.
+      step(
+        usingOverride
+          ? `extract voip_number (${e164}) — using admin override, Pulse said "${(payload.voip_number ?? payload.caller_phone_number ?? '(blank)')}"`
+          : `extract voip_number (${e164})`,
+        true,
+      );
 
       // 3) Refuse if ACE already has this user (active) or this DID
       const dupUser = await prisma.user.findUnique({
@@ -3645,6 +3673,12 @@ export async function adminRoutes(app: FastifyInstance) {
         pulseEmail: normEmail,
         aceEmail: normEmail,
         didNumber: e164,
+        // v0.10.58 — Audit the override usage so we have a record that admin
+        // manually supplied this DID (and that we ignored Pulse's stored
+        // value). Helpful for incident review if a wrong number got migrated.
+        usedDidOverride: usingOverride,
+        pulseStoredVoipNumber: payload.voip_number ?? null,
+        pulseStoredCallerPhoneNumber: payload.caller_phone_number ?? null,
         previousConnectionId,
         newConnectionId: connectionId,
         callsInserted: backfillResult?.callsInserted ?? 0,

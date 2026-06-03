@@ -24,6 +24,14 @@ export interface ReleaseEntry {
 
 export const WHATS_NEW: ReleaseEntry[] = [
   {
+    version: '0.10.58',
+    date: 'June 3, 2026',
+    highlight: 'Manual DID override on Pulse migration',
+    changes: [
+      { type: 'new', text: 'Admin → Migrate user from Pulse modal now has an optional "DID override" field. When Pulse has stale or wrong data on a user (e.g. voip_number points at a number Telnyx no longer recognizes), admin can paste the correct DID and migration uses it instead of trusting Pulse. Verified case: Roshni Sahani — Pulse stored 4706008030 but her real Telnyx DID is 4706168494. The override usage is recorded in the audit log alongside whatever Pulse said, so we have a trail.' },
+    ],
+  },
+  {
     version: '0.10.57',
     date: 'June 3, 2026',
     highlight: 'Messages page width matches Recents',

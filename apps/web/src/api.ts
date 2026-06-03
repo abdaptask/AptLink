@@ -1597,6 +1597,12 @@ export interface MigrateFromPulseInput {
   pulsePassword: string;
   isAdmin?: boolean;
   daysBack?: number;
+  // v0.10.58 — Optional manual DID override. When provided, the migration
+  // ignores whatever number Pulse has on the user's profile and uses this
+  // value for the Telnyx lookup. Use case: Pulse data is stale / wrong.
+  // Accepts E.164, 11-digit, 10-digit US, or formatted strings — server
+  // normalizes to E.164.
+  didOverride?: string;
 }
 export interface MigrateFromPulseResult {
   ok: boolean;

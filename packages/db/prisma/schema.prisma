@@ -94,6 +94,7 @@ model User {
   internalReceived   InternalMessage[] @relation("InternalMessageRecipient")
   blockedNumbers     BlockedNumber[]
   favorites          Favorite[]
+  scheduledMessages  ScheduledMessage[]
   auditLogsAuthored  AuditLog[]        @relation("AuditLogActor")
   auditLogsTargeting AuditLog[]        @relation("AuditLogTarget")
   /// v0.10.0 — Multi-DID support. Replaces the singular User.didNumber
@@ -158,6 +159,7 @@ model UserDid {
   calls           Call[]
   messages        Message[]
   voicemails      Voicemail[]
+  scheduledMessages ScheduledMessage[]
 
   @@index([userId])
   @@index([ringGroupId])
@@ -498,6 +500,64 @@ model SmsTemplate {
 
   @@index([isActive, category, sortOrder])
   @@map("sms_templates")
+}
+
+/// v0.10.59 — Schedule an SMS or MMS to send at a future moment.
+///
+/// One-off only — no recurrence. The worker picks up rows where
+/// scheduledFor <= now() AND status='pending', sends via Telnyx, then
+/// flips status to 'sent' (and stamps sentAt) or 'failed' (with the error
+/// stored in lastError). User can edit/cancel any row in status='pending'.
+///
+/// Why a dedicated table (vs. piggy-backing on Message with a future
+/// sentAt): we want to atomically claim a row when the worker fires —
+/// UPDATE ... SET status='sending' WHERE status='pending' AND id=... —
+/// and that's awkward against the Message table which has different
+/// semantics. Also keeps the scheduled queue logically separate from
+/// already-sent history.
+model ScheduledMessage {
+  id            Int       @id @default(autoincrement())
+  userId        Int       @map("user_id")
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// Recipient (E.164). Same as the threadKey on the Message that will
+  /// eventually be created.
+  toNumber      String    @map("to_number")
+  /// SMS body. Empty string allowed when mediaUrls is non-empty (MMS-only).
+  body          String    @default("")
+  /// MMS attachment URLs (Supabase Storage public URLs, same format the
+  /// immediate-send path uses).
+  mediaUrls     String[]  @default([]) @map("media_urls")
+  /// When to fire. Stored as UTC timestamp; client picks in their local
+  /// timezone and converts.
+  scheduledFor  DateTime  @map("scheduled_for")
+  /// Which DID to send FROM. Optional — if NULL at send time, worker
+  /// uses the user's activeUserDidId (or default DID). Capturing it at
+  /// schedule time means a later DID change doesn't surprise-route the
+  /// message via a different number.
+  userDidId     Int?      @map("user_did_id")
+  userDid       UserDid?  @relation(fields: [userDidId], references: [id], onDelete: SetNull)
+  /// 'pending' (waiting to fire) | 'sending' (worker claimed it; brief)
+  /// | 'sent' (handed to Telnyx) | 'failed' (gave up after retries) |
+  /// 'canceled' (user canceled).
+  status        String    @default("pending")
+  /// How many times the worker has attempted to send. Used to back off
+  /// and eventually give up on persistently-failing Telnyx errors.
+  attempts      Int       @default(0)
+  /// Last error message from Telnyx (when status='failed' or attempts>0).
+  lastError     String?   @map("last_error")
+  /// telnyxMessageId returned when the send finally succeeded. Null until
+  /// then. Links the scheduled row to the resulting Message row.
+  telnyxMessageId String?  @map("telnyx_message_id")
+  /// When we actually handed it to Telnyx. Null while pending.
+  sentAt        DateTime? @map("sent_at")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt      @map("updated_at")
+
+  /// Worker query: WHERE status='pending' AND scheduledFor <= now() ORDER BY scheduledFor.
+  @@index([status, scheduledFor])
+  /// Per-user list (Messages compose UI shows pending count on a thread).
+  @@index([userId, status, scheduledFor])
+  @@map("scheduled_messages")
 }
 
 /// v0.10.48 — Tenant-wide key/value settings table.

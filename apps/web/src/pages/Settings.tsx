@@ -2909,6 +2909,9 @@ function MigrateFromPulseModal({
   const [pulseEmail, setPulseEmail] = useState('');
   const [pulsePassword, setPulsePassword] = useState('');
   const [makeAdmin, setMakeAdmin] = useState(false);
+  // v0.10.58 — Optional manual DID override for cases where Pulse has stale
+  // or wrong data on the user's profile. Leave blank to trust Pulse.
+  const [didOverride, setDidOverride] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [result, setResult] = useState<MigrateFromPulseResult | null>(null);
   const bodyRef = useRef<HTMLDivElement | null>(null);
@@ -2938,6 +2941,9 @@ function MigrateFromPulseModal({
         pulseEmail: pulseEmail.trim(),
         pulsePassword,
         isAdmin: makeAdmin,
+        // v0.10.58 — Only send when admin actually typed something; empty
+        // string means "trust Pulse" on the server.
+        didOverride: didOverride.trim() || undefined,
       });
       setResult(r);
     } catch (err) {
@@ -2998,6 +3004,28 @@ function MigrateFromPulseModal({
                 />
                 <span className="muted small" style={{ marginTop: 4, display: 'block' }}>
                   Used once to log into Pulse on their behalf. Never written to disk or audit log.
+                </span>
+              </label>
+              {/* v0.10.58 — Optional DID override.
+                  Leave blank to use whatever number Pulse has on file.
+                  Use this when Pulse data is wrong/stale and the lookup-on-
+                  Telnyx step would otherwise fail. Examples Roshni's case:
+                  Pulse said 4706008030 but her real Telnyx DID is 4706168494. */}
+              <label className="fav-modal-field" style={{ marginBottom: 8 }}>
+                <span className="fav-modal-label">DID override (optional)</span>
+                <input
+                  type="tel"
+                  className="fav-modal-input"
+                  placeholder="+14706168494 — leave blank to use Pulse's value"
+                  value={didOverride}
+                  onChange={(e) => setDidOverride(e.target.value)}
+                  disabled={submitting}
+                  autoComplete="off"
+                />
+                <span className="muted small" style={{ marginTop: 4, display: 'block' }}>
+                  Only fill this if Pulse has the wrong number on the user. When
+                  provided, ACE ignores Pulse's voip_number and looks up this
+                  number on Telnyx instead. Audited.
                 </span>
               </label>
               <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8, fontSize: '0.92rem' }}>
