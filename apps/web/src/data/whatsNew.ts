@@ -24,6 +24,15 @@ export interface ReleaseEntry {
 
 export const WHATS_NEW: ReleaseEntry[] = [
   {
+    version: '0.10.72',
+    date: 'June 3, 2026',
+    highlight: 'Friendly explanations when SMS send fails',
+    changes: [
+      { type: 'new', text: 'When a message fails to send (immediate failure) or fails to deliver (carrier rejected it later), you now see a plain-English explanation instead of a Telnyx error code. Examples: "Carrier filtered as spam" with detail about 10DLC registration, "Number doesn\'t exist" for invalid recipients, "Recipient blocked you" when they sent STOP. Failed bubbles also turn red so you can spot them at a glance.' },
+      { type: 'new', text: 'The error blurb shows both a short label (good for quick scanning) and a longer detail line that explains what likely happened and what to do about it — retry, contact admin, double-check the number, etc. Hover the bubble for the full detail in a native tooltip.' },
+    ],
+  },
+  {
     version: '0.10.71',
     date: 'June 3, 2026',
     highlight: 'Teams Reply/Call leftover browser tab auto-closes',

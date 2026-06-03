@@ -33,7 +33,10 @@ import {
   updateScheduledMessage,
   cancelScheduledMessage,
   type ScheduledMessage,
+  // v0.10.72 — Custom error class so we can extract Telnyx codes.
+  SendMessageError,
 } from '../api';
+import { telnyxErrorBlurb } from '../lib/telnyxErrorBlurb';
 import { useJobDivaContact, getCachedJobDivaName } from '../hooks/useJobDivaContact';
 import { useSip } from '../contexts/SipContext';
 import {
@@ -641,7 +644,16 @@ function ThreadDetail({ number, onBack }: ThreadDetailProps) {
       setDraft('');
       setAttached([]);
     } catch (e) {
-      setError((e as Error).message);
+      // v0.10.72 — Translate Telnyx error codes to friendly blurbs.
+      // SendMessageError carries the raw Telnyx error envelope as .details;
+      // telnyxErrorBlurb digs out the code (e.g. 30007) and returns a
+      // short human explanation. Generic Error falls back to .message.
+      if (e instanceof SendMessageError) {
+        const blurb = telnyxErrorBlurb(e.details ?? e.code);
+        setError(`${blurb.short}. ${blurb.detail}`);
+      } else {
+        setError((e as Error).message);
+      }
     } finally {
       setSending(false);
     }
@@ -939,29 +951,51 @@ function ThreadDetail({ number, onBack }: ThreadDetailProps) {
 
       <div className="msg-stream" ref={scrollRef}>
         {loading && messages.length === 0 && <div className="muted">Loading…</div>}
-        {messages.map((m) => (
-          <div
-            key={m.id}
-            className={`bubble ${m.direction === 'outbound' ? 'out' : 'in'}`}
-          >
-            {m.body && <div className="bubble-text">{m.body}</div>}
-            {m.mediaUrls?.length > 0 && (
-              <div className="bubble-media">
-                {m.mediaUrls.map((u, i) => (
-                  <a key={i} href={u} target="_blank" rel="noreferrer">
-                    <img src={u} alt="attachment" />
-                  </a>
-                ))}
-              </div>
-            )}
-            <div className="bubble-meta">
-              {formatRelative(m.createdAt)}
-              {m.direction === 'outbound' && (
-                <span className="bubble-status"> · {m.status}</span>
+        {messages.map((m) => {
+          // v0.10.72 — Surface a friendly blurb on failed / delivery_failed
+          // bubbles. The `errors` JSON column holds the Telnyx error
+          // envelope (when present); telnyxErrorBlurb extracts the code
+          // and returns a short label + detail. Renders as a small red
+          // info strip below the bubble text.
+          const isFailedStatus =
+            m.direction === 'outbound' &&
+            (m.status === 'failed' || m.status === 'delivery_failed');
+          const failBlurb = isFailedStatus
+            ? telnyxErrorBlurb(m.errors ?? m.status)
+            : null;
+          return (
+            <div
+              key={m.id}
+              className={`bubble ${m.direction === 'outbound' ? 'out' : 'in'}${isFailedStatus ? ' bubble-failed' : ''}`}
+            >
+              {m.body && <div className="bubble-text">{m.body}</div>}
+              {m.mediaUrls?.length > 0 && (
+                <div className="bubble-media">
+                  {m.mediaUrls.map((u, i) => (
+                    <a key={i} href={u} target="_blank" rel="noreferrer">
+                      <img src={u} alt="attachment" />
+                    </a>
+                  ))}
+                </div>
               )}
+              {failBlurb && (
+                <div
+                  className="bubble-fail-blurb"
+                  title={failBlurb.detail}
+                >
+                  <strong>{failBlurb.short}.</strong>{' '}
+                  <span className="muted">{failBlurb.detail}</span>
+                </div>
+              )}
+              <div className="bubble-meta">
+                {formatRelative(m.createdAt)}
+                {m.direction === 'outbound' && (
+                  <span className="bubble-status"> · {m.status}</span>
+                )}
+              </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
 
       <input
