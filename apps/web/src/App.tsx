@@ -156,6 +156,21 @@ export default function App() {
         path="/login"
         element={user ? <Navigate to="/keypad" /> : <Login onSuccess={handleLoginSuccess} />}
       />
+      {/* v0.10.70 — Auto-route pages render WITHOUT the auth gate so a
+          Teams card click can fire `ace-dialer://` BEFORE the user is
+          redirected to /login. Without this, an unauthenticated browser
+          hitting /auto/sms got bounced to /login first, the protocol
+          launch never ran, and the Teams Reply button always landed on
+          the web app's SSO login (the v0.10.67 fix only handled the
+          inside-Electron case, not the unauthenticated-browser case).
+          The AutoRoute component doesn't need auth — it just attempts
+          the protocol redirect and falls back to /messages or /keypad
+          after 8s. The fallback DOES hit the auth gate, which is fine:
+          if the protocol handler launched Electron, the browser tab
+          doesn't matter; if it didn't, the user still needs to log in
+          to use the web fallback. */}
+      <Route path="/auto/call" element={<AutoRoute action="call" />} />
+      <Route path="/auto/sms" element={<AutoRoute action="sms" />} />
       <Route
         path="/"
         element={
@@ -186,8 +201,6 @@ export default function App() {
         <Route path="contacts" element={<Contacts />} />
         <Route path="voicemail" element={<Voicemail />} />
         <Route path="voicemail/:id/play" element={<VoicemailPlay />} />
-        <Route path="auto/call" element={<AutoRoute action="call" />} />
-        <Route path="auto/sms" element={<AutoRoute action="sms" />} />
         <Route path="settings" element={<Settings />} />
         <Route path="settings/:section" element={<Settings />} />
       </Route>

@@ -24,6 +24,14 @@ export interface ReleaseEntry {
 
 export const WHATS_NEW: ReleaseEntry[] = [
   {
+    version: '0.10.70',
+    date: 'June 3, 2026',
+    highlight: 'Teams Reply/Call → Electron — actually works now',
+    changes: [
+      { type: 'fixed', text: 'Teams notification Reply / Call buttons now actually open the Electron desktop app. The v0.10.67 attempt only handled the case where the user was ALREADY inside Electron — for the typical case (Teams card click opens the URL in the default browser, where the user has no ACE session), the auth guard redirected to /login BEFORE the protocol-launch page ever rendered. Moved the /auto/call and /auto/sms routes outside the auth gate so the ace-dialer:// redirect fires immediately, even for unauthenticated browser sessions. The "Open ACE Dialer?" browser prompt now appears reliably; click Allow once (with "Always allow") and future Teams card clicks open Electron silently. The web fallback (when the protocol handler is absent) still works as before for users without the desktop app.' },
+    ],
+  },
+  {
     version: '0.10.69',
     date: 'June 3, 2026',
     highlight: 'Telnyx auto-config — country picker on Invite + Edit country on Users tab',
