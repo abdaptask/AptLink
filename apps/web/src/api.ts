@@ -761,6 +761,11 @@ export interface MessageRecord {
   deliveredAt: string | null;
   createdAt: string;
   userDid?: RowUserDid | null;
+  // v0.10.72 — Telnyx error envelope. Populated when a message hits
+  // status='failed' or 'delivery_failed'. The shape varies — usually
+  // { errors: [{ code: '30007', title: '...', detail: '...' }] } — so
+  // we type as unknown and let telnyxErrorBlurb() parse defensively.
+  errors?: unknown;
 }
 
 export interface ThreadSummary {
@@ -840,6 +845,25 @@ export interface SendMessageInput {
   mediaUrls?: string[];
 }
 
+// v0.10.72 — Custom error class so the UI can extract the Telnyx error
+// details (code, title, full envelope) and run them through the friendly
+// blurb mapper. Previously sendMessage threw a generic Error whose
+// .message was just "telnyx_send_failed" or "HTTP 502" — the actual
+// Telnyx code (30007 etc.) was on `err.details` and got swallowed at
+// the throw site.
+export class SendMessageError extends Error {
+  /** Top-level error string from the backend ("telnyx_send_failed" etc.) */
+  code: string;
+  /** Raw Telnyx error envelope when the backend forwarded one. */
+  details: unknown;
+  constructor(code: string, message: string, details?: unknown) {
+    super(message);
+    this.name = 'SendMessageError';
+    this.code = code;
+    this.details = details;
+  }
+}
+
 export async function sendMessage(token: string, input: SendMessageInput): Promise<MessageRecord> {
   const res = await fetch(`${API_URL}/messages`, {
     method: 'POST',
@@ -850,8 +874,16 @@ export async function sendMessage(token: string, input: SendMessageInput): Promi
     body: JSON.stringify(input),
   });
   if (!res.ok) {
-    const err = await res.json().catch(() => ({ error: 'send failed' }));
-    throw new Error(err.error || `HTTP ${res.status}`);
+    const body = await res.json().catch(() => ({})) as {
+      error?: string;
+      message?: string;
+      details?: unknown;
+    };
+    throw new SendMessageError(
+      body.error ?? `http_${res.status}`,
+      body.message ?? body.error ?? `HTTP ${res.status}`,
+      body.details,
+    );
   }
   return res.json();
 }

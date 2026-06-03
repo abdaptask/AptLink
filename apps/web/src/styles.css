@@ -4526,6 +4526,25 @@ body {
 .bubble.in .bubble-meta { text-align: left; }
 .bubble-status { opacity: 0.85; }
 
+/* v0.10.72 — Failed-message bubble decoration + inline blurb. */
+.bubble.bubble-failed {
+  background: #b91c1c; /* dark red — clear visual cue this message didn't deliver */
+}
+.bubble-fail-blurb {
+  margin-top: 6px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.25);
+  font-size: 11.5px;
+  line-height: 1.35;
+  color: #fff;
+}
+.bubble-fail-blurb strong {
+  display: inline-block;
+  margin-right: 2px;
+}
+.bubble-fail-blurb .muted { color: rgba(255, 255, 255, 0.78); }
+
 .compose-row {
   display: flex;
   align-items: center;
