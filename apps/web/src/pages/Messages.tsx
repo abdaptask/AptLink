@@ -24,6 +24,9 @@ import {
   // v0.10.52 — Tenant SMS templates picker.
   listMySmsTemplates,
   type SmsTemplate,
+  // v0.10.54 — Used to resolve {recruiter} placeholder to the user's
+  // first name when picking a template.
+  getMe,
 } from '../api';
 import { useJobDivaContact, getCachedJobDivaName } from '../hooks/useJobDivaContact';
 import { useSip } from '../contexts/SipContext';
@@ -373,11 +376,30 @@ function ThreadDetail({ number, onBack }: ThreadDetailProps) {
   // {firstName} pre-filled from the contact (if known).
   const [showTemplatePicker, setShowTemplatePicker] = useState(false);
   const [templates, setTemplates] = useState<SmsTemplate[]>([]);
+  // v0.10.54 — Logged-in user's first name. Resolves {recruiter} in
+  // templates so it shows up as "Hi Jean, this is Abdulla from..." rather
+  // than literal "{recruiter}". Falls back to empty string until the
+  // /me call resolves (template still works; recruiter just shows blank
+  // for the first render after picking).
+  const [recruiterFirstName, setRecruiterFirstName] = useState<string>('');
+
+  // v0.10.54 — Auto-grow the compose textarea so the whole drafted
+  // message is visible without scrolling. Previously rows=1 was hard-
+  // coded, so picking a long template (e.g. cold outreach) clipped to
+  // ~28 chars and the user had to scroll to verify what they were sending.
+  // Cap at ~9 lines (200px) so the textarea doesn't dominate the screen
+  // for very long drafts; at that point the user has clear scroll affordance.
   useEffect(() => {
     const token = sessionStorage.getItem('ace_token');
     if (!token) return;
     listMySmsTemplates(token)
       .then((items) => setTemplates(items))
+      .catch(() => undefined);
+    getMe(token)
+      .then((u) => {
+        const first = (u.firstName ?? '').trim();
+        if (first) setRecruiterFirstName(first);
+      })
       .catch(() => undefined);
   }, []);
   const composeInputRef = useRef<HTMLTextAreaElement>(null);
@@ -386,6 +408,23 @@ function ThreadDetail({ number, onBack }: ThreadDetailProps) {
     window.addEventListener('ace:quickRepliesChanged', refresh);
     return () => window.removeEventListener('ace:quickRepliesChanged', refresh);
   }, []);
+
+  // v0.10.54 — Auto-resize the compose textarea to fit its content.
+  // Fires every time `draft` changes (typing, paste, template insert,
+  // emoji insert). The textarea grows to fit content up to ~9 visible
+  // lines (200px); beyond that it scrolls internally. When draft empties
+  // (after sending), it shrinks back to 1 line.
+  useEffect(() => {
+    const el = composeInputRef.current;
+    if (!el) return;
+    // Reset to a small height first so scrollHeight reflects the *content*
+    // height, not the previous (larger) box height.
+    el.style.height = 'auto';
+    const maxHeightPx = 200;
+    const next = Math.min(el.scrollHeight, maxHeightPx);
+    el.style.height = `${next}px`;
+    el.style.overflowY = el.scrollHeight > maxHeightPx ? 'auto' : 'hidden';
+  }, [draft]);
 
   // Unified per-contact history (messages + calls + voicemails).
   const [history, setHistory] = useState<ContactHistory | null>(null);
@@ -987,7 +1026,14 @@ function ThreadDetail({ number, onBack }: ThreadDetailProps) {
                           type="button"
                           className="template-picker-item"
                           onClick={() => {
-                            const resolved = t.body.replace(/\{firstName\}/g, first);
+                            // v0.10.54 — Resolve TWO auto-fill variables:
+                            //   {firstName} → contact's first name
+                            //   {recruiter} → logged-in user's first name
+                            // Everything else stays as `{var}` for inline edit.
+                            let resolved = t.body.replace(/\{firstName\}/g, first);
+                            if (recruiterFirstName) {
+                              resolved = resolved.replace(/\{recruiter\}/g, recruiterFirstName);
+                            }
                             setDraft(resolved);
                             setShowTemplatePicker(false);
                             requestAnimationFrame(() => {
