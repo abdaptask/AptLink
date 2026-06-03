@@ -75,14 +75,7 @@ export default function AutoRoute({ action }: AutoRouteProps) {
     // all use it). The browser shows a native "Open <app>?" dialog
     // on first launch; once the user clicks Allow + checks
     // "Always allow", subsequent clicks open the desktop directly
-    // with no prompt. If the user clicks Cancel, the browser stays
-    // on this page and the 3s fallback timer below kicks in.
-    //
-    // We bump the fallback delay to 3s (was 1.2s) so the user has
-    // time to interact with the browser dialog before we navigate
-    // away. If the protocol handler takes over, the desktop app is
-    // already focused — the residual navigation in this tab is
-    // harmless background noise.
+    // with no prompt.
     const url = `ace-dialer://${action}?to=${encodeURIComponent(to)}`;
     try {
       window.location.href = url;
@@ -91,21 +84,30 @@ export default function AutoRoute({ action }: AutoRouteProps) {
     }
     setProtocolTried(true);
 
-    // v0.10.67 — Lengthened the fallback from 3s to 8s. On Windows,
-    // Edge's "Open ACE Dialer?" dialog stays up indefinitely waiting
-    // for the user to click. 3s was too short — the page navigated to
-    // the web fallback BEFORE the user finished clicking "Allow", so
-    // they ended up in the web app even though they wanted desktop.
-    // 8s gives a comfortable window to interact with the prompt.
-    const timer = setTimeout(() => {
-      const webRoute =
-        action === 'call'
-          ? `/keypad?to=${encodeURIComponent(to)}`
-          : `/messages?to=${encodeURIComponent(to)}`;
-      navigate(webRoute, { replace: true });
-    }, 8000);
+    // v0.10.71 — After firing the protocol launch, try to close the tab
+    // so the user isn't left staring at "Opening the composer…" forever
+    // in a leftover browser tab while Electron has already focused.
+    // window.close() is rejected by browsers for tabs that weren't
+    // script-opened, BUT it succeeds in many cases when the tab was
+    // opened from an external app (Teams). Worth trying. If it fails,
+    // the page stays put with the "Open in browser composer" fallback
+    // button so the user can recover if Electron didn't open.
+    //
+    // We also DROPPED the auto-navigate to /messages after 8s. Previously
+    // the page silently bounced unauthenticated browser sessions through
+    // /login → /messages, which was alarming when the user just wanted
+    // the desktop app. Now the page stays on AutoRoute showing the
+    // explicit "Open in browser composer" button — user-driven fallback
+    // only, no surprise redirects.
+    const closeTimer = setTimeout(() => {
+      try {
+        window.close();
+      } catch {
+        /* harmless — fallback UI already shown */
+      }
+    }, 1500);
 
-    return () => clearTimeout(timer);
+    return () => clearTimeout(closeTimer);
   }, [to, action, navigate]);
 
   const label = action === 'call' ? 'Opening the dialer' : 'Opening the composer';
@@ -125,7 +127,7 @@ export default function AutoRoute({ action }: AutoRouteProps) {
         <h2>{label}…</h2>
         <p className="muted">
           {protocolTried
-            ? 'If the desktop app didn\'t open, use the button below.'
+            ? 'ACE Dialer should be opening on your desktop. You can close this tab — or use the button below if you want to use the browser instead.'
             : 'Launching ACE Dialer…'}
         </p>
         <button
@@ -134,6 +136,23 @@ export default function AutoRoute({ action }: AutoRouteProps) {
           onClick={() => navigate(fallbackRoute, { replace: true })}
         >
           {fallbackText} <ArrowRight size={14} />
+        </button>
+        {/* v0.10.71 — Explicit "close this tab" button. window.close() is
+            attempted automatically 1.5s after page mount, but browsers
+            often reject it for tabs they didn't open via window.open().
+            This button gives the user a one-click way to dismiss the tab
+            once Electron is up — at minimum it tries window.close() and
+            in browsers that allow it, the tab vanishes; in browsers that
+            don't, nothing happens and the user closes the tab manually. */}
+        <button
+          type="button"
+          className="settings-btn"
+          style={{ marginTop: 8, background: 'transparent' }}
+          onClick={() => {
+            try { window.close(); } catch { /* noop */ }
+          }}
+        >
+          Close this tab
         </button>
       </div>
     </div>

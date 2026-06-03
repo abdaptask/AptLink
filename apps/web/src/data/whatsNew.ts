@@ -24,6 +24,15 @@ export interface ReleaseEntry {
 
 export const WHATS_NEW: ReleaseEntry[] = [
   {
+    version: '0.10.71',
+    date: 'June 3, 2026',
+    highlight: 'Teams Reply/Call leftover browser tab auto-closes',
+    changes: [
+      { type: 'improved', text: 'After clicking Reply or Call on a Teams notification and letting it open the desktop ACE Dialer, the browser tab that brokered the launch now tries to close itself automatically 1.5 seconds later. Browsers vary on whether they honor close() for tabs they didn\'t script-open — when they do, the tab vanishes silently. When they don\'t, the leftover tab now shows a friendly "ACE Dialer should be opening on your desktop — you can close this tab" message with an explicit Close this tab button, instead of looking like a stuck loading screen.' },
+      { type: 'fixed', text: 'Removed the 8-second auto-navigate to /messages or /keypad. Previously the browser tab would silently bounce to /login if the user wasn\'t signed in on the browser — a surprise redirect that scared people. Now the tab stays on the launch page with an explicit "Open in browser composer" / "Open in browser dialer" button if the user wants to fall back to the web app deliberately. No more sneaky redirects.' },
+    ],
+  },
+  {
     version: '0.10.70',
     date: 'June 3, 2026',
     highlight: 'Teams Reply/Call → Electron — actually works now',
