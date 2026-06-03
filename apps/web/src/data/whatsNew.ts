@@ -24,6 +24,14 @@ export interface ReleaseEntry {
 
 export const WHATS_NEW: ReleaseEntry[] = [
   {
+    version: '0.10.63',
+    date: 'June 3, 2026',
+    highlight: 'Remove Pending Users section from Settings',
+    changes: [
+      { type: 'improved', text: 'Settings → Admin no longer shows the "Pending Users" section. The bulk-stage-then-invite workflow it served is no longer needed — "Migrate from Pulse" handles the standard one-user-at-a-time onboarding now. The backend endpoints and pending_users table are kept intact in case the workflow needs to be re-exposed later.' },
+    ],
+  },
+  {
     version: '0.10.62',
     date: 'June 3, 2026',
     highlight: 'Fix the v0.10.50 over-aggressive visibility-register cascade',

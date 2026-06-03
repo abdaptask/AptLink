@@ -140,7 +140,10 @@ import {
   clearHoldMusic,
   HOLD_MUSIC_MAX_BYTES,
 } from '../lib/userPrefs';
-import PendingUsersSection from '../components/PendingUsersSection';
+// v0.10.63 — PendingUsersSection import removed alongside its registry entry.
+// The component file remains in the repo for now in case the workflow ever
+// gets re-exposed; nothing references it after this change.
+// import PendingUsersSection from '../components/PendingUsersSection';
 import UserLinesManagerModal from '../components/UserLinesManagerModal';
 import TeamsNotificationsSection from '../components/TeamsNotificationsSection';
 import { formatPhone } from '../lib/phone';
@@ -204,7 +207,11 @@ const SECTIONS: SectionDef[] = [
   { key: 'sms-templates', category: 'Admin', label: 'SMS templates', icon: MessageSquare, blurb: 'Curate the recruiter SMS playbook for all users', Component: SmsTemplatesAdminSection, adminOnly: true },
   // v0.10.51 — Admin view of all users' blocked numbers + override.
   { key: 'blocked-admin', category: 'Admin', label: 'Blocked numbers (all users)', icon: ShieldOff, blurb: 'See who blocked which numbers and why; override blocks', Component: BlockedNumbersAdminSection, adminOnly: true },
-  { key: 'pending-users', category: 'Admin', label: 'Pending Users', icon: UserPlus, blurb: 'Stage + invite Pulse users to ACE (admin only)', Component: PendingUsersSection, adminOnly: true },
+  // v0.10.63 — Pending Users section removed. The bulk-stage-then-invite
+  // workflow it implemented is no longer needed now that "Migrate from
+  // Pulse" handles the standard one-user-at-a-time onboarding. The backend
+  // endpoints + pending_users table are retained for any orphaned data and
+  // can be re-exposed later if a bulk-import use case re-emerges.
   { key: 'audit-log', category: 'Admin', label: 'Audit log', icon: ScrollText, blurb: 'Recent admin actions (admin only)', Component: AuditLogSection, adminOnly: true },
   // v0.10.22 — Tenant-wide MS Graph connection for Teams notifications.
   { key: 'teams-connection', category: 'Admin', label: 'Teams connection', icon: MessageSquare, blurb: 'Connect ACE Bot to Microsoft Teams (admin only)', Component: TeamsConnectionSection, adminOnly: true },
