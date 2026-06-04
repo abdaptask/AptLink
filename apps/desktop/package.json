@@ -1,6 +1,6 @@
 {
   "name": "@ace/desktop",
-  "version": "0.10.82",
+  "version": "0.10.83",
   "private": true,
   "description": "ACE Dialer desktop app (Electron)",
   "author": "ApTask",
@@ -67,6 +67,13 @@
       "target": [
         {
           "target": "dmg",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        },
+        {
+          "target": "zip",
           "arch": [
             "x64",
             "arm64"

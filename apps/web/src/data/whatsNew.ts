@@ -24,6 +24,14 @@ export interface ReleaseEntry {
 
 export const WHATS_NEW: ReleaseEntry[] = [
   {
+    version: '0.10.83',
+    date: 'June 4, 2026',
+    highlight: 'Mac auto-update is finally fixed — no more "Update failed, ZIP file not provided"',
+    changes: [
+      { type: 'fixed', text: 'Every Mac release since launch has thrown "Update failed: ZIP file not provided" when the dialer tried to install an in-place update — because our build config only produced a .dmg (for first-time installs) and not a .zip (which electron-updater needs to do the swap). Now we ship both. After you manually install this build once via the .dmg, future updates will apply automatically without the popup. Windows users were never affected — only Macs.' },
+    ],
+  },
+  {
     version: '0.10.82',
     date: 'June 4, 2026',
     highlight: 'Mac users no longer need to double-click to accept incoming calls',
