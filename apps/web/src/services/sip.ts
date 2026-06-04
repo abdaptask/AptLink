@@ -284,6 +284,11 @@ export class SipService {
   private _doConnect(config: SipConfig): void {
     this.callerNumber = config.callerNumber ?? '';
     this.realm = config.realm ?? 'sip.telnyx.com';
+    // v0.10.80 — fresh UA, so on the first 'registered' we want to issue
+    // the wildcard wipe. Reset both flags here (in case a previous UA
+    // session left them set).
+    this.didInitialWildcardWipe = false;
+    this.wildcardWipeInFlight = false;
     // Telnyx SIP-over-WebSocket endpoint. Port 7443 is the conventional WSS
     // port for SIP (Telnyx, Twilio, most carriers). Some Telnyx accounts
     // also accept wss://rtc.telnyx.com:443. Override via config.wssUri or
@@ -416,19 +421,107 @@ export class SipService {
       }
       scheduleEmit('disconnected');
     });
-    this.ua.on('registered', () => {
-      console.log('[sip] registered');
+    // v0.10.80 — Enhanced 'registered' handler. Captures Telnyx's response
+    // details (contact-count, expires, status) so we can verify the wildcard
+    // wipe worked, AND triggers the first-time wildcard wipe itself.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    this.ua.on('registered', (e?: any) => {
+      // JsSIP passes { response: IncomingResponse }. Defensive lookups so a
+      // missing arg (older JsSIP, or future event-shape change) doesn't crash.
+      const response = e?.response;
+      const status: number | string = response?.status_code ?? '(unknown)';
+      const contactHeader: string = response?.getHeader?.('Contact') ?? '';
+      // Telnyx returns Contact as a comma-separated list of bindings. Count
+      // them: each binding starts with '<sip:' so split on that for a quick
+      // count without a full parser. Skip the first empty piece.
+      const contactCount = contactHeader
+        ? contactHeader.split('<sip:').length - 1
+        : 0;
+      const expires: string = response?.getHeader?.('Expires') ?? '(none)';
+      console.log(
+        `[sip] registered (status=${status}, expires=${expires}, contacts-at-telnyx=${contactCount})`,
+      );
+      if (contactCount > 1) {
+        // Spell out the full Contact header so the diagnostic log captures
+        // every binding's URI + alias + sip.instance for analysis.
+        console.log(`[sip] full Contact header from Telnyx: ${contactHeader}`);
+      }
+
       this.regFailCount = 0;
       if (this.regRetryTimer) {
         clearTimeout(this.regRetryTimer);
         this.regRetryTimer = null;
       }
-      // Happy state — emit immediately, cancelling any pending
-      // 'connecting'/'disconnected' that hadn't fired yet.
+
+      // v0.10.80 — on the first 'registered' after a fresh connect, wipe
+      // stale Telnyx contacts via wildcard unregister. See file-level
+      // didInitialWildcardWipe comment for full rationale.
+      if (!this.didInitialWildcardWipe) {
+        this.didInitialWildcardWipe = true;
+        if (contactCount <= 1) {
+          // Nothing to clean. Skip the wipe and emit registered immediately.
+          // Saves a round-trip when Telnyx already only has our fresh contact
+          // (first-ever sign-in, or after a long-enough idle for stales to
+          // have naturally expired).
+          console.log(
+            '[sip] v0.10.80: only 1 contact at Telnyx — skipping wildcard wipe (nothing stale)',
+          );
+          emitImmediate('registered');
+          return;
+        }
+        // Multiple contacts → wipe them all and re-register.
+        console.log(
+          `[sip] v0.10.80: ${contactCount} contacts at Telnyx — issuing wildcard unregister to wipe stale entries`,
+        );
+        this.wildcardWipeInFlight = true;
+        try {
+          this.ua?.unregister({ all: true });
+        } catch (err) {
+          // If unregister(all) throws synchronously (very unlikely), abandon
+          // the wipe and surface the user as registered anyway. They'll be
+          // routable on their current contact; stale ones will expire in
+          // ~10 min.
+          console.warn('[sip] wildcard unregister threw — proceeding with current registration', err);
+          this.wildcardWipeInFlight = false;
+          emitImmediate('registered');
+        }
+        // Don't emit 'registered' to the UI yet. The 'unregistered' handler
+        // will trigger the fresh REGISTER, and THAT 'registered' event
+        // will emit to the UI (didInitialWildcardWipe is true by then).
+        return;
+      }
+
+      // Subsequent registrations (force-register refresh, manual
+      // re-register, post-wipe re-register) — emit immediately.
       emitImmediate('registered');
     });
-    this.ua.on('unregistered', () => {
-      console.log('[sip] unregistered');
+    // v0.10.80 — Enhanced 'unregistered' handler. Captures response status
+    // for diagnostics AND chains the post-wildcard-wipe re-register.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    this.ua.on('unregistered', (e?: any) => {
+      const status: number | string = e?.response?.status_code ?? '(no response)';
+      console.log(`[sip] unregistered (status=${status})`);
+
+      // v0.10.80 — if this 'unregistered' is the response to our
+      // startup wildcard wipe, immediately re-register our current
+      // contact. Telnyx now has zero contacts for us; we need to
+      // re-establish exactly one (ours).
+      if (this.wildcardWipeInFlight) {
+        this.wildcardWipeInFlight = false;
+        console.log(
+          '[sip] v0.10.80: wildcard wipe complete — re-registering with current contact',
+        );
+        try {
+          this.ua?.register();
+        } catch (err) {
+          console.warn('[sip] re-register after wildcard wipe threw', err);
+          // Surface 'failed' so the user sees Disconnected and can
+          // manually reconnect. Better than a silent stuck state.
+          this.emit<SipState>('state', 'failed');
+        }
+        return;
+      }
+
       // v0.10.34 — Suppress the UI flip while a call is active, same
       // as 'connecting'/'disconnected' do above. JsSIP fires
       // 'unregistered' during routine REGISTER refresh blips (common
@@ -477,7 +570,28 @@ export class SipService {
     // the REGISTER refresh on its existing 600s expiry window — no need
     // for us to kill the UA. We still apply the retry for cold-start
     // failures (no active call → safe to tear down).
-    this.ua.on('registrationFailed', (e: { cause?: string }) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    this.ua.on('registrationFailed', (e: { cause?: string; response?: any }) => {
+      const status: number | string = e?.response?.status_code ?? '(no response)';
+      // v0.10.80 — wildcard wipe got a non-2xx response. Don't abort —
+      // attempt a fresh REGISTER anyway. Worst case: the stale contacts
+      // we wanted to clear stay at Telnyx until natural expiry (~10 min).
+      // Best case: our fresh REGISTER still succeeds and our current
+      // session is at least one of the active contacts.
+      if (this.wildcardWipeInFlight) {
+        this.wildcardWipeInFlight = false;
+        console.warn(
+          `[sip] v0.10.80: wildcard unregister failed (status=${status}, cause=${e.cause}) — attempting fresh REGISTER anyway`,
+        );
+        try {
+          this.ua?.register();
+        } catch (err) {
+          console.warn('[sip] register after failed wildcard threw', err);
+          this.emit<SipState>('state', 'failed');
+        }
+        return;
+      }
+
       const hasActiveCall = this.calls.size > 0 || this.incomingCallId !== null;
       if (hasActiveCall) {
         console.warn(
@@ -692,6 +806,45 @@ export class SipService {
    * recovering the routing before the next inbound call misses.
    */
   private forceRegisterTimer: ReturnType<typeof setInterval> | null = null;
+
+  /**
+   * v0.10.80 — Stale-contact eviction state.
+   *
+   * THE BUG these fields fix: JsSIP generates a new +sip.instance UUID
+   * on every UA construction (app reload, refresh, hard-quit-then-restart,
+   * crash recovery). Each new instance registers as a NEW device with
+   * Telnyx. The OLD instances' contacts stay in Telnyx's binding list
+   * until natural expiry (~10 min) since the dead WSS sockets never sent
+   * a graceful unregister.
+   *
+   * Over hours of normal use, a single user's account accumulates 3-5
+   * stale contacts at Telnyx. When an inbound INVITE arrives, Telnyx
+   * forks it across ALL contacts. Three of them point at dead WSS
+   * sockets. The fork race + parallel-forking semantics + SIP outbound
+   * load balancing means inbound calls can stall, miss, or take 10+
+   * seconds to route. Symptom: phone calls go straight to voicemail
+   * even though the user's dialer "looks online."
+   *
+   * THE FIX: on the very first 'registered' event after a fresh UA
+   * starts, send a wildcard unregister (REGISTER Contact:*; Expires:0)
+   * which evicts EVERY contact for this user at Telnyx, then immediately
+   * register fresh. End state: Telnyx has exactly one contact (ours).
+   * Inbound INVITEs go to exactly one destination, every time.
+   *
+   * Trade-off: this assumes one user = one active session. If a user
+   * is logged in on laptop AND desktop simultaneously, the second
+   * sign-in will wipe the first one off Telnyx and inbound calls only
+   * ring on the most recent. Per Abdulla's confirmed model ("one user
+   * one device"), this is acceptable.
+   *
+   * NOTE: we keep the v0.8.8 specific-contact unregister in
+   * scheduleCleanup() unchanged. That runs on graceful quit and only
+   * removes our own contact (so a colleague's session on a different
+   * device isn't disturbed). The wildcard wipe runs only on STARTUP
+   * to clean up our own previous-session corpses.
+   */
+  private didInitialWildcardWipe = false;
+  private wildcardWipeInFlight = false;
 
   /**
    * Phase 6.9 — proactive registration heartbeat. Calls ua.register()

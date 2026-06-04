@@ -4,7 +4,15 @@ import { BrowserRouter, HashRouter } from 'react-router-dom';
 import App from './App';
 import { SipProvider } from './contexts/SipContext';
 import { applyTheme, watchSystemTheme } from './lib/userPrefs';
+import { installConsoleInterceptors } from './services/logBuffer';
 import './styles.css';
+
+// v0.10.80 — Install console interceptors BEFORE any other code that logs.
+// Builds an in-memory ring buffer of every console.log/warn/error from app
+// start. Users export it from Settings → Diagnostics when they hit an issue
+// (so we don't have to ask "can you open DevTools and copy the logs?" to
+// non-technical users).
+installConsoleInterceptors();
 
 // Apply theme BEFORE first render so there's no light/dark flash.
 applyTheme();

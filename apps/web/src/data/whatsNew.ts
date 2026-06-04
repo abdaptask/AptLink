@@ -24,6 +24,16 @@ export interface ReleaseEntry {
 
 export const WHATS_NEW: ReleaseEntry[] = [
   {
+    version: '0.10.80',
+    date: 'June 4, 2026',
+    highlight: 'Fixes a major silent miss-call bug — stale "ghost" sessions at Telnyx',
+    changes: [
+      { type: 'fixed', text: 'Inbound calls going straight to voicemail even though the dialer looked online — root cause was old, abandoned SIP sessions accumulating at Telnyx every time you reload or restart the app. Telnyx was trying to ring every old session before getting to the live one, so calls stalled. The dialer now wipes those ghost sessions at startup and registers fresh. After this deploys, restart your dialer once and inbound routing should be reliable from there on. (If you have ACE open on multiple devices for the same account, only the most recently-opened one will ring — same model as Pulse.)' },
+      { type: 'new', text: 'Diagnostics section under Settings → Personal. If your dialer ever does something weird — missed call, stuck status, disconnects — click "Download logs" and email the .txt file to your admin so we can pinpoint exactly what happened on your machine. Way easier than asking you to open developer tools.' },
+      { type: 'improved', text: 'SIP REGISTER responses now log the full Contact header from Telnyx and the count of active bindings, so when something IS wrong with routing we can spot it in the diagnostics export instantly instead of guessing.' },
+    ],
+  },
+  {
     version: '0.10.79',
     date: 'June 4, 2026',
     highlight: 'Email notifications — opt in per event, never miss a call again',

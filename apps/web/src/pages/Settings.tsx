@@ -58,6 +58,8 @@ import {
   Zap,
   // v0.10.79 — Email notifications section icon
   Mail,
+  // v0.10.80 — Diagnostics section icon
+  Stethoscope,
 } from 'lucide-react';
 import { WHATS_NEW, type ChangeType } from '../data/whatsNew';
 import {
@@ -164,6 +166,8 @@ import UserLinesManagerModal from '../components/UserLinesManagerModal';
 import TeamsNotificationsSection from '../components/TeamsNotificationsSection';
 // v0.10.79 — per-user email notification opt-ins (parallel to Teams).
 import EmailNotificationsSection from '../components/EmailNotificationsSection';
+// v0.10.80 — diagnostics export (download all in-memory logs since app start).
+import DiagnosticsSection from '../components/DiagnosticsSection';
 import { formatPhone } from '../lib/phone';
 
 interface AudioDevice {
@@ -205,6 +209,8 @@ const SECTIONS: SectionDef[] = [
   { key: 'teams', category: 'Personal', label: 'Teams notifications', icon: MessageSquare, blurb: 'Forward missed calls / SMS / voicemails to a Teams channel', Component: TeamsNotificationsSection },
   // v0.10.79 — Email notifications (parallel to Teams). Default OFF.
   { key: 'email-notifications', category: 'Personal', label: 'Email notifications', icon: Mail, blurb: 'Email me when I get a missed call, text, or voicemail', Component: EmailNotificationsSection },
+  // v0.10.80 — Diagnostics. Download the in-memory log buffer when something's wrong.
+  { key: 'diagnostics', category: 'Personal', label: 'Diagnostics', icon: Stethoscope, blurb: 'Download logs to share with support when you hit an issue', Component: DiagnosticsSection },
   { key: 'quick-replies', category: 'Personal', label: 'Quick replies', icon: MessageSquare, blurb: 'SMS templates', Component: QuickRepliesSection },
   { key: 'hold-music', category: 'Calling', label: 'Hold music', icon: Music, blurb: 'Play music when on hold', Component: HoldMusicSection },
   { key: 'voicemail-greeting', category: 'Calling', label: 'Voicemail greeting', icon: Mic, blurb: 'Personal greeting (coming soon)', Component: VoicemailGreetingSection },
