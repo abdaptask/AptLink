@@ -743,16 +743,16 @@ export class SipService {
       // Telnyx's side because the call's SIP dialog is in flight, and
       // firing a REGISTER during a call risks confusing the dialog state.
       if (this.calls.size > 0 || this.incomingCallId !== null) {
-        console.log('[sip] 60s force-register skipped — active call');
+        console.log('[sip] 30s force-register skipped — active call');
         return;
       }
       try {
         this.ua.register();
-        console.log('[sip] 60s force-register fired (defensive against silent eviction)');
+        console.log('[sip] 30s force-register fired (defensive: NAT keepalive + silent eviction)');
       } catch (e) {
-        console.warn('[sip] 60s force-register threw', e);
+        console.warn('[sip] 30s force-register threw', e);
       }
-    }, 60_000);
+    }, 30_000);
   }
 
   /**

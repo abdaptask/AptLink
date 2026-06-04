@@ -24,6 +24,14 @@ export interface ReleaseEntry {
 
 export const WHATS_NEW: ReleaseEntry[] = [
   {
+    version: '0.10.78',
+    date: 'June 4, 2026',
+    highlight: 'Tighter NAT keepalive — fixes the "hard-refresh after 5-10 min idle" pattern',
+    changes: [
+      { type: 'fixed', text: 'Users no longer need to hard-refresh ACE after a few minutes of inactivity to start receiving calls again. Root cause was NAT timeout: routers and corporate firewalls silently drop idle TCP connections after 5-10 minutes (some aggressive ones at 60s). Tightened v0.10.77\'s force-REGISTER cadence from 60 seconds to 30 seconds so the SIP traffic itself keeps the NAT mapping warm. After this deploys + you restart your dialer once, sustained idle should no longer break inbound call routing.' },
+    ],
+  },
+  {
     version: '0.10.77',
     date: 'June 4, 2026',
     highlight: 'Closes the silent-eviction gap — proactive REGISTER refresh every 60s',
