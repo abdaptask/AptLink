@@ -185,6 +185,60 @@ export async function testTeamsConfig(
   return { ok: Boolean(body.ok), status: body.status };
 }
 
+// v0.10.79 — Per-user email notifications. Mirrors the Teams config API
+// (same 3 event types) but stored independently in User.emailNotifyOn.
+// Default OFF for all users — they opt in via Settings → Email
+// notifications. Reuses ApTask's existing SendGrid + from-address.
+export type EmailNotifyEventType = 'missed_call' | 'sms' | 'voicemail';
+export interface EmailNotificationsConfig {
+  /** True when SENDGRID_API_KEY is set on the API service. When false the
+   *  UI shows an "ask your admin" empty state. */
+  emailConfigured: boolean;
+  /** The user's email on file. Surfaced so the UI can show "we'll send to
+   *  abdulla@aptask.com" with no ambiguity. */
+  email: string | null;
+  events: EmailNotifyEventType[];
+  availableEvents?: EmailNotifyEventType[];
+}
+export async function getEmailNotifications(token: string): Promise<EmailNotificationsConfig> {
+  const res = await fetch(`${API_URL}/me/email-notifications`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+export async function updateEmailNotifications(
+  token: string,
+  input: { events?: EmailNotifyEventType[] },
+): Promise<{ ok: boolean; error?: string }> {
+  const res = await fetch(`${API_URL}/me/email-notifications`, {
+    method: 'PATCH',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify(input),
+  });
+  const body = (await res.json().catch(() => ({}))) as { error?: string };
+  if (!res.ok) return { ok: false, error: body.error || `HTTP ${res.status}` };
+  return { ok: true };
+}
+export async function testEmailNotification(
+  token: string,
+): Promise<{ ok: boolean; status?: number; error?: string }> {
+  const res = await fetch(`${API_URL}/me/email-notifications/test`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const body = (await res.json().catch(() => ({}))) as {
+    ok?: boolean;
+    status?: number;
+    error?: string;
+  };
+  if (!res.ok) return { ok: false, error: body.error || `HTTP ${res.status}` };
+  return { ok: Boolean(body.ok), status: body.status };
+}
+
 // v0.10.0 Task 27 — Admin: list a specific user's DIDs (read-only).
 export interface AdminUserDidRow {
   id: number;

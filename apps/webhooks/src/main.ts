@@ -10,6 +10,14 @@ import {
   scheduleMissedCallNotification,
   scheduleVoicemailTimeoutFallback,
 } from './teamsNotifier.js';
+// v0.10.79 — parallel email-channel notifications (per-user opt-in,
+// default off). Same trigger points as Teams; independent opt-in via
+// User.emailNotifyOn.
+import {
+  notifyInboundSmsByEmail,
+  scheduleMissedCallEmail,
+  scheduleVoicemailEmailTimeoutFallback,
+} from './emailNotifier.js';
 
 const SERVICE_NAME = 'ace-dialer-webhooks';
 const START_TIME = new Date().toISOString();
@@ -549,6 +557,13 @@ app.post('/webhooks/telnyx/calls', async (request) => {
             callDbId: row.id,
             telnyxCallId: callId,
           });
+          // v0.10.79 — parallel email notification (per-user opt-in,
+          // default off via User.emailNotifyOn). Independent of Teams.
+          scheduleMissedCallEmail({
+            userId: row.userId,
+            callDbId: row.id,
+            telnyxCallId: callId,
+          });
         }
 
         break;
@@ -683,6 +698,13 @@ app.post('/webhooks/telnyx/calls', async (request) => {
             userId: ownerUserId,
             voicemailId: created.id,
           });
+          // v0.10.79 — parallel email voicemail notification. Same
+          // two-path firing (transcribed from Deepgram OR 30s timeout)
+          // with its own in-memory dedup Set in emailNotifier.
+          scheduleVoicemailEmailTimeoutFallback({
+            userId: ownerUserId,
+            voicemailId: created.id,
+          });
         } catch (e) {
           app.log.error({ err: e }, '[vm] failed to write Voicemail row');
         }
@@ -809,6 +831,14 @@ app.post('/webhooks/telnyx/sms', async (request) => {
               messageDbId: created.id,
             }).catch((e) =>
               app.log.warn({ err: e }, '[teams] notifyInboundSms threw'),
+            );
+            // v0.10.79 — parallel email notification. One email per
+            // inbound SMS (no coalescing — per product decision).
+            void notifyInboundSmsByEmail({
+              userId: ownerUserId,
+              messageDbId: created.id,
+            }).catch((e) =>
+              app.log.warn({ err: e }, '[email] notifyInboundSms threw'),
             );
           }
         }

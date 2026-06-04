@@ -83,6 +83,14 @@ model User {
   /// edits via Settings → Personal → Teams notifications. Empty string
   /// = explicit opt-out of all events (we never auto-fill back).
   teamsNotifyOn   String?   @default("missed_call,sms,voicemail") @map("teams_notify_on")
+  /// v0.10.79 — Comma-separated opt-in list for which events trigger an
+  /// EMAIL notification (separate from teamsNotifyOn). Values: 'missed_call',
+  /// 'sms', 'voicemail'. Default NULL = OFF for everyone (both existing AND
+  /// newly invited users) — admins were burned-out by surprise notification
+  /// floods on the Teams launch, so for the email channel we opt every user
+  /// in opt-out-by-default. Users self-enable via Settings → Email
+  /// notifications. Empty string also = opted out of all events.
+  emailNotifyOn   String?   @map("email_notify_on")
   /// v0.10.60 — Per-user beta flag for the Connection Health overhaul.
   /// When true, this user gets: (a) UI smoothing of disconnect/reconnect
   /// status (transient blips hidden, amber "Reconnecting..." instead of

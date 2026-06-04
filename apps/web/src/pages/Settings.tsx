@@ -56,6 +56,8 @@ import {
   Sparkles,
   Wrench,
   Zap,
+  // v0.10.79 — Email notifications section icon
+  Mail,
 } from 'lucide-react';
 import { WHATS_NEW, type ChangeType } from '../data/whatsNew';
 import {
@@ -160,6 +162,8 @@ import {
 // import PendingUsersSection from '../components/PendingUsersSection';
 import UserLinesManagerModal from '../components/UserLinesManagerModal';
 import TeamsNotificationsSection from '../components/TeamsNotificationsSection';
+// v0.10.79 — per-user email notification opt-ins (parallel to Teams).
+import EmailNotificationsSection from '../components/EmailNotificationsSection';
 import { formatPhone } from '../lib/phone';
 
 interface AudioDevice {
@@ -199,6 +203,8 @@ const SECTIONS: SectionDef[] = [
   { key: 'ringtone', category: 'Personal', label: 'Ringtone', icon: Bell, blurb: 'Pick the sound your incoming calls play', Component: RingtoneSection },
   // v0.10.0 Pillar 2 — Teams notifications.
   { key: 'teams', category: 'Personal', label: 'Teams notifications', icon: MessageSquare, blurb: 'Forward missed calls / SMS / voicemails to a Teams channel', Component: TeamsNotificationsSection },
+  // v0.10.79 — Email notifications (parallel to Teams). Default OFF.
+  { key: 'email-notifications', category: 'Personal', label: 'Email notifications', icon: Mail, blurb: 'Email me when I get a missed call, text, or voicemail', Component: EmailNotificationsSection },
   { key: 'quick-replies', category: 'Personal', label: 'Quick replies', icon: MessageSquare, blurb: 'SMS templates', Component: QuickRepliesSection },
   { key: 'hold-music', category: 'Calling', label: 'Hold music', icon: Music, blurb: 'Play music when on hold', Component: HoldMusicSection },
   { key: 'voicemail-greeting', category: 'Calling', label: 'Voicemail greeting', icon: Mic, blurb: 'Personal greeting (coming soon)', Component: VoicemailGreetingSection },

@@ -24,6 +24,15 @@ export interface ReleaseEntry {
 
 export const WHATS_NEW: ReleaseEntry[] = [
   {
+    version: '0.10.79',
+    date: 'June 4, 2026',
+    highlight: 'Email notifications — opt in per event, never miss a call again',
+    changes: [
+      { type: 'new', text: 'You can now get an email whenever you have a missed call, a new text, or a new voicemail. Go to Settings → Email notifications and choose which events you want. Off by default — turn on only what you want. Voicemail emails include the full transcript so you can read it without opening the app. Note: emails are notifications only — replying to one doesn\'t reply to the caller / texter. Use the dialer for that.' },
+      { type: 'new', text: 'A "Send test email" button on the same Settings screen sends a sample notification to your own inbox so you can confirm it lands (and isn\'t filtered to spam) before relying on it for real events.' },
+    ],
+  },
+  {
     version: '0.10.78',
     date: 'June 4, 2026',
     highlight: 'Tighter NAT keepalive — fixes the "hard-refresh after 5-10 min idle" pattern',

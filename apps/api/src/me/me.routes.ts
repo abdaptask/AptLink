@@ -27,6 +27,11 @@ import { z } from 'zod';
 import { prisma } from '@ace/db';
 import * as telnyx from '../telnyx/numbers.js';
 import { recordAudit } from '../lib/audit.js';
+// v0.10.79 — for /me/email-notifications/test, fires a sample notification
+// email through SendGrid using the same template style as the real
+// missed-call / SMS / voicemail emails (so users can confirm deliverability
+// + filtering BEFORE relying on email for production events).
+import { sendTestEmail } from '../email/sendgrid.js';
 
 interface JwtPayload {
   sub: number;
@@ -74,6 +79,17 @@ const TeamsConfigSchema = z.object({
   // Array on the wire — easier for the client form to handle as checkboxes.
   // Convert to/from comma-separated string for storage.
   events: z.array(z.enum(TEAMS_EVENT_TYPES)).optional(),
+});
+
+// v0.10.79 — Email notification config. Same event vocabulary as Teams
+// (missed_call / sms / voicemail) but a separate per-user opt-in stored
+// in users.email_notify_on. Default NULL = OFF for everyone (decided at
+// the schema layer — no DB default — so existing AND new users start
+// opted out and choose to enable via Settings → Email notifications).
+const EMAIL_EVENT_TYPES = ['missed_call', 'sms', 'voicemail'] as const;
+type EmailEventType = (typeof EMAIL_EVENT_TYPES)[number];
+const EmailConfigSchema = z.object({
+  events: z.array(z.enum(EMAIL_EVENT_TYPES)).optional(),
 });
 
 export async function meRoutes(app: FastifyInstance) {
@@ -386,6 +402,127 @@ export async function meRoutes(app: FastifyInstance) {
           error: `Failed to reach Teams webhook: ${msg}`,
         });
       }
+    },
+  );
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // v0.10.79 — Per-user email notification config.
+  //
+  // Parallel to Teams notifications. Same 3 event types (missed_call /
+  // sms / voicemail). Independent opt-in stored in User.emailNotifyOn.
+  // Default NULL/empty = OFF (no schema default — every user starts
+  // opted out and chooses to enable).
+  //
+  // Endpoints:
+  //   GET   /me/email-notifications        — read current settings
+  //   PATCH /me/email-notifications        — update event opt-ins
+  //   POST  /me/email-notifications/test   — send a sample email so the
+  //                                          user can confirm it lands
+  //                                          (and isn't filtered to spam)
+  //                                          before turning real events on.
+  // ═══════════════════════════════════════════════════════════════════════
+
+  app.get(
+    '/me/email-notifications',
+    { onRequest: [app.authenticate] },
+    async (request: FastifyRequest) => {
+      const me = (request.user as JwtPayload).sub;
+      const user = await prisma.user.findUnique({
+        where: { id: me },
+        select: { emailNotifyOn: true, email: true },
+      });
+      const eventsCsv = user?.emailNotifyOn ?? '';
+      const events = eventsCsv
+        .split(',')
+        .map((s) => s.trim())
+        .filter((s): s is EmailEventType =>
+          (EMAIL_EVENT_TYPES as readonly string[]).includes(s),
+        );
+      // emailConfigured reports whether SendGrid is wired up at the
+      // service level. If false, the UI shows an "ask your admin" empty
+      // state (mirrors Teams pattern).
+      return {
+        emailConfigured: Boolean((process.env.SENDGRID_API_KEY ?? '').trim()),
+        email: user?.email ?? null,
+        events,
+        availableEvents: EMAIL_EVENT_TYPES,
+      };
+    },
+  );
+
+  app.patch(
+    '/me/email-notifications',
+    { onRequest: [app.authenticate] },
+    async (request: FastifyRequest, reply) => {
+      const me = (request.user as JwtPayload).sub;
+      const parsed = EmailConfigSchema.safeParse(request.body);
+      if (!parsed.success) {
+        return reply.code(400).send({
+          error: 'Invalid input',
+          details: parsed.error.flatten(),
+        });
+      }
+      const { events } = parsed.data;
+      const data: { emailNotifyOn?: string | null } = {};
+      if (events !== undefined) {
+        const deduped = Array.from(new Set(events)).sort();
+        data.emailNotifyOn = deduped.length > 0 ? deduped.join(',') : null;
+      }
+      await prisma.user.update({ where: { id: me }, data });
+      await recordAudit(me, 'user.email_config_updated', me, {
+        events: data.emailNotifyOn ?? null,
+      });
+      return { ok: true };
+    },
+  );
+
+  // v0.10.79 — Sends a sample notification email to the user's own
+  // address using the same SendGrid sender config as production
+  // notifications. Useful to (a) verify deliverability + spam filtering
+  // BEFORE relying on email for missed calls, and (b) let users see
+  // what the styling looks like in their client.
+  app.post(
+    '/me/email-notifications/test',
+    { onRequest: [app.authenticate] },
+    async (request: FastifyRequest, reply) => {
+      const me = (request.user as JwtPayload).sub;
+      const apiKey = (process.env.SENDGRID_API_KEY ?? '').trim();
+      if (!apiKey) {
+        return reply.code(503).send({
+          ok: false,
+          error:
+            'Email notifications are not configured at the service level. Ask your admin to set SENDGRID_API_KEY.',
+        });
+      }
+      const user = await prisma.user.findUnique({
+        where: { id: me },
+        select: { firstName: true, email: true },
+      });
+      if (!user?.email) {
+        return reply.code(409).send({
+          ok: false,
+          error: 'Your account has no email on file; cannot send a test notification.',
+        });
+      }
+      const result = await sendTestEmail({
+        toEmail: user.email,
+        firstName: user.firstName,
+      });
+      if (!result.ok) {
+        request.log.warn(
+          { status: result.status, error: result.error },
+          '[me/email-notifications/test] SendGrid rejected test send',
+        );
+        return reply.code(502).send({
+          ok: false,
+          status: result.status,
+          error:
+            typeof result.error === 'string'
+              ? result.error
+              : `SendGrid returned HTTP ${result.status}`,
+        });
+      }
+      return { ok: true, status: result.status, messageId: result.messageId };
     },
   );
 

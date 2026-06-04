@@ -35,6 +35,8 @@
 // transcript.
 import { prisma } from '@ace/db';
 import { notifyVoicemail } from './teamsNotifier.js';
+// v0.10.79 — parallel email voicemail notification.
+import { notifyVoicemailByEmail } from './emailNotifier.js';
 
 const DEEPGRAM_API_URL = 'https://api.deepgram.com/v1/listen';
 
@@ -198,6 +200,16 @@ export async function transcribeAndUpdateVoicemail(
         (e) =>
           console.warn(
             `[deepgram] notifyVoicemail(${voicemailId}) threw`,
+            e instanceof Error ? e.message : e,
+          ),
+      );
+      // v0.10.79 — parallel email voicemail notification with transcript
+      // filled in. Dedup Set in emailNotifier guarantees the 30s timeout
+      // path doesn't double-fire.
+      void notifyVoicemailByEmail({ userId, voicemailId, reason: 'transcribed' }).catch(
+        (e) =>
+          console.warn(
+            `[deepgram] notifyVoicemailByEmail(${voicemailId}) threw`,
             e instanceof Error ? e.message : e,
           ),
       );

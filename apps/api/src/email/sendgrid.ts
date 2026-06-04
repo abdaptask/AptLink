@@ -374,6 +374,80 @@ export function sendLineAssignedEmail(input: LineAssignedEmailInput): Promise<Se
   });
 }
 
+// ──────────────────── Email notifications test send (v0.10.79) ────────────
+//
+// Used by POST /me/email-notifications/test. Sends a small sample email to
+// the user's own address using the same SendGrid sender as production
+// notifications — so the user can confirm deliverability + filtering before
+// turning real missed-call / SMS / voicemail emails on.
+
+export interface TestEmailInput {
+  toEmail: string;
+  firstName?: string | null;
+}
+
+export function sendTestEmail(input: TestEmailInput): Promise<SendGridResult> {
+  const firstName = (input.firstName?.trim() || '').split(/\s+/)[0] || 'there';
+  const supportEmail = config.aceSupportEmail || 'it@aptask.com';
+  const subject = `Test: ACE Dialer email notifications`;
+
+  const text = [
+    `Hi ${firstName},`,
+    ``,
+    `This is a test notification from ACE Dialer to confirm email is`,
+    `set up correctly for your account. If you can read this, future`,
+    `missed-call / SMS / voicemail emails will land here too.`,
+    ``,
+    `Manage your email notifications in ACE Dialer → Settings →`,
+    `Email notifications.`,
+    ``,
+    `Need help? Reply to this email or contact ${supportEmail}.`,
+    ``,
+    `— The ACE Dialer team`,
+  ].join('\n');
+
+  const html = `<!doctype html>
+<html>
+<body style="margin:0;padding:0;background:#f4f6f9;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;color:#0f172a;line-height:1.5;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f4f6f9;padding:24px 16px;">
+    <tr><td align="center">
+      <table role="presentation" width="560" cellpadding="0" cellspacing="0" style="max-width:560px;background:#ffffff;border-radius:12px;box-shadow:0 1px 3px rgba(15,23,42,0.06);overflow:hidden;">
+        <tr><td style="padding:24px 28px 12px 28px;border-bottom:1px solid #e2e8f0;">
+          <p style="margin:0;font-size:12px;text-transform:uppercase;letter-spacing:0.05em;color:#64748b;font-weight:600;">ACE Dialer</p>
+          <h1 style="margin:6px 0 0 0;font-size:20px;font-weight:600;color:#0f172a;">Test notification</h1>
+          <p style="margin:4px 0 0 0;font-size:14px;color:#64748b;">If you can read this, email notifications are working.</p>
+        </td></tr>
+        <tr><td style="padding:20px 28px 12px 28px;">
+          <p style="margin:0 0 12px 0;font-size:15px;color:#0f172a;">Hi ${escapeHtml(firstName)},</p>
+          <p style="margin:0 0 12px 0;font-size:15px;color:#0f172a;">
+            This is a test from ACE Dialer to confirm email is set up correctly for your account.
+            Future missed-call, SMS, and voicemail emails will look similar to this and land here too.
+          </p>
+          <div style="background:#f0f9ff;border-left:4px solid #0284c7;border-radius:6px;padding:14px 16px;font-size:14px;color:#0c4a6e;">
+            <strong>Tip:</strong> If this email landed in spam, add the ACE Dialer sender to your contacts so real notifications won't miss your inbox.
+          </div>
+        </td></tr>
+        <tr><td style="padding:16px 28px 22px 28px;border-top:1px solid #e2e8f0;background:#fafbfc;">
+          <p style="margin:0;font-size:12px;color:#64748b;">
+            You're getting this because you clicked "Send test" in ACE Dialer → Settings → Email notifications.
+            Need help? Reply to this email or contact
+            <a href="mailto:${escapeHtml(supportEmail)}" style="color:#0284c7;text-decoration:none;">${escapeHtml(supportEmail)}</a>.
+          </p>
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>`;
+
+  return send({
+    toEmail: input.toEmail,
+    subject,
+    text,
+    html,
+  });
+}
+
 // ─────────────────────────────── Helpers ────────────────────────────────────
 
 /**
