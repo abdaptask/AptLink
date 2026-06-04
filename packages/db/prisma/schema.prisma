@@ -653,6 +653,15 @@ model Praise {
   /// offer — not an ACE user). For broadcasts this is whoever the praise
   /// is ABOUT (e.g. "Team hit Q2 quota!").
   recipientName String?   @map("recipient_name")
+  /// v0.10.89 — Optional admin-authored headline override. When set, the
+  /// recipient modal shows this verbatim INSTEAD of the auto-built
+  /// category headline ("Welcome aboard {recipientName}"). Use case:
+  /// admin praising the RECRUITER for landing a hire, not welcoming
+  /// the new hire themselves — the default headline doesn't fit and
+  /// admin types something like "Great work, Abdulla!" instead. NULL
+  /// means fall back to the category default + recipientName (legacy
+  /// behavior preserved for old praises and admins who don't customize).
+  headline      String?
   /// Body of the praise. Free-form (e.g. "on your offer with Mphasis - Puneeth").
   message       String
   createdAt     DateTime  @default(now()) @map("created_at")

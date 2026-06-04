@@ -80,12 +80,17 @@ export default function PraiseModal({}: PraiseModalProps) {
   const senderName =
     [current.fromUser.firstName, current.fromUser.lastName].filter(Boolean).join(' ').trim() ||
     current.fromUser.email;
-  // Display headline — use the category default plus the recipient name
-  // when one's been set. e.g. "Congratulations Ankit Patel" or just
-  // "Happy birthday" if no recipientName.
-  const headline = current.recipientName
-    ? `${meta.headline} ${current.recipientName}`
-    : meta.headline;
+  // v0.10.89 — Display headline.
+  // Priority: admin-authored override (current.headline) → category default
+  // + recipientName → category default alone. The override exists because
+  // the auto-built "Welcome aboard {recipientName}" doesn't fit every
+  // use case (e.g. praising the recruiter for a placement vs. welcoming
+  // the new hire themselves).
+  const headline = current.headline?.trim()
+    ? current.headline.trim()
+    : current.recipientName
+      ? `${meta.headline} ${current.recipientName}`
+      : meta.headline;
 
   async function handleDismiss() {
     if (submitting) return;

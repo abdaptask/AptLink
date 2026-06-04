@@ -6278,6 +6278,11 @@ function PraiseAdminSection() {
   const [targetMode, setTargetMode] = useState<'one' | 'broadcast'>('one');
   const [targetUserId, setTargetUserId] = useState<string>('');
   const [recipientName, setRecipientName] = useState('');
+  // v0.10.89 — Editable headline override. Admin can write whatever they
+  // want (e.g. "Great work, Abdulla!" when praising a recruiter instead
+  // of "Welcome aboard"). Blank = recipient modal falls back to the
+  // category default.
+  const [headline, setHeadline] = useState('');
   const [message, setMessage] = useState('');
   const [users, setUsers] = useState<AdminUserRow[]>([]);
   const [history, setHistory] = useState<Praise[]>([]);
@@ -6324,6 +6329,9 @@ function PraiseAdminSection() {
       toUserId: targetMode === 'broadcast' ? null : Number(targetUserId),
       recipientName: recipientName.trim() || undefined,
       message: message.trim(),
+      // v0.10.89 — send headline only if admin actually typed something
+      // (blank → backend stores NULL → recipient modal uses category default).
+      headline: headline.trim() || undefined,
     });
     setSending(false);
     if ('error' in r) {
@@ -6335,6 +6343,7 @@ function PraiseAdminSection() {
       ? 'Sent to everyone. They\'ll see it on their next dialer screen.'
       : 'Sent. The recipient will see it within ~60 seconds.');
     setMessage('');
+    setHeadline('');
     // v0.10.74 — Poke the PraiseModal poller so the sender sees their own
     // broadcast immediately (when they're a recipient of broadcast too)
     // instead of waiting up to 60s.
@@ -6451,6 +6460,35 @@ function PraiseAdminSection() {
           </span>
         </label>
 
+        {/* v0.10.89 — Headline override. Admin can fully edit the big bold
+            text that shows at the top of the recipient's praise modal.
+            Default-suggested headlines now reflect the most common ApTask
+            usage (praising a recruiter for a placement) instead of
+            welcoming the new hire. Blank → recipient sees category default. */}
+        <label className="fav-modal-field">
+          <span className="fav-modal-label">Headline (the big bold text)</span>
+          <input
+            type="text"
+            className="fav-modal-input"
+            value={headline}
+            onChange={(e) => setHeadline(e.target.value)}
+            placeholder={
+              category === 'new_hire' ? `e.g. Great work${recipientName ? ', ' + recipientName.split(' ')[0] : ''}! Another placement landed.` :
+              category === 'new_offer' ? `e.g. Congrats${recipientName ? ' ' + recipientName.split(' ')[0] : ''} — new offer secured!` :
+              category === 'birthday' ? `e.g. Happy birthday${recipientName ? ' ' + recipientName.split(' ')[0] : ''}!` :
+              category === 'anniversary' ? `e.g. ${recipientName ? recipientName.split(' ')[0] + ' — ' : ''}happy work anniversary` :
+              'Write whatever fits the occasion'
+            }
+            disabled={sending}
+            maxLength={120}
+          />
+          <span className="muted small" style={{ marginTop: 4, display: 'block' }}>
+            Leave blank to use the default for this category. Customize when the
+            default doesn't fit — e.g. praising the recruiter for a new hire
+            instead of welcoming the new hire themselves.
+          </span>
+        </label>
+
         <label className="fav-modal-field">
           <span className="fav-modal-label">Message</span>
           <textarea
@@ -6468,6 +6506,59 @@ function PraiseAdminSection() {
             disabled={sending}
           />
         </label>
+
+        {/* v0.10.89 — Live preview of what the recipient will see. Updates
+            in real time as admin edits headline / recipient / message.
+            Renders a miniature version of PraiseModal's layout so admin
+            sees exactly what's coming before they click Send. */}
+        {(message.trim() || headline.trim()) && (
+          <div className="praise-preview-pane" style={{
+            marginTop: 14,
+            padding: 16,
+            borderRadius: 10,
+            background: 'var(--bg-soft, #f8fafc)',
+            border: '1px dashed var(--border, #cbd5e1)',
+          }}>
+            <div className="muted small" style={{ marginBottom: 10, fontWeight: 600 }}>
+              Live preview — this is what the recipient will see:
+            </div>
+            <div style={{
+              padding: '18px 20px',
+              borderRadius: 12,
+              background: '#fff',
+              boxShadow: '0 4px 18px rgba(15,23,42,0.08)',
+              textAlign: 'center',
+            }}>
+              <div style={{
+                fontSize: 18,
+                fontWeight: 700,
+                color: '#0f172a',
+                marginBottom: 8,
+              }}>
+                {headline.trim() || (() => {
+                  // Match PraiseModal's fallback: category headline + recipientName
+                  const base = category === 'new_hire' ? 'Welcome aboard'
+                    : category === 'new_offer' ? 'New offer!'
+                    : category === 'birthday' ? 'Happy birthday'
+                    : category === 'anniversary' ? 'Work anniversary'
+                    : 'A note from the team';
+                  return recipientName.trim() ? `${base} ${recipientName.trim()}` : base;
+                })()}
+              </div>
+              <div style={{
+                fontSize: 14,
+                color: '#334155',
+                marginBottom: 10,
+                whiteSpace: 'pre-wrap',
+              }}>
+                {message.trim() || <em style={{ color: '#94a3b8' }}>(message body will appear here)</em>}
+              </div>
+              <div className="muted small">
+                From you
+              </div>
+            </div>
+          </div>
+        )}
 
         {error && <div className="error small">{error}</div>}
         {okMsg && <div className="muted small" style={{ color: '#34c759' }}>{okMsg}</div>}

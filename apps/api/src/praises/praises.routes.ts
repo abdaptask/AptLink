@@ -34,6 +34,10 @@ const CreatePraiseSchema = z.object({
   toUserId: z.number().int().positive().nullable().optional(),
   recipientName: z.string().trim().min(0).max(120).optional(),
   message: z.string().trim().min(1).max(500),
+  /// v0.10.89 — Optional admin-authored headline override. When empty/
+  /// omitted, recipient modal falls back to the category default
+  /// ("Welcome aboard {recipientName}", "Happy birthday", etc.).
+  headline: z.string().trim().min(0).max(120).optional(),
 });
 
 // requireAdmin helper — same shape as elsewhere in admin.routes.ts.
@@ -68,6 +72,7 @@ export async function praisesRoutes(app: FastifyInstance) {
         id: true,
         category: true,
         recipientName: true,
+        headline: true,
         message: true,
         createdAt: true,
         toUserId: true,
@@ -139,6 +144,7 @@ export async function praisesRoutes(app: FastifyInstance) {
         id: true,
         category: true,
         recipientName: true,
+        headline: true,
         message: true,
         createdAt: true,
         toUserId: true,
@@ -181,12 +187,16 @@ export async function praisesRoutes(app: FastifyInstance) {
         toUserId: toUserId ?? null,
         category: category as Category,
         recipientName: (recipientName ?? '').trim() || null,
+        // v0.10.89 — Optional admin-authored headline. Falls back to NULL
+        // (= recipient modal uses category default) when blank/omitted.
+        headline: (parsed.data.headline ?? '').trim() || null,
         message,
       },
       select: {
         id: true,
         category: true,
         recipientName: true,
+        headline: true,
         message: true,
         createdAt: true,
         toUserId: true,

@@ -24,6 +24,15 @@ export interface ReleaseEntry {
 
 export const WHATS_NEW: ReleaseEntry[] = [
   {
+    version: '0.10.89',
+    date: 'June 4, 2026',
+    highlight: 'Praise headlines are now fully editable with a live preview',
+    changes: [
+      { type: 'improved', text: 'When sending praise, admin can now write a custom headline (the big bold text) — not just the message body. The old hardcoded "Welcome aboard [name]" headline didn\'t fit every use case; for example praising a recruiter for landing a placement should say "Great work, Abdulla!" not "Welcome aboard Abdulla." A new Headline field is in the form; leave it blank to use the category default.' },
+      { type: 'new', text: 'Live preview pane in the praise composer. As you type the headline / recipient name / message, a real-time preview shows exactly what the recipient will see when their dialer pops the praise modal. Edit until it reads right, then send — no more "I should have worded that differently" after the fact.' },
+    ],
+  },
+  {
     version: '0.10.88',
     date: 'June 4, 2026',
     highlight: 'Fixes the "shows Disconnected but calls still ring through" bug',

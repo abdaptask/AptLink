@@ -1741,6 +1741,10 @@ export interface Praise {
   id: number;
   category: PraiseCategory;
   recipientName: string | null;
+  /** v0.10.89 — Admin-authored headline override. When null, the
+   *  recipient modal uses the category default ("Welcome aboard …",
+   *  "Happy birthday", etc.) instead. */
+  headline?: string | null;
   message: string;
   createdAt: string;
   toUserId: number | null;
@@ -1765,6 +1769,9 @@ export interface CreatePraiseInput {
   toUserId?: number | null;
   recipientName?: string;
   message: string;
+  /** v0.10.89 — Optional headline override. Empty/omitted → recipient
+   *  modal falls back to category default. */
+  headline?: string;
 }
 
 export async function listMyPraises(token: string): Promise<Praise[]> {
