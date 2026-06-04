@@ -306,6 +306,10 @@ export class SipService {
     // Telnyx Support what regional / port-443 options exist for this account.
     const wssUri = config.wssUri ?? 'wss://sip.telnyx.com:7443';
     console.log('[sip] connecting to', wssUri, 'as', config.username);
+    // v0.10.90 — Emit the WS keepalive setting at every connect so any
+    // diagnostic log a user emails us has explicit proof the new keepalive
+    // is in effect (and lets us verify the value if we ever tune it).
+    console.log('[sip] v0.10.90: WebSocket keep_alive_interval=25s (active TCP-layer keepalive enabled)');
 
     const socket = new JsSIP.WebSocketInterface(wssUri);
     const uri = `sip:${config.username}@${this.realm}`;
@@ -327,6 +331,30 @@ export class SipService {
       // (no matching dialog) which then teardown the call. Off = the call
       // stays alive as long as RTP flows.
       session_timers: false,
+      // v0.10.90 — WebSocket-layer keepalive.
+      //
+      // WHY: Per Telnyx Support's June 2026 review of our service issues,
+      // they specifically recommended "ensure your softphone sends regular
+      // WebSocket pings to maintain the connection and prevent stale
+      // registrations." Without this, the underlying TCP connection can
+      // die at the network layer (NAT timeout, ISP reset, transient route
+      // change) without JsSIP noticing — leading to silent SIP eviction
+      // and the "calls going to voicemail despite appearing registered"
+      // symptom we've been chasing.
+      //
+      // HOW: JsSIP sends a CRLF "pong" frame over the WebSocket every
+      // keep_alive_interval seconds. Telnyx's WSS endpoint acknowledges.
+      // If multiple consecutive pings go unacknowledged, JsSIP fires
+      // 'disconnected' — which triggers our existing reconnect logic
+      // (including the v0.10.80 wildcard wipe to clean up the stale
+      // registration on the other side).
+      //
+      // VALUE: 25 seconds. Tighter than the 30s force-REGISTER cadence
+      // we already run (v0.10.78), so the WSS layer detects death
+      // before the application layer's REGISTER attempt would. Common
+      // NAT mapping timeouts are 30-60s; 25s comfortably stays inside
+      // the most aggressive NAT windows.
+      keep_alive_interval: 25,
       // Use the user's selected mic via global getUserMedia constraints.
       user_agent: 'ACE-Dialer/1.0',
     });

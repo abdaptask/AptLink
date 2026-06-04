@@ -24,6 +24,14 @@ export interface ReleaseEntry {
 
 export const WHATS_NEW: ReleaseEntry[] = [
   {
+    version: '0.10.90',
+    date: 'June 4, 2026',
+    highlight: 'Active WebSocket keepalive — detects dead connections in seconds (per Telnyx recommendation)',
+    changes: [
+      { type: 'fixed', text: 'The dialer now sends a small "are you there?" ping to Telnyx over its WebSocket connection every 25 seconds. If Telnyx doesn\'t respond for multiple pings in a row, we know the underlying network connection is dead even though it looks healthy — and we trigger an automatic reconnect right away. Previously, a dead-but-looks-alive connection could go undetected for minutes, during which inbound calls would silently fall to voicemail. This was specifically recommended by Telnyx Support after their review of our service issues.' },
+    ],
+  },
+  {
     version: '0.10.89',
     date: 'June 4, 2026',
     highlight: 'Praise headlines are now fully editable with a live preview',
