@@ -24,6 +24,34 @@ export interface ReleaseEntry {
 
 export const WHATS_NEW: ReleaseEntry[] = [
   {
+    version: '0.10.86',
+    date: 'June 4, 2026',
+    highlight: 'Telnyx template inheritance fixed + zero-SQL re-migrations',
+    changes: [
+      { type: 'fixed', text: 'New user connections now inherit EVERY setting from the ACE Master Template at Telnyx — including Enable Instant Ringback (inbound + outbound), Enable Simultaneous Ringing, Noise Suppression (Both Inbound and Outbound + Krisp engine), Jitter Buffer settings, and any other setting Telnyx surfaces. Previously we were whitelisting specific field names which silently dropped anything not in our list. After deploy, any newly migrated/invited user gets the template configuration exactly. Existing users still need the /admin/backfill-anchorsites endpoint to pick up newer template changes.' },
+      { type: 'improved', text: 'When admin re-migrates a user from Pulse who was previously migrated and then deleted, their historical messages, calls, and voicemails now AUTOMATICALLY get reattached to the new user. No more "user has 0 history visible" + manual SQL UPDATE to recover. The migration step list shows "inherit orphan history from prior tombstoned user(s) X: N messages, M calls, P voicemails" when it triggers.' },
+      { type: 'new', text: 'Admin diagnostic endpoint GET /admin/telnyx-template-debug returns the master template\'s current Telnyx JSON. Useful for verifying which settings are actually being surfaced by Telnyx\'s API when a Mission Control toggle isn\'t taking effect on new users. Hit it from the browser console while signed in as admin.' },
+    ],
+  },
+  {
+    version: '0.10.85',
+    date: 'June 4, 2026',
+    highlight: 'Telnyx routing optimization is finally configured correctly',
+    changes: [
+      { type: 'fixed', text: 'Every new user since v0.10.64 will now have Telnyx anchorsite routing set to "latency" mode — Telnyx auto-picks the lowest-latency Point of Presence per call based on real-time ping measurements. Prior attempts used wrong values ("Chennai" / "Chennai, India" / "Latency Routing") that Telnyx silently rejected. The user-visible "non-fatal warning" red X on migrations is gone for good. Run the existing /admin/backfill-anchorsites endpoint to apply the fix to all existing users.' },
+      { type: 'fixed', text: 'When admin soft-deletes a user (because their call/SMS history blocks hard-delete), the user\'s phone numbers now get released automatically. Previously the DIDs stayed bound to the tombstoned user, blocking future migrations targeting the same number — required manual SQL cleanup every time (Farheen, Roshni, Shreya). Solved at the source.' },
+    ],
+  },
+  {
+    version: '0.10.84',
+    date: 'June 4, 2026',
+    highlight: 'Final fix for the recurring Pulse-migration paper-cuts',
+    changes: [
+      { type: 'fixed', text: 'Migrations no longer show the red X "apply ACE connection defaults — non-fatal warning" line. Telnyx kept rejecting our anchorsite_override values with error 10015 because we never had the exact accepted enum strings. We now skip the override entirely; new users inherit the master template\'s anchorsite (already a known-working config), which is what India and US users have effectively been using all along. Per-country routing optimization will come back in a future release once we confirm the right Telnyx strings.' },
+      { type: 'fixed', text: 'When admin deletes a user whose history can\'t be hard-deleted (calls/SMS/voicemails block the FK), the soft-delete now also releases the user\'s phone numbers. Pre-v0.10.84, the user got tombstoned but their DID stayed reserved — blocking any future Pulse migration that targeted the same number. This was the Roshni/Farheen/Shreya pattern requiring manual SQL cleanup. Now it just works.' },
+    ],
+  },
+  {
     version: '0.10.83',
     date: 'June 4, 2026',
     highlight: 'Mac auto-update is finally fixed — no more "Update failed, ZIP file not provided"',

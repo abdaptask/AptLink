@@ -1274,6 +1274,42 @@ export async function adminRoutes(app: FastifyInstance) {
         const msg = e instanceof Error ? e.message : String(e);
         step(`delete User row #${id}`, false, msg);
         try {
+          // v0.10.84 — Release UserDid rows BEFORE anonymizing the user.
+          //
+          // PROBLEM this solves: pre-v0.10.84, the anonymize path tombstoned
+          // the User row but left UserDid rows attached. Result: that user's
+          // DID stayed reserved in our DB even though the user was "deleted."
+          // When admin later tried to migrate the SAME person from Pulse —
+          // or migrate a DIFFERENT person whose Pulse data happened to point
+          // at the same DID — the "DID already in ACE" check fired against
+          // the orphan UserDid. Admin then had to SQL-spelunk to find +
+          // delete that row by hand. This recurred for Farheen + Shreya (x2).
+          //
+          // Fix: deleteMany on UserDid releases the DIDs back to the pool
+          // atomically with the user tombstone. Calls/messages/voicemails
+          // that reference the deleted UserDid have onDelete: SetNull on
+          // the userDidId column (see schema.prisma) so their history rows
+          // stay intact, just unlinked from the freed DID.
+          const releasedDids = await prisma.userDid
+            .deleteMany({ where: { userId: id } })
+            .catch((err) => {
+              // Don't abort the anonymize flow if DID release fails — the
+              // user is still being tombstoned. Admin gets a clear step log
+              // so they know DIDs may be orphaned and can clean up manually.
+              step(
+                `release DIDs bound to user #${id}`,
+                false,
+                err instanceof Error ? err.message : String(err),
+              );
+              return { count: 0 };
+            });
+          if (releasedDids.count > 0) {
+            step(
+              `release ${releasedDids.count} DID(s) bound to deleted user (freed for future reassignment)`,
+              true,
+            );
+          }
+
           await prisma.user.update({
             where: { id },
             data: {
@@ -3885,6 +3921,101 @@ export async function adminRoutes(app: FastifyInstance) {
         linked.ok, linked.ok ? undefined : linked.error ?? 'unknown error',
       );
 
+      // v0.10.86 — 10b) Auto-reattach orphan history from previous failed
+      // migrations of the SAME Pulse user.
+      //
+      // PROBLEM this solves: if this Pulse user was migrated before, the
+      // previous ACE user might have been soft-deleted (tombstoned with
+      // email rewritten to deleted-N@deleted.ace.local). The messages/
+      // calls/voicemails from that previous attempt stay bound to the
+      // tombstoned user_id, not visible to the new user we just created.
+      // Required SQL cleanup every time — Roshni/Farheen/Shreya/Rahul pattern.
+      //
+      // FIX: find every audit-log entry for this Pulse user_id where the
+      // target was later tombstoned. Reassign their orphan history rows
+      // to the freshly-created user. Best-effort — failure here logs a
+      // warning step but doesn't abort the migration (history can be
+      // recovered manually via the same SQL we used to use).
+      try {
+        const priorMigrations = await prisma.auditLog.findMany({
+          where: {
+            action: 'user.migrated_from_pulse',
+            // Filtering on JSON metadata isn't ideal in Postgres but works
+            // with Prisma's Json path syntax. Match on pulseUserId.
+            metadata: {
+              path: ['pulseUserId'],
+              equals: payload.id,
+            },
+          },
+          select: { targetUserId: true },
+        });
+        const priorUserIds = priorMigrations
+          .map((m) => m.targetUserId)
+          .filter((id): id is number => typeof id === 'number' && id !== created.id);
+
+        if (priorUserIds.length > 0) {
+          // Only act on tombstoned (anonymized) ones — active prior users
+          // would mean multiple people share a Pulse user_id (shouldn't
+          // happen, but guard anyway).
+          const tombstoned = await prisma.user.findMany({
+            where: {
+              id: { in: priorUserIds },
+              email: { endsWith: '@deleted.ace.local' },
+            },
+            select: { id: true, email: true },
+          });
+
+          if (tombstoned.length > 0) {
+            const tombstonedIds = tombstoned.map((u) => u.id);
+            const newUserDid = await prisma.userDid.findFirst({
+              where: { userId: created.id, didNumber: e164 },
+              select: { id: true },
+            });
+
+            // Run all three reassignments in a transaction so partial
+            // failure doesn't leave us in a half-migrated state.
+            const [msgs, calls, vms] = await prisma.$transaction([
+              prisma.message.updateMany({
+                where: { userId: { in: tombstonedIds } },
+                data: {
+                  userId: created.id,
+                  userDidId: newUserDid?.id ?? null,
+                },
+              }),
+              prisma.call.updateMany({
+                where: { userId: { in: tombstonedIds } },
+                data: {
+                  userId: created.id,
+                  userDidId: newUserDid?.id ?? null,
+                },
+              }),
+              prisma.voicemail.updateMany({
+                where: { userId: { in: tombstonedIds } },
+                data: {
+                  userId: created.id,
+                  userDidId: newUserDid?.id ?? null,
+                },
+              }),
+            ]);
+
+            const totalMoved = msgs.count + calls.count + vms.count;
+            if (totalMoved > 0) {
+              step(
+                `inherit orphan history from prior tombstoned user(s) ${tombstonedIds.join(', ')}: ${msgs.count} messages, ${calls.count} calls, ${vms.count} voicemails`,
+                true,
+              );
+            }
+          }
+        }
+      } catch (err) {
+        // Best-effort — log + continue. Admin can still SQL-recover.
+        step(
+          'inherit orphan history from prior tombstoned user(s)',
+          false,
+          err instanceof Error ? err.message : String(err),
+        );
+      }
+
       // 11) Welcome email
       const mail = await sendWelcomeEmail({
         toEmail: normEmail,
@@ -5577,6 +5708,25 @@ export async function adminRoutes(app: FastifyInstance) {
           // Anonymize fallback so admin doesn't see a ghost user AND can
           // re-invite the same email later without a unique-constraint hit.
           try {
+            // v0.10.84 — Release UserDid rows before anonymize (same fix
+            // as the primary delete handler around line 1280; see that
+            // comment for the full rationale — Farheen/Shreya pattern).
+            const releasedDids = await prisma.userDid
+              .deleteMany({ where: { userId: user.id } })
+              .catch((err) => {
+                step(
+                  `release DIDs bound to user #${user.id}`,
+                  false,
+                  err instanceof Error ? err.message : String(err),
+                );
+                return { count: 0 };
+              });
+            if (releasedDids.count > 0) {
+              step(
+                `release ${releasedDids.count} DID(s) bound to deleted user (freed for future reassignment)`,
+                true,
+              );
+            }
             await prisma.user.update({
               where: { id: user.id },
               data: {
@@ -6141,6 +6291,67 @@ export async function adminRoutes(app: FastifyInstance) {
         failed,
       });
       return { ok: failed === 0, total, success, failed, results };
+    },
+  );
+
+  // ── GET /admin/telnyx-template-debug ─────────────────────────────────────
+  //
+  // v0.10.86 — Diagnostic helper. Fetches the master template Credential
+  // Connection from Telnyx and returns the raw JSON. Useful when a setting
+  // toggled in Telnyx Mission Control isn't being inherited by new users
+  // — admin can compare what we send vs. what the API actually surfaces
+  // for the template, without needing terminal access or the API key.
+  //
+  // Triggerable from the browser console while signed in as admin:
+  //   fetch('/admin/telnyx-template-debug', {
+  //     headers: { Authorization: 'Bearer ' + sessionStorage.getItem('ace_token') },
+  //   }).then(r => r.json()).then((j) => console.log(JSON.stringify(j, null, 2)));
+  //
+  // Returns 503 if no template connection id is configured at the service.
+  app.get(
+    '/admin/telnyx-template-debug',
+    { onRequest: [app.authenticate, requireAdmin] },
+    async (request, reply) => {
+      const tplIdRes = await telnyx.resolveTemplateConnectionId();
+      if (!tplIdRes.ok || !tplIdRes.data) {
+        return reply.code(503).send({
+          ok: false,
+          error:
+            'No master template connection id configured. Set TELNYX_TEMPLATE_CONNECTION_ID or TELNYX_TEMPLATE_CONNECTION_DID on the API service.',
+        });
+      }
+      const tplId = tplIdRes.data;
+      const fetched = await telnyx.fetchCredentialConnection(tplId);
+      if (!fetched.ok || !fetched.data?.data) {
+        return reply.code(502).send({
+          ok: false,
+          templateId: tplId,
+          error: `Telnyx fetch failed: ${fetched.ok ? '(no data field in response)' : JSON.stringify(fetched.error).slice(0, 500)}`,
+        });
+      }
+      const template = fetched.data.data;
+      // Surface a compact summary at the top so admins can see at a glance
+      // which key fields the template currently has — without scrolling
+      // through the full JSON.
+      const inb = (template.inbound ?? {}) as Record<string, unknown>;
+      const out = (template.outbound ?? {}) as Record<string, unknown>;
+      return {
+        ok: true,
+        templateId: tplId,
+        summary: {
+          name: template.connection_name,
+          anchorsite_override: template.anchorsite_override,
+          noise_suppression: template.noise_suppression ?? '(not set)',
+          inbound_keys: Object.keys(inb),
+          outbound_keys: Object.keys(out),
+          // Spot-check the fields admin most often asks about:
+          inbound_generate_ringback_tone: inb.generate_ringback_tone ?? '(not set)',
+          inbound_simultaneous_ringing: inb.simultaneous_ringing_enabled ?? inb.simultaneous_ringing ?? inb.fork_to_call_id ?? '(not surfaced under common names)',
+          outbound_instant_ringback_enabled: out.instant_ringback_enabled ?? '(not set)',
+          outbound_generate_ringback_tone: out.generate_ringback_tone ?? '(not set)',
+        },
+        raw: template,
+      };
     },
   );
 

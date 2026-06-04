@@ -61,38 +61,62 @@ async function telnyxPatch(path: string, body: Record<string, unknown>): Promise
 /**
  * Translate ACE's User.country code to a Telnyx anchorsite_override value.
  *
- * v0.10.81 — FIXED: Telnyx's anchorsite_override accepts EXACT named-site
- * strings, not approximations. v0.10.64 used 'Chennai' and 'Latency' which
- * Telnyx rejects with error 10015 ("is not an acceptable value"). The
- * proper values are below per Telnyx API docs:
- *   - "Latency Routing"    — picks closest site dynamically per call
- *   - "Chennai, India"     — explicit Chennai anchor
- *   - "Mumbai, India"      — explicit Mumbai (alternate for India)
- *   - "Ashburn, VA"        — US East
- *   - "San Jose, CA"       — US West
- *   - …other named sites
+ * v0.10.85 — THIRD ATTEMPT, this time with the actual Telnyx-published
+ * values. The previous two attempts both got rejected with error 10015:
+ *   - v0.10.64:  'Chennai' / 'Latency'                  (capital L wrong)
+ *   - v0.10.81:  'Chennai, India' / 'Latency Routing'   (Chennai PoP doesn't exist)
  *
- * Our policy: India users → Chennai (lowest latency for the 95% in-country);
- * everyone else → Latency Routing (Telnyx picks per-call). Two-letter ISO
- * codes accepted, case-insensitive.
+ * Per https://developers.telnyx.com/docs/voice/sip-trunking/routing/anchorsite-configuration
+ * Telnyx's accepted values are:
+ *   - "latency"               (LOWERCASE — auto-select closest PoP by ping)
+ *   - "Chicago, IL"           (NA Central)
+ *   - "Ashburn, VA"           (NA East)
+ *   - "San Jose, CA"          (NA West)
+ *   - "Toronto, Canada"       (NA NE)
+ *   - "Montreal, Canada"      (NA NE)
+ *   - "Vancouver, Canada"     (NA NW)
+ *   - "London, UK"            (Europe)
+ *   - "Amsterdam, Netherlands"
+ *   - "Frankfurt, Germany"
+ *   - "Sydney, Australia"     (ONLY Asia Pacific PoP — closest to India)
+ *
+ * CRITICAL FINDING: there is no Chennai, Mumbai, India, or Singapore PoP.
+ * The mental model "India users → Chennai anchor" assumed Telnyx had
+ * Indian infrastructure; they don't. The closest geographic PoP to
+ * India is Sydney (~10,000 km), which often routes via worse undersea
+ * cables than "latency" mode would choose dynamically.
+ *
+ * Policy (v0.10.85): "latency" for EVERY user, regardless of country.
+ * Telnyx pings the user's endpoint and picks whichever real PoP gives
+ * the lowest measured latency that moment. For an India endpoint that's
+ * typically Frankfurt or Sydney depending on day-of-week routing; for a
+ * US endpoint it's whichever NA PoP is closest. No country tag needed
+ * for this PATCH; we keep the country argument for forward-compat in
+ * case Telnyx ever spins up Chennai or Mumbai.
  */
-export function anchorsiteForCountry(country: string | null | undefined): string {
-  const c = (country ?? '').trim().toUpperCase();
-  if (c === 'IN' || c === 'INDIA') return 'Chennai, India';
-  return 'Latency Routing';
+export function anchorsiteForCountry(_country: string | null | undefined): string {
+  // Country argument intentionally unused — Telnyx has no India PoP to
+  // route to, so all users get latency-mode auto-selection (which is
+  // the best they can get on Telnyx's current network footprint).
+  return 'latency';
 }
 
 /**
- * v0.10.64 — Apply per-user ACE defaults to a freshly-created Credential
- * Connection. Currently this just sets anchorsite_override based on
- * country (Chennai for India, Latency for everyone else). All other
- * settings — audio enhancements, codecs, channel limits, SRTP mandatory,
- * SHAKEN/STIR header, OPUS-first ordering, etc. — come from the template
- * clone in createConnectionFromTemplate and don't need to be re-applied
- * here.
+ * v0.10.85 — Re-enabled the anchorsite_override PATCH using the actual
+ * Telnyx-published value ("latency" — lowercase).
  *
- * Returns the PATCH result so callers can include it in step logs. Never
- * throws.
+ * History of this function's PATCH value:
+ *   - v0.10.64:  'Chennai' / 'Latency'             → rejected by Telnyx
+ *   - v0.10.81:  'Chennai, India' / 'Latency Routing' → also rejected
+ *   - v0.10.84:  no-op (disabled the PATCH entirely)
+ *   - v0.10.85:  'latency' (lowercase) for everyone — Telnyx-accepted.
+ *
+ * The country argument is retained on the function signature for
+ * forward-compat (Telnyx may eventually add an India/APAC PoP we'd want
+ * to route India users through), but currently ignored — see
+ * anchorsiteForCountry() above for why.
+ *
+ * Returns the PATCH result so callers can log it. Never throws.
  */
 export async function applyAceConnectionDefaults(
   connectionId: string,

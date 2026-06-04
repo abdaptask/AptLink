@@ -319,6 +319,14 @@ export interface FullCredentialConnection {
     timeout_2xx_secs?: number;
     shaken_stir_enabled?: boolean;
     ani_number_format?: string;
+    // v0.10.86 — catch-all index signature. The clone builder spreads
+    // EVERY field Telnyx returns under inbound (not just the enumerated
+    // ones), so new connection settings — "Enable simultaneous ringing",
+    // ringback dropdown enums, future audio features — all get copied
+    // onto new users without needing code changes here. Previously we
+    // whitelisted specific fields by name, which silently dropped
+    // everything else Telnyx surfaced.
+    [key: string]: unknown;
   };
   // v0.9.11+ — Telnyx "Audio Enhancements" sub-objects (Krisp Viva noise
   // suppression + jitter buffer). Live at the TOP LEVEL of the connection
@@ -343,6 +351,8 @@ export interface FullCredentialConnection {
     instant_ringback_enabled?: boolean;
     encrypted_media?: string | null;       // "SRTP" | "DTLS" | null
     generate_ringback_tone?: boolean;
+    // v0.10.86 — see matching comment on inbound above.
+    [key: string]: unknown;
   };
   rtcp_settings?: {
     port?: string;
@@ -538,32 +548,21 @@ export function cloneable<T>(value: T | undefined | null, options?: { allowNull?
 function buildInboundCloneFromTemplate(
   tpl: FullCredentialConnection,
 ): Record<string, unknown> {
-  const inb: Record<string, unknown> = {};
+  // v0.10.86 — Spread the ENTIRE inbound sub-object. Previously we
+  // whitelisted specific fields (codecs, channel_limit, generate_ringback_tone,
+  // …) and silently dropped anything Telnyx returned that wasn't in our
+  // enumeration. That's why "Enable simultaneous ringing" and the new
+  // ringback dropdown values (which Telnyx ships as enum strings, not the
+  // boolean we were checking) never made it onto new connections even
+  // though the master template had them on.
+  //
+  // Trade-off: we now pass through fields we don't know about. That's the
+  // intended behavior — Telnyx wouldn't return a field on inbound if it
+  // wasn't valid for inbound, so forwarding it verbatim is safe. New
+  // connection features released by Telnyx Just Work without code changes
+  // here.
   const src = tpl.inbound ?? {};
-  if (src.codecs && src.codecs.length > 0) inb.codecs = src.codecs;
-  if (typeof src.channel_limit === 'number') inb.channel_limit = src.channel_limit;
-  // sip_subdomain CAN legitimately be null; pass it through so we preserve
-  // template intent (e.g. template explicitly nulled the subdomain).
-  if (src.sip_subdomain !== undefined) inb.sip_subdomain = src.sip_subdomain;
-  if (src.sip_subdomain_receive_settings) {
-    inb.sip_subdomain_receive_settings = src.sip_subdomain_receive_settings;
-  }
-  if (src.default_routing_method) inb.default_routing_method = src.default_routing_method;
-  if (src.dnis_number_format) inb.dnis_number_format = src.dnis_number_format;
-  if (typeof src.isup_headers_enabled === 'boolean') {
-    inb.isup_headers_enabled = src.isup_headers_enabled;
-  }
-  if (src.sip_region) inb.sip_region = src.sip_region;
-  if (typeof src.generate_ringback_tone === 'boolean') {
-    inb.generate_ringback_tone = src.generate_ringback_tone;
-  }
-  if (typeof src.timeout_1xx_secs === 'number') inb.timeout_1xx_secs = src.timeout_1xx_secs;
-  if (typeof src.timeout_2xx_secs === 'number') inb.timeout_2xx_secs = src.timeout_2xx_secs;
-  if (typeof src.shaken_stir_enabled === 'boolean') {
-    inb.shaken_stir_enabled = src.shaken_stir_enabled;
-  }
-  if (src.ani_number_format) inb.ani_number_format = src.ani_number_format;
-  return inb;
+  return { ...src };
 }
 
 /**
@@ -578,34 +577,15 @@ function buildOutboundCloneFromTemplate(
   tpl: FullCredentialConnection,
   overrides?: { aniOverride?: string | null },
 ): Record<string, unknown> {
-  const out: Record<string, unknown> = {};
+  // v0.10.86 — Spread the entire outbound sub-object (same rationale as
+  // buildInboundCloneFromTemplate above). The per-user aniOverride logic
+  // is preserved — if the caller explicitly passes one, it wins over
+  // whatever the template said. Otherwise the template's ani_override
+  // (and every other outbound field) is inherited verbatim.
   const src = tpl.outbound ?? {};
-  if (src.outbound_voice_profile_id) {
-    out.outbound_voice_profile_id = src.outbound_voice_profile_id;
-  }
-  if (typeof src.channel_limit === 'number') out.channel_limit = src.channel_limit;
-
-  // Caller ID Override — per-user. If the caller passed an explicit
-  // aniOverride, use that; otherwise inherit the template's value (which
-  // for the +17322001305 template is the template's own DID — usually NOT
-  // what we want for a new user, hence the override).
+  const out: Record<string, unknown> = { ...src };
   if (overrides && Object.prototype.hasOwnProperty.call(overrides, 'aniOverride')) {
     out.ani_override = overrides.aniOverride ?? null;
-  } else if (src.ani_override !== undefined) {
-    out.ani_override = src.ani_override;
-  }
-  if (src.ani_override_type) out.ani_override_type = src.ani_override_type;
-  if (src.localization) out.localization = src.localization;
-  if (src.t38_reinvite_source) out.t38_reinvite_source = src.t38_reinvite_source;
-  if (typeof src.instant_ringback_enabled === 'boolean') {
-    out.instant_ringback_enabled = src.instant_ringback_enabled;
-  }
-  // encrypted_media nominally lives on the outbound sub-object in the
-  // current Telnyx schema. Older payloads put it at the top level; we mirror
-  // whichever the template surfaces.
-  if (src.encrypted_media !== undefined) out.encrypted_media = src.encrypted_media;
-  if (typeof src.generate_ringback_tone === 'boolean') {
-    out.generate_ringback_tone = src.generate_ringback_tone;
   }
   return out;
 }
