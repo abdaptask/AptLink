@@ -63,6 +63,20 @@ model User {
   /// when a call falls to voicemail. Null = use Telnyx's default greeting.
   voicemailGreetingUrl      String? @map("voicemail_greeting_url")
   voicemailGreetingFilename String? @map("voicemail_greeting_filename")
+  /// v0.10.99 — Text-to-speech alternative to uploading an audio file.
+  /// When voicemailGreetingMode='tts', the Call Control handler synthesizes
+  /// this text via Telnyx's speak() instead of playing back an audio URL.
+  /// Up to 500 chars (enough for ~30 seconds of speech).
+  voicemailGreetingText     String? @map("voicemail_greeting_text") @db.VarChar(500)
+  /// v0.10.99 — Which greeting source the Call Control voicemail handler
+  /// should use for this user:
+  ///   'audio'    → play voicemailGreetingUrl via playback_start
+  ///   'tts'      → speak voicemailGreetingText via Telnyx's TTS
+  ///   'default'  → speak a stock greeting like
+  ///                "You've reached <firstName>'s voicemail. Leave a message
+  ///                after the tone." (computed at runtime)
+  /// Null defaults to 'default'.
+  voicemailGreetingMode     String? @map("voicemail_greeting_mode") @db.VarChar(20)
   isAdmin         Boolean   @default(false) @map("is_admin")
   isActive        Boolean   @default(true)  @map("is_active")
   /// Microsoft Entra ID immutable user id ("oid" claim on the id_token).

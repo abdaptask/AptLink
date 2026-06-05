@@ -296,6 +296,31 @@ app.get('/health', async () => ({
   timestamp: new Date().toISOString(),
 }));
 
+// v0.10.99 — Telnyx Call Control voicemail. SEPARATE endpoint from the
+// existing /webhooks/telnyx/calls observer path. Admin configures a
+// dedicated Telnyx Call Control Application (in Mission Control) and
+// points its webhook URL at THIS endpoint. The DIDs that have Hosted VM
+// disabled + a fallback-on-no-answer pointing at that Call Control app
+// will route their voicemail-bound calls here. See voicemailCallControl.ts
+// for the full call lifecycle.
+app.post('/webhooks/telnyx/voicemail-cc', async (request) => {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const body = request.body as any;
+    const event = body?.data;
+    if (!event) {
+      app.log.warn('[vm-cc] webhook with no data');
+      return { received: true };
+    }
+    const { handleVoicemailCallControlEvent } = await import('./voicemailCallControl.js');
+    await handleVoicemailCallControlEvent(event, (obj, msg) => app.log.info(obj, msg));
+  } catch (e) {
+    app.log.error({ err: e instanceof Error ? e.message : String(e) }, '[vm-cc] handler threw');
+  }
+  // Telnyx requires fast 2xx on webhooks; never bubble errors up.
+  return { received: true };
+});
+
 // ---------- Telnyx call webhook handler ----------
 // Telnyx posts JSON like:
 // { data: { event_type: 'call.initiated' | 'call.answered' | 'call.hangup' | ...,

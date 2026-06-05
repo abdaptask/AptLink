@@ -698,15 +698,46 @@ export async function saveCallForwarding(
 // Custom voicemail greeting — replaces Telnyx's default robot greeting
 // with the user's own audio file. Stored in Supabase Storage; URL passed
 // to Telnyx via PATCH /v2/phone_numbers/{id}/voicemail.
+// v0.10.99 — VoicemailGreeting now includes text + mode for the Call Control
+// voicemail flow. mode: 'audio' = play voicemailGreetingUrl on inbound calls
+// that fall to voicemail; 'tts' = synthesize voicemailGreetingText via TTS;
+// 'default' = fall back to "You've reached <firstName>'s voicemail" stock.
+export type VoicemailGreetingMode = 'audio' | 'tts' | 'default';
 export interface VoicemailGreeting {
   url: string | null;
   filename: string | null;
+  text?: string | null;
+  mode?: VoicemailGreetingMode | null;
 }
 export async function getVoicemailGreeting(token: string): Promise<VoicemailGreeting> {
   const res = await fetch(`${API_URL}/voicemail-greeting`, {
     headers: { Authorization: `Bearer ${token}` },
   });
-  if (!res.ok) return { url: null, filename: null };
+  if (!res.ok) return { url: null, filename: null, text: null, mode: null };
+  return res.json();
+}
+export async function setVoicemailGreetingText(
+  token: string,
+  text: string,
+): Promise<{ text: string; mode: VoicemailGreetingMode }> {
+  const res = await fetch(`${API_URL}/voicemail-greeting/tts`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ text }),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+export async function setVoicemailGreetingMode(
+  token: string,
+  mode: VoicemailGreetingMode,
+): Promise<{ mode: VoicemailGreetingMode }> {
+  const res = await fetch(`${API_URL}/voicemail-greeting/mode`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ mode }),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return res.json();
 }
 export async function uploadVoicemailGreeting(

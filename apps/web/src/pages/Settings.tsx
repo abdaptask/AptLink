@@ -128,7 +128,10 @@ import {
   getVoicemailGreeting,
   uploadVoicemailGreeting,
   deleteVoicemailGreeting,
+  setVoicemailGreetingText,
+  setVoicemailGreetingMode,
   type VoicemailGreeting,
+  type VoicemailGreetingMode,
   type AdminUserRow,
   type AuditLogEntry,
   type BulkImportRow,
@@ -1261,6 +1264,21 @@ function HoldMusicSection() {
 // is the first end-to-end test: admin uploads, calls their own DID, listens
 // for the custom greeting. If it plays → support was wrong, feature ships.
 // If Telnyx's default plays → we pivot to a Call Control voicemail flow.
+// v0.10.99 — Voicemail greeting now backed by the Call Control flow.
+// User picks ONE of three modes:
+//   • Default — stock "You've reached <firstName>'s voicemail" via Telnyx TTS.
+//   • Text-to-speech — user types up to 500 chars; spoken via Telnyx TTS.
+//   • Audio — user uploads an MP3/WAV/M4A/AAC/OGG (≤2 MB), played back as-is.
+// The webhook handler (apps/webhooks/src/voicemailCallControl.ts) reads
+// voicemailGreetingMode + greetingText/greetingUrl on every inbound voicemail
+// hit and branches accordingly. Both text and audio persist independently,
+// so switching modes doesn't erase your other configuration.
+//
+// IMPORTANT: This UI is fully wired, but the Call Control flow only fires
+// once an admin reroutes each DID's voicemail handling to the new ACE
+// Voicemail Call Control App in Telnyx Mission Control (planned cutover
+// in v0.10.100). Until then, callers continue to hear Telnyx's Hosted
+// Voicemail default greeting regardless of what's saved here.
 function VoicemailGreetingSection() {
   const [greeting, setGreeting] = useState<VoicemailGreeting | null>(null);
   const [loading, setLoading] = useState(true);
@@ -1269,15 +1287,94 @@ function VoicemailGreetingSection() {
   const [okMsg, setOkMsg] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
+  // Active tab in the UI. Driven initially by the persisted mode so a
+  // user who saved TTS last time lands on the TTS tab on re-open.
+  const [activeTab, setActiveTab] = useState<VoicemailGreetingMode>('default');
+  // Local edit buffer for the TTS textarea so typing doesn't fight the
+  // server-side saved value until the user clicks Save.
+  const [ttsDraft, setTtsDraft] = useState('');
+
   useEffect(() => {
     const token = sessionStorage.getItem('ace_token');
     if (!token) { setLoading(false); return; }
     void getVoicemailGreeting(token)
-      .then(setGreeting)
-      .catch(() => setGreeting({ url: null, filename: null }))
+      .then((g) => {
+        setGreeting(g);
+        const mode = (g.mode ?? 'default') as VoicemailGreetingMode;
+        setActiveTab(mode);
+        setTtsDraft(g.text ?? '');
+      })
+      .catch(() => setGreeting({ url: null, filename: null, text: null, mode: null }))
       .finally(() => setLoading(false));
   }, []);
 
+  // ───────────────────────── Mode switching ─────────────────────────
+  // Switching tabs does NOT persist mode until the user actually saves
+  // something on that tab (or explicitly chooses Default, which has no
+  // other action). Otherwise tab clicks would silently mutate which
+  // greeting callers hear, which the user wouldn't expect.
+  async function activateMode(mode: VoicemailGreetingMode) {
+    setError(null);
+    setOkMsg(null);
+    setSubmitting(true);
+    try {
+      const token = sessionStorage.getItem('ace_token');
+      if (!token) { setError('Sign in again.'); return; }
+      await setVoicemailGreetingMode(token, mode);
+      setGreeting((g) => ({
+        url: g?.url ?? null,
+        filename: g?.filename ?? null,
+        text: g?.text ?? null,
+        mode,
+      }));
+      if (mode === 'default') {
+        setOkMsg('Switched to the default greeting. Callers will hear the stock "You\'ve reached <your name>\'s voicemail" message.');
+      } else if (mode === 'tts') {
+        setOkMsg('Text-to-speech greeting is now active.');
+      } else {
+        setOkMsg('Audio greeting is now active.');
+      }
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  // ───────────────────────── TTS save ─────────────────────────────
+  async function handleSaveTts() {
+    setError(null);
+    setOkMsg(null);
+    const text = ttsDraft.trim();
+    if (text.length === 0) {
+      setError('Please enter some greeting text before saving.');
+      return;
+    }
+    if (text.length > 500) {
+      setError(`Text is too long (${text.length} characters). Maximum is 500.`);
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const token = sessionStorage.getItem('ace_token');
+      if (!token) { setError('Sign in again.'); return; }
+      const saved = await setVoicemailGreetingText(token, text);
+      setGreeting((g) => ({
+        url: g?.url ?? null,
+        filename: g?.filename ?? null,
+        text: saved.text,
+        mode: saved.mode,
+      }));
+      setActiveTab('tts');
+      setOkMsg('Text greeting saved. Callers will hear this read aloud via Telnyx TTS.');
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  // ───────────────────────── Audio upload / delete ─────────────────
   async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -1285,8 +1382,8 @@ function VoicemailGreetingSection() {
     setOkMsg(null);
 
     // Client-side validation — backend re-validates, but fail fast on
-    // the client so admin doesn't wait for a base64-encoded 5MB upload
-    // just to get a 413 back.
+    // the client so the user doesn't wait for a base64-encoded 5MB
+    // upload just to get a 413 back.
     const MAX_BYTES = 2 * 1024 * 1024;
     if (file.size > MAX_BYTES) {
       setError(`File too large (${(file.size / 1024 / 1024).toFixed(1)} MB). Maximum is 2 MB.`);
@@ -1308,8 +1405,15 @@ function VoicemailGreetingSection() {
       const token = sessionStorage.getItem('ace_token');
       if (!token) { setError('Sign in again.'); return; }
       const result = await uploadVoicemailGreeting(token, file);
-      setGreeting(result);
-      setOkMsg('Greeting saved. Test it: call your DID from another phone (e.g. your cell) and don\'t pick up. You should hear your greeting after the no-answer timeout.');
+      // Upload endpoint also flips mode → 'audio' server-side.
+      setGreeting((g) => ({
+        url: result.url,
+        filename: result.filename,
+        text: g?.text ?? null,
+        mode: 'audio',
+      }));
+      setActiveTab('audio');
+      setOkMsg('Audio greeting saved. Callers will hear this recording when your line falls to voicemail.');
       if (fileInputRef.current) fileInputRef.current.value = '';
     } catch (e) {
       setError((e as Error).message);
@@ -1318,8 +1422,8 @@ function VoicemailGreetingSection() {
     }
   }
 
-  async function handleDelete() {
-    if (!confirm('Remove your custom greeting? Callers will hear Telnyx\'s default greeting instead.')) return;
+  async function handleDeleteAudio() {
+    if (!confirm('Remove your uploaded audio greeting? Your text-to-speech greeting (if any) and default fallback remain available.')) return;
     setError(null);
     setOkMsg(null);
     setSubmitting(true);
@@ -1327,8 +1431,21 @@ function VoicemailGreetingSection() {
       const token = sessionStorage.getItem('ace_token');
       if (!token) { setError('Sign in again.'); return; }
       await deleteVoicemailGreeting(token);
-      setGreeting({ url: null, filename: null });
-      setOkMsg('Custom greeting removed. Callers now hear the default greeting.');
+      // Audio is gone — fall back to whichever mode still has content,
+      // preferring tts (since user explicitly saved text) over default.
+      const fallbackMode: VoicemailGreetingMode = (greeting?.text && greeting.text.length > 0) ? 'tts' : 'default';
+      const token2 = sessionStorage.getItem('ace_token') ?? '';
+      if (token2) {
+        await setVoicemailGreetingMode(token2, fallbackMode).catch(() => undefined);
+      }
+      setGreeting((g) => ({
+        url: null,
+        filename: null,
+        text: g?.text ?? null,
+        mode: fallbackMode,
+      }));
+      setActiveTab(fallbackMode);
+      setOkMsg(`Audio greeting removed. Callers will now hear the ${fallbackMode === 'tts' ? 'text-to-speech' : 'default'} greeting.`);
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -1338,97 +1455,243 @@ function VoicemailGreetingSection() {
 
   if (loading) return <div className="muted">Loading…</div>;
 
-  const hasGreeting = !!greeting?.url;
+  const activeMode = (greeting?.mode ?? 'default') as VoicemailGreetingMode;
+  const hasAudio = !!greeting?.url;
+  const hasText = !!greeting?.text;
+  const charsRemaining = 500 - ttsDraft.length;
+
+  // Visual styling for the tab strip — we reuse the project's small
+  // pill button look so it matches Settings elsewhere without needing
+  // new CSS classes.
+  const tabBtnStyle = (isActive: boolean): React.CSSProperties => ({
+    padding: '8px 14px',
+    border: isActive ? '1px solid var(--brand, #2563eb)' : '1px solid var(--border, #e2e8f0)',
+    background: isActive ? 'var(--brand, #2563eb)' : 'transparent',
+    color: isActive ? '#fff' : 'inherit',
+    borderRadius: 8,
+    cursor: 'pointer',
+    fontWeight: 500,
+    fontSize: 13,
+  });
 
   return (
     <div className="settings-section">
       <h2 className="settings-title">Voicemail greeting</h2>
       <p className="settings-blurb">
-        Upload a custom audio file that callers hear before leaving you a
-        voicemail. Use a short MP3, WAV, M4A, AAC, or OGG file — 5-15
-        seconds is the sweet spot. Maximum file size is 2 MB. Leave it
-        empty to use Telnyx&apos;s default greeting.
+        Choose what callers hear when they reach your voicemail. You can use
+        a stock greeting, type something you want read aloud, or upload your
+        own audio recording. Whichever you save last becomes the active
+        greeting — but text and audio are stored independently, so switching
+        modes won&apos;t erase what you set up before.
       </p>
 
-      {/* Current greeting display + audio preview */}
-      {hasGreeting ? (
-        <div
-          style={{
-            background: 'rgba(52, 199, 89, 0.08)',
-            border: '1px solid rgba(52, 199, 89, 0.3)',
-            borderRadius: 10,
-            padding: '14px 16px',
-            marginBottom: 16,
-          }}
-        >
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-            <Mic size={18} style={{ color: '#34c759' }} />
-            <strong>Custom greeting set</strong>
-          </div>
-          <div className="muted small" style={{ marginBottom: 10 }}>
-            File: <code>{greeting?.filename || '(unnamed)'}</code>
-          </div>
-          {greeting?.url && (
-            <audio
-              controls
-              src={greeting.url}
-              style={{ width: '100%', maxWidth: 420 }}
-              preload="none"
-            />
+      {/* Currently-active banner */}
+      <div
+        style={{
+          background: 'rgba(37, 99, 235, 0.08)',
+          border: '1px solid rgba(37, 99, 235, 0.3)',
+          borderRadius: 10,
+          padding: '12px 16px',
+          marginBottom: 16,
+          display: 'flex',
+          alignItems: 'center',
+          gap: 10,
+        }}
+      >
+        <Mic size={18} style={{ color: '#2563eb' }} />
+        <div>
+          <strong>Currently active:</strong>{' '}
+          {activeMode === 'audio' && (
+            <>Uploaded audio recording{greeting?.filename ? <> — <code>{greeting.filename}</code></> : null}</>
           )}
-          <div style={{ marginTop: 12, display: 'flex', gap: 8 }}>
+          {activeMode === 'tts' && <>Text-to-speech greeting</>}
+          {activeMode === 'default' && <>Default stock greeting (uses your first name)</>}
+        </div>
+      </div>
+
+      {/* Tab strip */}
+      <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
+        <button
+          type="button"
+          style={tabBtnStyle(activeTab === 'default')}
+          onClick={() => setActiveTab('default')}
+        >
+          Default {activeMode === 'default' && '✓'}
+        </button>
+        <button
+          type="button"
+          style={tabBtnStyle(activeTab === 'tts')}
+          onClick={() => setActiveTab('tts')}
+        >
+          Text-to-speech {activeMode === 'tts' && '✓'} {hasText && activeMode !== 'tts' && '•'}
+        </button>
+        <button
+          type="button"
+          style={tabBtnStyle(activeTab === 'audio')}
+          onClick={() => setActiveTab('audio')}
+        >
+          Audio upload {activeMode === 'audio' && '✓'} {hasAudio && activeMode !== 'audio' && '•'}
+        </button>
+      </div>
+
+      {/* ─────────────── Default tab ─────────────── */}
+      {activeTab === 'default' && (
+        <div style={{ marginBottom: 12 }}>
+          <p className="muted small" style={{ marginBottom: 12 }}>
+            Callers hear a stock greeting that mentions your first name —
+            something like &quot;You&apos;ve reached <em>{`{your name}`}</em>&apos;s
+            voicemail. Please leave a message after the tone, and they&apos;ll
+            get back to you as soon as possible.&quot; Nothing to configure.
+          </p>
+          {activeMode !== 'default' && (
             <button
               type="button"
               className="device-action"
-              onClick={handleDelete}
+              onClick={() => activateMode('default')}
               disabled={submitting}
             >
-              Remove greeting
+              Use default greeting
             </button>
-          </div>
-        </div>
-      ) : (
-        <div
-          style={{
-            background: 'rgba(245, 158, 11, 0.08)',
-            border: '1px solid rgba(245, 158, 11, 0.3)',
-            borderRadius: 10,
-            padding: '14px 16px',
-            marginBottom: 16,
-          }}
-        >
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <Mic size={18} style={{ color: '#f59e0b' }} />
-            <strong>No custom greeting set</strong>
-          </div>
-          <p className="muted small" style={{ margin: '6px 0 0 0' }}>
-            Callers currently hear Telnyx&apos;s default &quot;please leave a
-            message&quot; greeting. Upload your own below.
-          </p>
+          )}
+          {activeMode === 'default' && (
+            <p className="muted small">This is your active greeting.</p>
+          )}
         </div>
       )}
 
-      {/* Upload */}
-      <div style={{ marginBottom: 12 }}>
-        <label
-          className="fav-modal-label"
-          style={{ display: 'block', marginBottom: 6 }}
-        >
-          {hasGreeting ? 'Replace with new audio:' : 'Choose an audio file:'}
-        </label>
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept="audio/mpeg,audio/mp3,audio/wav,audio/x-wav,audio/m4a,audio/mp4,audio/ogg,audio/aac,.mp3,.wav,.m4a,.aac,.ogg"
-          onChange={handleFileChange}
-          disabled={submitting}
-        />
-        {submitting && (
-          <div className="muted small" style={{ marginTop: 8 }}>
-            Uploading and configuring with Telnyx — usually 2-5 seconds…
+      {/* ─────────────── Text-to-speech tab ─────────────── */}
+      {activeTab === 'tts' && (
+        <div style={{ marginBottom: 12 }}>
+          <label
+            className="fav-modal-label"
+            style={{ display: 'block', marginBottom: 6 }}
+            htmlFor="vm-tts-textarea"
+          >
+            Greeting text (read aloud by Telnyx TTS):
+          </label>
+          <textarea
+            id="vm-tts-textarea"
+            value={ttsDraft}
+            onChange={(e) => setTtsDraft(e.target.value.slice(0, 500))}
+            placeholder="Hi, you've reached Abdulla. I can't pick up right now — please leave your name, number, and a brief message, and I'll get back to you shortly."
+            rows={5}
+            style={{
+              width: '100%',
+              padding: 10,
+              borderRadius: 8,
+              border: '1px solid var(--border, #cbd5e1)',
+              fontFamily: 'inherit',
+              fontSize: 14,
+              resize: 'vertical',
+              minHeight: 100,
+            }}
+            disabled={submitting}
+            maxLength={500}
+          />
+          <div
+            className="muted small"
+            style={{ marginTop: 4, display: 'flex', justifyContent: 'space-between' }}
+          >
+            <span>Max 500 characters. Keep it short — long greetings get cut off in caller patience.</span>
+            <span style={{ color: charsRemaining < 50 ? '#d97706' : undefined }}>
+              {charsRemaining} characters left
+            </span>
           </div>
-        )}
-      </div>
+          <div style={{ marginTop: 12, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <button
+              type="button"
+              className="device-action"
+              onClick={handleSaveTts}
+              disabled={submitting || ttsDraft.trim().length === 0}
+            >
+              {hasText ? 'Update text greeting' : 'Save text greeting'}
+            </button>
+            {hasText && activeMode !== 'tts' && (
+              <button
+                type="button"
+                className="device-action"
+                onClick={() => activateMode('tts')}
+                disabled={submitting}
+              >
+                Make text greeting active
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ─────────────── Audio upload tab ─────────────── */}
+      {activeTab === 'audio' && (
+        <div style={{ marginBottom: 12 }}>
+          {hasAudio ? (
+            <div
+              style={{
+                background: 'rgba(52, 199, 89, 0.08)',
+                border: '1px solid rgba(52, 199, 89, 0.3)',
+                borderRadius: 10,
+                padding: '12px 14px',
+                marginBottom: 12,
+              }}
+            >
+              <div className="muted small" style={{ marginBottom: 8 }}>
+                Current file: <code>{greeting?.filename || '(unnamed)'}</code>
+              </div>
+              {greeting?.url && (
+                <audio
+                  controls
+                  src={greeting.url}
+                  style={{ width: '100%', maxWidth: 420 }}
+                  preload="none"
+                />
+              )}
+              <div style={{ marginTop: 12, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                <button
+                  type="button"
+                  className="device-action"
+                  onClick={handleDeleteAudio}
+                  disabled={submitting}
+                >
+                  Remove audio greeting
+                </button>
+                {activeMode !== 'audio' && (
+                  <button
+                    type="button"
+                    className="device-action"
+                    onClick={() => activateMode('audio')}
+                    disabled={submitting}
+                  >
+                    Make audio greeting active
+                  </button>
+                )}
+              </div>
+            </div>
+          ) : (
+            <p className="muted small" style={{ marginBottom: 12 }}>
+              Upload a short MP3, WAV, M4A, AAC, or OGG file — 5-15 seconds
+              is the sweet spot. Maximum file size is 2 MB.
+            </p>
+          )}
+
+          <label
+            className="fav-modal-label"
+            style={{ display: 'block', marginBottom: 6 }}
+          >
+            {hasAudio ? 'Replace with new audio:' : 'Choose an audio file:'}
+          </label>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="audio/mpeg,audio/mp3,audio/wav,audio/x-wav,audio/m4a,audio/mp4,audio/ogg,audio/aac,.mp3,.wav,.m4a,.aac,.ogg"
+            onChange={handleFileChange}
+            disabled={submitting}
+          />
+          {submitting && (
+            <div className="muted small" style={{ marginTop: 8 }}>
+              Uploading and saving — usually 2-5 seconds…
+            </div>
+          )}
+        </div>
+      )}
 
       {error && (
         <div
@@ -1461,7 +1724,7 @@ function VoicemailGreetingSection() {
         </div>
       )}
 
-      {/* How to test — guidance after upload */}
+      {/* How to test — guidance after configuring */}
       <details
         style={{
           marginTop: 20,
@@ -1475,12 +1738,17 @@ function VoicemailGreetingSection() {
           How to verify your greeting plays correctly
         </summary>
         <ol style={{ margin: '8px 0 0 0', paddingLeft: 20 }}>
-          <li>Upload your audio file above.</li>
-          <li>Wait a few seconds for Telnyx to register the change.</li>
+          <li>Save the greeting you want active (above).</li>
           <li>From a different phone (your cell, a colleague), call your ACE DID number.</li>
           <li>Don&apos;t pick up — let the call ring through the no-answer timeout (~30s).</li>
-          <li>You should hear your custom greeting play. If you hear the default Telnyx greeting instead, the upload didn&apos;t apply at Telnyx — let your admin know.</li>
+          <li>You should hear the greeting you configured. If you still hear Telnyx&apos;s default voicemail message, the per-DID Call Control cutover hasn&apos;t happened yet — let your admin know.</li>
         </ol>
+        <p className="muted small" style={{ marginTop: 10, marginBottom: 0 }}>
+          <strong>Heads up for admins:</strong> the custom greeting flow only
+          fires once each DID is routed to the ACE Voicemail Call Control App
+          in Telnyx (scheduled for v0.10.100 rollout). Until then, callers
+          continue to hear the legacy hosted voicemail default.
+        </p>
       </details>
     </div>
   );

@@ -24,6 +24,15 @@ export interface ReleaseEntry {
 
 export const WHATS_NEW: ReleaseEntry[] = [
   {
+    version: '0.10.99',
+    date: 'June 5, 2026',
+    highlight: 'Personal voicemail greeting — type it OR record it, in your own voice',
+    changes: [
+      { type: 'new', text: 'Settings → Calling → Voicemail greeting is now a three-tab control. Pick "Default" for the stock "You\'ve reached <your name>\'s voicemail" message; pick "Text-to-speech" to type up to 500 characters that Telnyx will read aloud in a natural voice; or pick "Audio upload" to upload your own MP3, WAV, M4A, AAC, or OGG recording (up to 2 MB). Text and audio are stored independently, so you can switch between them without losing what you set up before.' },
+      { type: 'improved', text: 'Behind the scenes: we replaced Telnyx Hosted Voicemail (which only supported a single robotic default greeting) with our own Call Control voicemail handler. This gives us full control over what callers hear before the beep, what gets recorded, and how voicemails flow into your inbox. The new flow is wired and tested for individual users. Admin Telnyx-side per-DID cutover ships in v0.10.100 — until then, callers continue to hear the legacy hosted voicemail message regardless of what you save here. We\'ll let you know once it goes live.' },
+    ],
+  },
+  {
     version: '0.10.98',
     date: 'June 5, 2026',
     highlight: 'Decline a call once and it stays declined — no more ring-back loop',

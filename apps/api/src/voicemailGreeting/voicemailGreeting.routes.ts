@@ -119,6 +119,8 @@ async function setTelnyxGreeting(
 
 export async function voicemailGreetingRoutes(app: FastifyInstance) {
   // GET /voicemail-greeting — current saved greeting, if any.
+  // v0.10.99 — Now also returns the TTS text + active mode for the new
+  // Call Control voicemail flow. mode is 'audio' | 'tts' | 'default' | null.
   app.get(
     '/voicemail-greeting',
     { onRequest: [app.authenticate] },
@@ -126,12 +128,75 @@ export async function voicemailGreetingRoutes(app: FastifyInstance) {
       const u = request.user as JwtPayload;
       const row = await prisma.user.findUnique({
         where: { id: u.sub },
-        select: { voicemailGreetingUrl: true, voicemailGreetingFilename: true },
+        select: {
+          voicemailGreetingUrl: true,
+          voicemailGreetingFilename: true,
+          voicemailGreetingText: true,
+          voicemailGreetingMode: true,
+        },
       });
       return {
         url: row?.voicemailGreetingUrl ?? null,
         filename: row?.voicemailGreetingFilename ?? null,
+        text: row?.voicemailGreetingText ?? null,
+        mode: row?.voicemailGreetingMode ?? null,
       };
+    },
+  );
+
+  // v0.10.99 — PUT /voicemail-greeting/tts
+  // Save text-to-speech greeting. The Call Control webhook handler will
+  // call Telnyx /actions/speak with this text when an inbound call falls
+  // to voicemail (assuming voicemailGreetingMode='tts').
+  app.put(
+    '/voicemail-greeting/tts',
+    { onRequest: [app.authenticate] },
+    async (request: FastifyRequest, reply) => {
+      const u = request.user as JwtPayload;
+      const parsed = z.object({
+        text: z.string().trim().min(1).max(500),
+      }).safeParse(request.body);
+      if (!parsed.success) {
+        return reply.code(400).send({
+          error: 'Invalid input',
+          details: parsed.error.flatten(),
+        });
+      }
+      const saved = await prisma.user.update({
+        where: { id: u.sub },
+        data: {
+          voicemailGreetingText: parsed.data.text,
+          voicemailGreetingMode: 'tts',
+        },
+        select: { voicemailGreetingText: true, voicemailGreetingMode: true },
+      });
+      return { text: saved.voicemailGreetingText, mode: saved.voicemailGreetingMode };
+    },
+  );
+
+  // v0.10.99 — PUT /voicemail-greeting/mode
+  // Switch active greeting mode without losing the configured TTS text
+  // OR audio URL. Lets users toggle between 'audio', 'tts', and 'default'
+  // (the stock fallback greeting).
+  app.put(
+    '/voicemail-greeting/mode',
+    { onRequest: [app.authenticate] },
+    async (request: FastifyRequest, reply) => {
+      const u = request.user as JwtPayload;
+      const parsed = z.object({
+        mode: z.enum(['audio', 'tts', 'default']),
+      }).safeParse(request.body);
+      if (!parsed.success) {
+        return reply.code(400).send({
+          error: 'Invalid mode (must be audio, tts, or default)',
+        });
+      }
+      const saved = await prisma.user.update({
+        where: { id: u.sub },
+        data: { voicemailGreetingMode: parsed.data.mode },
+        select: { voicemailGreetingMode: true },
+      });
+      return { mode: saved.voicemailGreetingMode };
     },
   );
 
