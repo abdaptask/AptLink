@@ -24,6 +24,15 @@ export interface ReleaseEntry {
 
 export const WHATS_NEW: ReleaseEntry[] = [
   {
+    version: '0.10.95',
+    date: 'June 5, 2026',
+    highlight: 'Broadcast composer — properly tailored fields per category, no more "who\'s being celebrated" on announcements',
+    changes: [
+      { type: 'fixed', text: 'The Broadcast composer was carrying praise-era assumptions into the new categories. Fixed: the "Display name (who\'s being celebrated)" field now only appears for Celebrations and Welcomes (categories where a specific person is being recognized). For Announcements, Alerts, and Reminders the field is hidden entirely — they\'re general communications, no person to name. Send button label is now category-aware (Send announcement / Send alert / Send reminder / Send welcome / Send praise) and the "Recent praise sent" history is now labeled "Recent broadcasts sent."' },
+      { type: 'fixed', text: 'Recipient name no longer leaks into the headline of announcement-style broadcasts. The recipient modal renders "Service notice" instead of "Service notice Loretta" when the category isn\'t a Celebration or Welcome — and the admin form no longer auto-fills the field at all for those category types.' },
+    ],
+  },
+  {
     version: '0.10.94',
     date: 'June 5, 2026',
     highlight: 'One-click Call / SMS a user from the Admin Users table',

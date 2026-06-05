@@ -6658,7 +6658,13 @@ function PraiseAdminSection() {
 
   // When admin picks a user from the dropdown, default recipientName to
   // their first+last. Admin can override (e.g. external candidate name).
+  // v0.10.95 — Only auto-fill for Celebrations and Welcomes. Announcements,
+  // Alerts, and Reminders don't have a "celebrated person" so we never
+  // surface the field — auto-filling would leak a name into the payload.
   useEffect(() => {
+    const group = BROADCAST_META[category]?.group;
+    const needsName = group === 'Celebrations' || group === 'Welcomes';
+    if (!needsName) return;
     if (targetMode === 'one' && targetUserId) {
       const u = users.find((x) => String(x.id) === targetUserId);
       if (u) {
@@ -6666,7 +6672,7 @@ function PraiseAdminSection() {
         if (joined) setRecipientName(joined);
       }
     }
-  }, [targetUserId, targetMode, users]);
+  }, [targetUserId, targetMode, users, category]);
 
   async function handleSend() {
     setError(null);
@@ -6710,7 +6716,7 @@ function PraiseAdminSection() {
   }
 
   async function handleDelete(praiseId: number) {
-    if (!confirm('Delete this praise? Anyone who hasn\'t seen it yet won\'t.')) return;
+    if (!confirm('Delete this broadcast? Anyone who hasn\'t seen it yet won\'t.')) return;
     const token = sessionStorage.getItem('ace_token');
     if (!token) return;
     const r = await deletePraise(token, praiseId);
@@ -6754,16 +6760,17 @@ function PraiseAdminSection() {
             onChange={(e) => {
               const next = e.target.value as PraiseCategoryUI;
               setCategory(next);
-              // Auto-suggest headline + clear stale message when admin
-              // switches category groups (e.g. moving from celebration
-              // to alert — old message no longer makes sense).
-              const meta = BROADCAST_META[next];
-              setHeadline(''); // clear so the new default headline shows in preview
-              if (!message.trim() || BROADCAST_META[category].messagePlaceholder === message.trim()) {
-                // optional: clear if it was still the placeholder
+              // Auto-clear headline so the new default shows in preview.
+              setHeadline('');
+              // v0.10.95 — Clear recipientName when switching to a category
+              // where the field isn't even visible (Announcements / Alerts /
+              // Reminders). Otherwise old "Ankit Patel" lingers in state
+              // and would be sent on the wire — making the headline
+              // accidentally include a name on an announcement modal.
+              const newGroup = BROADCAST_META[next].group;
+              if (newGroup !== 'Celebrations' && newGroup !== 'Welcomes') {
+                setRecipientName('');
               }
-              // Note: we don't auto-populate message. Admin still writes
-              // it; the placeholder gives them a starting point.
             }}
             disabled={sending}
           >
@@ -6826,20 +6833,42 @@ function PraiseAdminSection() {
           </label>
         )}
 
-        <label className="fav-modal-field">
-          <span className="fav-modal-label">Display name (who's being celebrated)</span>
-          <input
-            type="text"
-            className="fav-modal-input"
-            value={recipientName}
-            onChange={(e) => setRecipientName(e.target.value)}
-            placeholder={targetMode === 'broadcast' ? 'e.g. The whole team, or Ankit Patel' : '(defaults to recipient\'s name)'}
-            disabled={sending}
-          />
-          <span className="muted small" style={{ marginTop: 4, display: 'block' }}>
-            Shown after the category headline, e.g. "Congratulations <strong>Ankit Patel</strong>". Leave blank to skip.
-          </span>
-        </label>
+        {/* v0.10.95 — Display Name field only makes sense for Celebrations
+            and Welcomes (categories where there's a specific person being
+            recognized). For Announcements, Alerts, and Reminders, there's
+            no "person being celebrated" — these are general communications
+            and the recipient modal won't append a name to the headline. So
+            we hide the field entirely for those groups. */}
+        {(() => {
+          const g = BROADCAST_META[category].group;
+          const needsName = g === 'Celebrations' || g === 'Welcomes';
+          if (!needsName) return null;
+          const isCeleb = g === 'Celebrations';
+          return (
+            <label className="fav-modal-field">
+              <span className="fav-modal-label">
+                {isCeleb ? "Display name (who's being celebrated)" : "Display name (who's being welcomed)"}
+              </span>
+              <input
+                type="text"
+                className="fav-modal-input"
+                value={recipientName}
+                onChange={(e) => setRecipientName(e.target.value)}
+                placeholder={
+                  targetMode === 'broadcast'
+                    ? 'e.g. Ankit Patel'
+                    : '(defaults to recipient\'s name)'
+                }
+                disabled={sending}
+              />
+              <span className="muted small" style={{ marginTop: 4, display: 'block' }}>
+                {isCeleb
+                  ? <>Shown after the headline, e.g. "Welcome aboard <strong>Ankit Patel</strong>". Leave blank to skip.</>
+                  : <>Shown after the headline, e.g. "Welcome <strong>Ankit Patel</strong>". Leave blank to skip.</>}
+              </span>
+            </label>
+          );
+        })()}
 
         {/* v0.10.89 — Headline override. Admin can fully edit the big bold
             text that shows at the top of the recipient's praise modal.
@@ -6909,16 +6938,18 @@ function PraiseAdminSection() {
                 marginBottom: 8,
               }}>
                 {headline.trim() || (() => {
-                  // v0.10.93 — Match PraiseModal's fallback exactly. BROADCAST_META
-                  // is the source of truth for default headline per category.
-                  // For celebration-style categories we still append the
-                  // recipientName (legacy behavior); for announcements/alerts/
-                  // reminders/welcomes we don't (e.g. "Service notice Loretta"
-                  // would read awkwardly).
+                  // v0.10.93/95 — Match PraiseModal's fallback exactly.
+                  // BROADCAST_META is the source of truth for default
+                  // headline per category. We append recipientName ONLY for
+                  // categories where it's semantically meaningful — that's
+                  // Celebrations ("Welcome aboard Ankit") and Welcomes
+                  // ("Welcome Ankit"). For announcements / alerts /
+                  // reminders the Display Name field is hidden so this
+                  // branch never has a name to append anyway.
                   const meta = BROADCAST_META[category];
                   const base = meta.defaultHeadline;
-                  const isCelebration = meta.group === 'Celebrations';
-                  return isCelebration && recipientName.trim()
+                  const appendsName = meta.group === 'Celebrations' || meta.group === 'Welcomes';
+                  return appendsName && recipientName.trim()
                     ? `${base} ${recipientName.trim()}`
                     : base;
                 })()}
@@ -6948,14 +6979,28 @@ function PraiseAdminSection() {
             onClick={handleSend}
             disabled={sending || !message.trim() || (targetMode === 'one' && !targetUserId)}
           >
-            {sending ? 'Sending…' : 'Send praise 🎉'}
+            {(() => {
+              if (sending) return 'Sending…';
+              // v0.10.95 — Context-aware label. Different verb + emoji
+              // per category group so the button reads sensibly for
+              // whatever admin is actually sending.
+              const group = BROADCAST_META[category].group;
+              switch (group) {
+                case 'Celebrations': return 'Send praise 🎉';
+                case 'Announcements': return 'Send announcement 📢';
+                case 'Alerts':       return 'Send alert ⚠️';
+                case 'Reminders':    return 'Send reminder 🔔';
+                case 'Welcomes':     return 'Send welcome 👋';
+                default:             return 'Send';
+              }
+            })()}
           </button>
         </div>
       </div>
 
       {history.length > 0 && (
         <div className="praise-admin-history" style={{ marginTop: 24 }}>
-          <h4 style={{ marginBottom: 8 }}>Recent praise sent</h4>
+          <h4 style={{ marginBottom: 8 }}>Recent broadcasts sent</h4>
           <ul className="praise-history-list">
             {history.map((p) => (
               <li key={p.id} className="praise-history-row">
@@ -6981,7 +7026,7 @@ function PraiseAdminSection() {
                   type="button"
                   className="icon-btn"
                   onClick={() => handleDelete(p.id)}
-                  aria-label="Delete praise"
+                  aria-label="Delete broadcast"
                   title="Delete"
                 >
                   <Trash2 size={16} />

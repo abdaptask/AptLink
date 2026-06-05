@@ -136,15 +136,19 @@ export default function PraiseModal({}: PraiseModalProps) {
   const senderName =
     [current.fromUser.firstName, current.fromUser.lastName].filter(Boolean).join(' ').trim() ||
     current.fromUser.email;
-  // v0.10.89 — Display headline.
+  // v0.10.89/95 — Display headline.
   // Priority: admin-authored override (current.headline) → category default
-  // + recipientName → category default alone. The override exists because
-  // the auto-built "Welcome aboard {recipientName}" doesn't fit every
-  // use case (e.g. praising the recruiter for a placement vs. welcoming
+  // + recipientName (ONLY for Celebrations + Welcomes where appending a
+  // name reads naturally) → category default alone. For Announcements /
+  // Alerts / Reminders the admin form doesn't even surface the
+  // recipientName field, so this branch typically has no name to append.
+  // The override exists because the auto-built "Welcome aboard {name}"
+  // doesn't fit every use case (e.g. praising the recruiter vs. welcoming
   // the new hire themselves).
+  const appendsName = meta.group === 'celebration' || meta.group === 'welcome';
   const headline = current.headline?.trim()
     ? current.headline.trim()
-    : current.recipientName
+    : appendsName && current.recipientName
       ? `${meta.headline} ${current.recipientName}`
       : meta.headline;
 
