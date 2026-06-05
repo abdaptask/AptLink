@@ -326,7 +326,7 @@ function PendingRow({
 }) {
   const name = [row.firstName, row.lastName].filter(Boolean).join(' ') || '—';
   const formattedDid = formatPhone(row.pulseVoipNumber);
-  const formattedImported = new Date(row.importedAt).toLocaleString();
+  const formattedImported = new Date(row.importedAt).toLocaleString('en-US', { timeZone: 'America/New_York' });
   const d = deriveStatus(row);
   const fullStatusLabel =
     d === 'pending'
@@ -369,7 +369,7 @@ function PendingRow({
           {d === 'invited' && (
             <span className="pending-invited-note">
               User #{row.invitedUserId ?? '?'} ·{' '}
-              {row.invitedAt ? new Date(row.invitedAt).toLocaleDateString() : ''}
+              {row.invitedAt ? new Date(row.invitedAt).toLocaleDateString('en-US', { timeZone: 'America/New_York' }) : ''}
             </span>
           )}
           {d === 'accepted' && (

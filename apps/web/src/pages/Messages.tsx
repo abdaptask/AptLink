@@ -72,7 +72,7 @@ function formatRelative(iso: string): string {
   const date = new Date(iso);
   if (!iso || Number.isNaN(date.getTime())) return '';
   const now = new Date();
-  const timeStr = date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  const timeStr = date.toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit' });
   const sameDay =
     date.getFullYear() === now.getFullYear() &&
     date.getMonth() === now.getMonth() &&
@@ -85,7 +85,7 @@ function formatRelative(iso: string): string {
     date.getMonth() === yesterday.getMonth() &&
     date.getDate() === yesterday.getDate();
   if (isYesterday) return `Yesterday, ${timeStr}`;
-  return `${date.toLocaleDateString([], { month: 'short', day: 'numeric' })}, ${timeStr}`;
+  return `${date.toLocaleDateString('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric' })}, ${timeStr}`;
 }
 
 // v0.10.59 — "Will fire at..." labels for scheduled messages.
@@ -96,7 +96,7 @@ function formatScheduledFor(iso: string): string {
   const date = new Date(iso);
   if (!iso || Number.isNaN(date.getTime())) return '';
   const now = new Date();
-  const timeStr = date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  const timeStr = date.toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit' });
   const sameDay =
     date.getFullYear() === now.getFullYear() &&
     date.getMonth() === now.getMonth() &&
@@ -109,7 +109,7 @@ function formatScheduledFor(iso: string): string {
     date.getMonth() === tomorrow.getMonth() &&
     date.getDate() === tomorrow.getDate();
   if (isTomorrow) return `tomorrow, ${timeStr}`;
-  return `${date.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })}, ${timeStr}`;
+  return `${date.toLocaleDateString('en-US', { timeZone: 'America/New_York', weekday: 'short', month: 'short', day: 'numeric' })}, ${timeStr}`;
 }
 
 // v0.10.59 — Convert a Date to the "yyyy-MM-ddTHH:mm" format that the
