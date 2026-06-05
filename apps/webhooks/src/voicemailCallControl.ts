@@ -10,6 +10,9 @@
 //      client_state on the caller leg, NOT on the dial leg.
 
 import { prisma } from '@ace/db';
+import { transcribeAndUpdateVoicemail } from './deepgram.js';
+import { scheduleVoicemailTimeoutFallback } from './teamsNotifier.js';
+import { scheduleVoicemailEmailTimeoutFallback } from './emailNotifier.js';
 
 type LogFn = (obj: Record<string, unknown>, msg: string) => void;
 
@@ -278,7 +281,7 @@ export async function handleVoicemailCallControlEvent(event: TelnyxEventLike, lo
         format: 'mp3',
         channels: 'single',
         play_beep: true,
-        max_length: 300,
+        max_length: 90,
         timeout_secs: 4,
         client_state: encodeState(state),
       }, logger);
@@ -322,7 +325,7 @@ export async function handleVoicemailCallControlEvent(event: TelnyxEventLike, lo
         const found = await findUserByDid(toNumber, logger);
         if (found) {
           try {
-            await prisma.voicemail.create({
+            const created = await prisma.voicemail.create({
               data: {
                 userId: found.user.id,
                 userDidId: found.userDid.id,
@@ -334,8 +337,14 @@ export async function handleVoicemailCallControlEvent(event: TelnyxEventLike, lo
                 transcription: null,
                 receivedAt: new Date(),
               },
+              select: { id: true },
             });
-            logger({ userId: found.user.id, fromNumber, toNumber }, '[vm-cc] voicemail row created');
+            logger({ userId: found.user.id, voicemailId: created.id, fromNumber, toNumber }, '[vm-cc] voicemail row created');
+            // v0.10.100 fix - Fire transcription + Teams + email notifications,
+            // matching the legacy /webhooks/telnyx/calls voicemail flow.
+            void transcribeAndUpdateVoicemail(created.id, recordingUrl, found.user.id);
+            scheduleVoicemailTimeoutFallback({ userId: found.user.id, voicemailId: created.id });
+            scheduleVoicemailEmailTimeoutFallback({ userId: found.user.id, voicemailId: created.id });
           } catch (e) {
             logger({ err: e instanceof Error ? e.message : String(e) }, '[vm-cc] voicemail row insert failed');
           }
