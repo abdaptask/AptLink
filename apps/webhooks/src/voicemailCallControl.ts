@@ -347,14 +347,21 @@ export async function handleVoicemailCallControlEvent(event: TelnyxEventLike, lo
       const source = (payload.hangup_source ?? '').toString();
       logger({ callControlId, stage: state?.stage, cause, source, sessionId }, '[vm-cc] call.hangup');
 
-      if (!state && source === 'callee' && DIAL_LEG_FAILED_CAUSES.has(cause)) {
-        const tracked = sessionId ? sessionMap.get(sessionId) : null;
-        if (tracked && tracked.stage === 'transfer_pending') {
-          sessionMap.delete(sessionId);
-          await fallToVoicemail(tracked, cause, logger);
-          return;
-        }
-        logger({ sessionId, cause }, '[vm-cc] dial leg failed but no tracked caller leg');
+      // Case A - Dial leg hung up. Telnyx fires this on the dial-leg
+      // call_control_id (different from the caller leg's). Doesn't matter
+      // whether source is 'caller' or 'callee' - what matters is the
+      // call_session_id matches a tracked caller leg AND this isn't the
+      // caller leg itself AND the cause is a dial failure.
+      const tracked = sessionId ? sessionMap.get(sessionId) : null;
+      if (
+        !state &&
+        tracked &&
+        tracked.stage === 'transfer_pending' &&
+        callControlId !== tracked.callerCallId &&
+        DIAL_LEG_FAILED_CAUSES.has(cause)
+      ) {
+        sessionMap.delete(sessionId);
+        await fallToVoicemail(tracked, cause, logger);
         return;
       }
 
