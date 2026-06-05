@@ -24,6 +24,14 @@ export interface ReleaseEntry {
 
 export const WHATS_NEW: ReleaseEntry[] = [
   {
+    version: '0.10.96',
+    date: 'June 5, 2026',
+    highlight: 'New releases go through admin review before reaching the team',
+    changes: [
+      { type: 'improved', text: 'Behind the scenes: future ACE Dialer updates now land as drafts on GitHub Releases first. Admins test each update before publishing it to the rest of the team. Once an admin approves, the dialer auto-updates everyone within 1-2 hours like before. No action needed on your end — you\'ll only see updates that have been verified to work.' },
+    ],
+  },
+  {
     version: '0.10.95',
     date: 'June 5, 2026',
     highlight: 'Broadcast composer — properly tailored fields per category, no more "who\'s being celebrated" on announcements',
