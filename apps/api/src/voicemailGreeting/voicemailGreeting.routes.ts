@@ -1,4 +1,4 @@
-// Custom Voicemail Greeting API.
+﻿// Custom Voicemail Greeting API.
 //
 // v0.10.100 - Two greetings per user (no-answer + busy). The legacy
 // /voicemail-greeting endpoints (v0.10.99 single-greeting model) keep
@@ -79,7 +79,6 @@ function colsFor(type: GreetingType): GreetingColumns {
 const ALLOWED_TYPES = new Set<GreetingType>(['noanswer', 'busy']);
 
 export async function voicemailGreetingRoutes(app: FastifyInstance) {
-  // GET /voicemail-greeting - full state for BOTH variants.
   app.get(
     '/voicemail-greeting',
     { onRequest: [app.authenticate] },
@@ -99,7 +98,6 @@ export async function voicemailGreetingRoutes(app: FastifyInstance) {
         },
       });
       return {
-        // Legacy v0.10.99-shaped fields (noanswer mirror).
         url: row?.voicemailGreetingUrl ?? null,
         filename: row?.voicemailGreetingFilename ?? null,
         text: row?.voicemailGreetingText ?? null,
@@ -120,7 +118,6 @@ export async function voicemailGreetingRoutes(app: FastifyInstance) {
     },
   );
 
-  // PUT /voicemail-greeting/:type/tts
   app.put<{ Params: { type: string } }>(
     '/voicemail-greeting/:type/tts',
     { onRequest: [app.authenticate] },
@@ -141,13 +138,12 @@ export async function voicemailGreetingRoutes(app: FastifyInstance) {
         select: { [c.text]: true, [c.mode]: true },
       });
       return {
-        text: (saved as Record<string, string | null>)[c.text],
-        mode: (saved as Record<string, string | null>)[c.mode],
+        text: (saved as unknown as Record<string, string | null>)[c.text],
+        mode: (saved as unknown as Record<string, string | null>)[c.mode],
       };
     },
   );
 
-  // PUT /voicemail-greeting/:type/mode
   app.put<{ Params: { type: string } }>(
     '/voicemail-greeting/:type/mode',
     { onRequest: [app.authenticate] },
@@ -167,11 +163,10 @@ export async function voicemailGreetingRoutes(app: FastifyInstance) {
         data: { [c.mode]: parsed.data.mode },
         select: { [c.mode]: true },
       });
-      return { mode: (saved as Record<string, string | null>)[c.mode] };
+      return { mode: (saved as unknown as Record<string, string | null>)[c.mode] };
     },
   );
 
-  // POST /voicemail-greeting/:type - upload audio (file or recording).
   app.post<{ Params: { type: string } }>(
     '/voicemail-greeting/:type',
     { onRequest: [app.authenticate] },
@@ -235,14 +230,13 @@ export async function voicemailGreetingRoutes(app: FastifyInstance) {
       });
       app.log.info({ userId: u.sub, url: publicUrl, type }, '[vm-greeting] saved');
       return {
-        url: (saved as Record<string, string | null>)[c.url],
-        filename: (saved as Record<string, string | null>)[c.filename],
-        mode: (saved as Record<string, string | null>)[c.mode],
+        url: (saved as unknown as Record<string, string | null>)[c.url],
+        filename: (saved as unknown as Record<string, string | null>)[c.filename],
+        mode: (saved as unknown as Record<string, string | null>)[c.mode],
       };
     },
   );
 
-  // DELETE /voicemail-greeting/:type - remove one variant's audio.
   app.delete<{ Params: { type: string } }>(
     '/voicemail-greeting/:type',
     { onRequest: [app.authenticate] },
