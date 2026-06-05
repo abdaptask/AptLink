@@ -2018,7 +2018,22 @@ export class SipService {
       return;
     }
     try {
-      entry.session.terminate({ status_code: 486, reason_phrase: 'Busy Here' });
+      // v0.10.98 — Switched from 486 Busy Here to 603 Decline.
+      //
+      // BUG this fixes: pressing Decline used to make the same call ring
+      // back 3-4 times in rapid succession (within ~20s). Diagnostic log
+      // showed 4 separate inbound INVITEs from Telnyx for the same call —
+      // each one a fresh call_id — even though we only have 1 Contact
+      // registered. Root cause: 486 Busy Here is interpreted by SIP
+      // proxies/trunks as "this device is busy right now, try elsewhere
+      // or retry shortly." Telnyx retries the INVITE, our client sees a
+      // new ringer, user declines again, repeat.
+      //
+      // 603 Decline (per RFC 3261) means "the user said NO" — terminal
+      // for the call leg. The proxy should propagate it to the caller
+      // without further retry attempts. End-user effect: one tap to
+      // decline, call disappears for good.
+      entry.session.terminate({ status_code: 603, reason_phrase: 'Decline' });
     } catch (e) {
       console.warn('[sip] decline failed', e);
     }

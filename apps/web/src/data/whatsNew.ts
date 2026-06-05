@@ -24,6 +24,15 @@ export interface ReleaseEntry {
 
 export const WHATS_NEW: ReleaseEntry[] = [
   {
+    version: '0.10.98',
+    date: 'June 5, 2026',
+    highlight: 'Decline a call once and it stays declined — no more ring-back loop',
+    changes: [
+      { type: 'fixed', text: 'Pressing Decline on an inbound call no longer makes the same call ring back 3-4 times in a row. The dialer used to send "486 Busy Here" when you declined — SIP proxies interpret that as "this device is busy, retry," and Telnyx would re-INVITE the call within seconds. We now send "603 Decline" instead, which means "user said no, end of story." The call disappears for good after one tap.' },
+      { type: 'improved', text: 'Renamed the "Reply" button on the incoming-call screen to "Reply with Text" — clearer that it declines the call and opens a text compose, not some kind of mid-call reply.' },
+    ],
+  },
+  {
     version: '0.10.97',
     date: 'June 5, 2026',
     highlight: 'Custom voicemail greeting — upload your own audio (admin testing)',
