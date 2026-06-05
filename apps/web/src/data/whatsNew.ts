@@ -24,6 +24,19 @@ export interface ReleaseEntry {
 
 export const WHATS_NEW: ReleaseEntry[] = [
   {
+    version: '0.10.100',
+    date: 'June 5, 2026',
+    highlight: 'Voicemail v2 — softphone rings first, then your custom greeting picks up. Separate messages for busy vs not-available. Record straight from your mic.',
+    changes: [
+      { type: 'new', text: 'Voicemail flow rewritten end-to-end. Inbound calls now ring your softphone for about 25 seconds first; if you don\'t pick up, the call falls through to your custom greeting and the caller can leave a message — exactly like every modern enterprise dialer. No more Telnyx default robotic greeting.' },
+      { type: 'new', text: 'TWO greetings per user — Settings → Calling → Voicemail greeting now has separate sections for "When you don\'t pick up" and "When you\'re on another call." The right one plays automatically based on what your softphone was doing when the caller hit your line. If you only configure the no-answer one, we use it for both states (no awkward silence ever).' },
+      { type: 'new', text: 'Record your greeting from your microphone, in-app. Settings → Voicemail greeting → Audio tab now has a big red "Record from microphone" button. 30-second cap, preview before saving, no file conversion needed. Click record, talk, save — done.' },
+      { type: 'new', text: 'Admin: Settings → Admin → Users → kebab menu → "Voicemail migration" — per-user button that switches a user\'s DIDs from the legacy SIP / Hosted Voicemail routing to the new Call Control flow. Shows per-DID status, runs the Telnyx PATCH calls, and stores a rollback snapshot so you can revert any user in one click.' },
+      { type: 'improved', text: 'Settings → "What\'s new" is now in its own "About" section at the very bottom of the sidebar (for both admins and users). Was buried in Personal before; now it\'s always one scroll away regardless of which settings page you\'re on.' },
+      { type: 'fixed', text: 'Silenced a harmless "[vm-cc] action failed" log line that appeared when a caller hung up immediately after hearing the greeting (before the beep). It\'s just normal caller behavior — not a system problem — and now logs as a debug-level "action skipped" instead.' },
+    ],
+  },
+  {
     version: '0.10.99',
     date: 'June 5, 2026',
     highlight: 'Personal voicemail greeting — type it OR record it, in your own voice',

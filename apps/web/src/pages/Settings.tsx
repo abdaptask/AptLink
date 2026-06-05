@@ -1,5 +1,5 @@
 ﻿import * as React from 'react';
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams, NavLink, Navigate } from 'react-router-dom';
 import {
   ArrowLeft,
@@ -130,8 +130,13 @@ import {
   deleteVoicemailGreeting,
   setVoicemailGreetingText,
   setVoicemailGreetingMode,
+  migrateUserToCallControlVoicemail,
+  rollbackUserFromCallControlVoicemail,
+  getVoicemailMigrationStatus,
   type VoicemailGreeting,
   type VoicemailGreetingMode,
+  type VoicemailMigrationStatus,
+  type VoicemailMigrationResponse,
   type AdminUserRow,
   type AuditLogEntry,
   type BulkImportRow,
@@ -234,7 +239,7 @@ interface AudioDevice {
   label: string;
 }
 
-type SectionCategory = 'Personal' | 'Calling' | 'Reports' | 'Admin';
+type SectionCategory = 'Personal' | 'Calling' | 'Reports' | 'Admin' | 'About';
 
 interface SectionDef {
   key: string;
@@ -255,7 +260,9 @@ interface SectionDef {
 }
 
 const SECTIONS: SectionDef[] = [
-  { key: 'whats-new', category: 'Personal', label: 'What\'s new', icon: Sparkles, blurb: 'Recent updates + bug fixes', Component: WhatsNewSection },
+  // v0.10.100 — What's new moved to the new 'About' category so it always
+  // appears at the bottom of the sidebar for both admins and regular users.
+  { key: 'whats-new', category: 'About', label: 'What\'s new', icon: Sparkles, blurb: 'Recent updates + bug fixes', Component: WhatsNewSection },
   { key: 'account', category: 'Personal', label: 'Account', icon: UserCircle, blurb: 'Name, DID, SIP', Component: AccountSection },
   { key: 'appearance', category: 'Personal', label: 'Appearance', icon: Palette, blurb: 'Light / dark / system', Component: AppearanceSection },
   // v0.10.91 — removed the "Telnyx" SIP credential entry (TelnyxSection).
@@ -328,7 +335,11 @@ const SECTIONS: SectionDef[] = [
   { key: 'teams-connection', category: 'Admin', label: 'Teams connection', icon: MessageSquare, blurb: 'Connect ACE Bot to Microsoft Teams (admin only)', Component: TeamsConnectionSection, adminOnly: true },
 ];
 
-const SECTION_CATEGORIES: SectionCategory[] = ['Personal', 'Calling', 'Reports', 'Admin'];
+// v0.10.100 — 'About' category sits at the very bottom for both admins
+// and non-admins. Currently houses only "What's new" so users always know
+// where to find the release notes regardless of which section they were
+// last on.
+const SECTION_CATEGORIES: SectionCategory[] = ['Personal', 'Calling', 'Reports', 'Admin', 'About'];
 
 const DEFAULT_SECTION = SECTIONS[0].key;
 
@@ -1264,55 +1275,240 @@ function HoldMusicSection() {
 // is the first end-to-end test: admin uploads, calls their own DID, listens
 // for the custom greeting. If it plays → support was wrong, feature ships.
 // If Telnyx's default plays → we pivot to a Call Control voicemail flow.
-// v0.10.99 — Voicemail greeting now backed by the Call Control flow.
-// User picks ONE of three modes:
-//   • Default — stock "You've reached <firstName>'s voicemail" via Telnyx TTS.
-//   • Text-to-speech — user types up to 500 chars; spoken via Telnyx TTS.
-//   • Audio — user uploads an MP3/WAV/M4A/AAC/OGG (≤2 MB), played back as-is.
-// The webhook handler (apps/webhooks/src/voicemailCallControl.ts) reads
-// voicemailGreetingMode + greetingText/greetingUrl on every inbound voicemail
-// hit and branches accordingly. Both text and audio persist independently,
-// so switching modes doesn't erase your other configuration.
+// v0.10.100 — Voicemail greeting now has TWO independent variants:
+//   • "When you don't pick up" (no-answer)
+//   • "When you're on another call" (busy)
+// Each variant gets the same 3-tab picker (Default / Text-to-speech /
+// Audio) plus a built-in microphone recorder for capturing greetings
+// without leaving the app. If a user only configures the no-answer
+// greeting and leaves busy unset, the webhook handler reuses the
+// no-answer one for both states (no silence ever — backward-compat with
+// the v0.10.99 single-greeting model).
 //
-// IMPORTANT: This UI is fully wired, but the Call Control flow only fires
-// once an admin reroutes each DID's voicemail handling to the new ACE
-// Voicemail Call Control App in Telnyx Mission Control (planned cutover
-// in v0.10.100). Until then, callers continue to hear Telnyx's Hosted
-// Voicemail default greeting regardless of what's saved here.
-function VoicemailGreetingSection() {
-  const [greeting, setGreeting] = useState<VoicemailGreeting | null>(null);
-  const [loading, setLoading] = useState(true);
+// Implementation: GreetingVariantPanel is the reusable per-variant UI
+// (rendered twice). MicrophoneRecorder uses the browser's MediaRecorder
+// API to capture 30-sec clips and ship them straight to /voicemail-greeting/:type
+// as a Blob upload.
+//
+// The webhook handler (apps/webhooks/src/voicemailCallControl.ts) reads
+// the appropriate variant on every inbound voicemail hit and branches
+// on Telnyx's hangup_cause to pick busy vs no-answer.
+// v0.10.100 — Microphone recorder used by the Audio tab of each variant.
+// Uses the browser's MediaRecorder API. 30-second cap with live countdown.
+// Produces a Blob (audio/webm in Chrome / Electron) that the parent uploads
+// straight to /voicemail-greeting/:type via uploadVoicemailGreeting().
+function MicrophoneRecorder({
+  onRecordingReady,
+  disabled,
+  maxSeconds = 30,
+}: {
+  onRecordingReady: (blob: Blob) => void;
+  disabled?: boolean;
+  maxSeconds?: number;
+}) {
+  const [recording, setRecording] = useState(false);
+  const [secondsLeft, setSecondsLeft] = useState(maxSeconds);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [previewBlob, setPreviewBlob] = useState<Blob | null>(null);
+  const [micError, setMicError] = useState<string | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
+  const streamRef = useRef<MediaStream | null>(null);
+  const countdownRef = useRef<number | null>(null);
+
+  function stopStream() {
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((t) => t.stop());
+      streamRef.current = null;
+    }
+  }
+  function clearCountdown() {
+    if (countdownRef.current !== null) {
+      window.clearInterval(countdownRef.current);
+      countdownRef.current = null;
+    }
+  }
+  // Cleanup on unmount — make sure we don't keep the mic open if the
+  // user navigates away mid-recording.
+  useEffect(() => () => { stopStream(); clearCountdown(); }, []);
+
+  async function startRecording() {
+    setMicError(null);
+    setPreviewUrl(null);
+    setPreviewBlob(null);
+    chunksRef.current = [];
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      streamRef.current = stream;
+      // Pick a mime type the browser actually supports. Chrome / Electron:
+      // webm/opus; Safari: mp4. MediaRecorder.isTypeSupported() handles it.
+      const mimeCandidates = [
+        'audio/webm;codecs=opus',
+        'audio/webm',
+        'audio/mp4',
+        '', // browser default
+      ];
+      const mimeType = mimeCandidates.find((m) => !m || MediaRecorder.isTypeSupported(m)) ?? '';
+      const mr = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+      mediaRecorderRef.current = mr;
+      mr.ondataavailable = (e) => {
+        if (e.data && e.data.size > 0) chunksRef.current.push(e.data);
+      };
+      mr.onstop = () => {
+        const blob = new Blob(chunksRef.current, { type: mr.mimeType || 'audio/webm' });
+        setPreviewBlob(blob);
+        setPreviewUrl(URL.createObjectURL(blob));
+        stopStream();
+        clearCountdown();
+      };
+      mr.start();
+      setRecording(true);
+      setSecondsLeft(maxSeconds);
+      countdownRef.current = window.setInterval(() => {
+        setSecondsLeft((s) => {
+          if (s <= 1) {
+            // Hit the cap — stop recording.
+            mr.state === 'recording' && mr.stop();
+            setRecording(false);
+            return 0;
+          }
+          return s - 1;
+        });
+      }, 1000);
+    } catch (e) {
+      setMicError(
+        (e as Error).message?.includes('Permission')
+          ? 'Microphone permission was denied. Check your browser settings.'
+          : `Couldn't access microphone: ${(e as Error).message}`,
+      );
+      stopStream();
+      clearCountdown();
+      setRecording(false);
+    }
+  }
+
+  function stopRecording() {
+    const mr = mediaRecorderRef.current;
+    if (mr && mr.state === 'recording') mr.stop();
+    setRecording(false);
+  }
+
+  function discardPreview() {
+    if (previewUrl) URL.revokeObjectURL(previewUrl);
+    setPreviewUrl(null);
+    setPreviewBlob(null);
+  }
+
+  function savePreview() {
+    if (!previewBlob) return;
+    onRecordingReady(previewBlob);
+    discardPreview();
+  }
+
+  return (
+    <div style={{ marginTop: 8, padding: 12, background: 'var(--bg-soft, #f8fafc)', borderRadius: 8 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+        {!recording && !previewUrl && (
+          <button
+            type="button"
+            className="device-action"
+            onClick={startRecording}
+            disabled={disabled}
+            style={{ background: '#ef4444', color: '#fff', borderColor: '#ef4444' }}
+          >
+            <Mic size={14} style={{ verticalAlign: 'middle', marginRight: 6 }} />
+            Record from microphone
+          </button>
+        )}
+        {recording && (
+          <>
+            <button
+              type="button"
+              className="device-action"
+              onClick={stopRecording}
+              style={{ background: '#1f2937', color: '#fff', borderColor: '#1f2937' }}
+            >
+              ⏹ Stop recording
+            </button>
+            <span className="muted small" style={{ color: '#ef4444', fontWeight: 600 }}>
+              ● Recording — {secondsLeft}s left
+            </span>
+          </>
+        )}
+        {previewUrl && (
+          <>
+            <audio controls src={previewUrl} style={{ maxWidth: 320 }} />
+            <button
+              type="button"
+              className="device-action"
+              onClick={savePreview}
+              disabled={disabled}
+            >
+              Save this recording
+            </button>
+            <button
+              type="button"
+              className="device-action"
+              onClick={discardPreview}
+              disabled={disabled}
+            >
+              Discard
+            </button>
+          </>
+        )}
+      </div>
+      {micError && (
+        <div
+          className="error small"
+          style={{ marginTop: 8, color: '#dc2626' }}
+        >
+          {micError}
+        </div>
+      )}
+      {!recording && !previewUrl && !micError && (
+        <p className="muted small" style={{ marginTop: 8, marginBottom: 0 }}>
+          Records up to {maxSeconds} seconds. You&apos;ll be able to preview before saving.
+        </p>
+      )}
+    </div>
+  );
+}
+
+// v0.10.100 — One variant's worth of greeting controls (Default / TTS / Audio
+// tabs). Rendered twice — once for no-answer, once for busy.
+function GreetingVariantPanel({
+  type,
+  label,
+  blurb,
+  variant,
+  onChanged,
+}: {
+  type: 'noanswer' | 'busy';
+  label: string;
+  blurb: string;
+  variant: { url: string | null; filename: string | null; text: string | null; mode: VoicemailGreetingMode | null };
+  onChanged: () => Promise<void> | void;
+}) {
+  const [activeTab, setActiveTab] = useState<VoicemailGreetingMode>(
+    (variant.mode ?? 'default') as VoicemailGreetingMode,
+  );
+  const [ttsDraft, setTtsDraft] = useState(variant.text ?? '');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [okMsg, setOkMsg] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-  // Active tab in the UI. Driven initially by the persisted mode so a
-  // user who saved TTS last time lands on the TTS tab on re-open.
-  const [activeTab, setActiveTab] = useState<VoicemailGreetingMode>('default');
-  // Local edit buffer for the TTS textarea so typing doesn't fight the
-  // server-side saved value until the user clicks Save.
-  const [ttsDraft, setTtsDraft] = useState('');
-
+  // Re-sync local state when the parent reloads server-side data.
   useEffect(() => {
-    const token = sessionStorage.getItem('ace_token');
-    if (!token) { setLoading(false); return; }
-    void getVoicemailGreeting(token)
-      .then((g) => {
-        setGreeting(g);
-        const mode = (g.mode ?? 'default') as VoicemailGreetingMode;
-        setActiveTab(mode);
-        setTtsDraft(g.text ?? '');
-      })
-      .catch(() => setGreeting({ url: null, filename: null, text: null, mode: null }))
-      .finally(() => setLoading(false));
-  }, []);
+    setActiveTab((variant.mode ?? 'default') as VoicemailGreetingMode);
+    setTtsDraft(variant.text ?? '');
+  }, [variant.mode, variant.text]);
 
-  // ───────────────────────── Mode switching ─────────────────────────
-  // Switching tabs does NOT persist mode until the user actually saves
-  // something on that tab (or explicitly chooses Default, which has no
-  // other action). Otherwise tab clicks would silently mutate which
-  // greeting callers hear, which the user wouldn't expect.
+  const activeMode = (variant.mode ?? 'default') as VoicemailGreetingMode;
+  const hasAudio = !!variant.url;
+  const hasText = !!variant.text;
+  const charsRemaining = 500 - ttsDraft.length;
+
   async function activateMode(mode: VoicemailGreetingMode) {
     setError(null);
     setOkMsg(null);
@@ -1320,20 +1516,15 @@ function VoicemailGreetingSection() {
     try {
       const token = sessionStorage.getItem('ace_token');
       if (!token) { setError('Sign in again.'); return; }
-      await setVoicemailGreetingMode(token, mode);
-      setGreeting((g) => ({
-        url: g?.url ?? null,
-        filename: g?.filename ?? null,
-        text: g?.text ?? null,
-        mode,
-      }));
-      if (mode === 'default') {
-        setOkMsg('Switched to the default greeting. Callers will hear the stock "You\'ve reached <your name>\'s voicemail" message.');
-      } else if (mode === 'tts') {
-        setOkMsg('Text-to-speech greeting is now active.');
-      } else {
-        setOkMsg('Audio greeting is now active.');
-      }
+      await setVoicemailGreetingMode(token, mode, type);
+      await onChanged();
+      setOkMsg(
+        mode === 'default'
+          ? 'Switched to the default greeting.'
+          : mode === 'tts'
+            ? 'Text-to-speech greeting is now active.'
+            : 'Audio greeting is now active.',
+      );
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -1341,32 +1532,20 @@ function VoicemailGreetingSection() {
     }
   }
 
-  // ───────────────────────── TTS save ─────────────────────────────
   async function handleSaveTts() {
     setError(null);
     setOkMsg(null);
     const text = ttsDraft.trim();
-    if (text.length === 0) {
-      setError('Please enter some greeting text before saving.');
-      return;
-    }
-    if (text.length > 500) {
-      setError(`Text is too long (${text.length} characters). Maximum is 500.`);
-      return;
-    }
+    if (text.length === 0) { setError('Please enter some greeting text before saving.'); return; }
+    if (text.length > 500) { setError(`Text is too long (${text.length} characters). Maximum is 500.`); return; }
     setSubmitting(true);
     try {
       const token = sessionStorage.getItem('ace_token');
       if (!token) { setError('Sign in again.'); return; }
-      const saved = await setVoicemailGreetingText(token, text);
-      setGreeting((g) => ({
-        url: g?.url ?? null,
-        filename: g?.filename ?? null,
-        text: saved.text,
-        mode: saved.mode,
-      }));
+      await setVoicemailGreetingText(token, text, type);
+      await onChanged();
       setActiveTab('tts');
-      setOkMsg('Text greeting saved. Callers will hear this read aloud via Telnyx TTS.');
+      setOkMsg('Text greeting saved.');
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -1374,78 +1553,57 @@ function VoicemailGreetingSection() {
     }
   }
 
-  // ───────────────────────── Audio upload / delete ─────────────────
+  async function handleAudioBlobUpload(blob: Blob, filenameOverride?: string) {
+    setError(null);
+    setOkMsg(null);
+    const MAX_BYTES = 2 * 1024 * 1024;
+    if (blob.size > MAX_BYTES) {
+      setError(`Recording too large (${(blob.size / 1024 / 1024).toFixed(1)} MB). Max 2 MB.`);
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const token = sessionStorage.getItem('ace_token');
+      if (!token) { setError('Sign in again.'); return; }
+      await uploadVoicemailGreeting(token, blob, type, filenameOverride);
+      await onChanged();
+      setActiveTab('audio');
+      setOkMsg('Audio greeting saved.');
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
   async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
     setError(null);
-    setOkMsg(null);
-
-    // Client-side validation — backend re-validates, but fail fast on
-    // the client so the user doesn't wait for a base64-encoded 5MB
-    // upload just to get a 413 back.
     const MAX_BYTES = 2 * 1024 * 1024;
     if (file.size > MAX_BYTES) {
-      setError(`File too large (${(file.size / 1024 / 1024).toFixed(1)} MB). Maximum is 2 MB.`);
+      setError(`File too large (${(file.size / 1024 / 1024).toFixed(1)} MB). Max 2 MB.`);
       if (fileInputRef.current) fileInputRef.current.value = '';
       return;
     }
-    const allowedMimes = new Set([
-      'audio/mpeg', 'audio/mp3', 'audio/wav', 'audio/x-wav', 'audio/wave',
-      'audio/m4a', 'audio/mp4', 'audio/x-m4a', 'audio/ogg', 'audio/aac',
-    ]);
-    if (file.type && !allowedMimes.has(file.type.toLowerCase())) {
-      setError(`Unsupported audio type: ${file.type}. Use MP3, WAV, M4A, AAC, or OGG.`);
-      if (fileInputRef.current) fileInputRef.current.value = '';
-      return;
-    }
-
-    setSubmitting(true);
-    try {
-      const token = sessionStorage.getItem('ace_token');
-      if (!token) { setError('Sign in again.'); return; }
-      const result = await uploadVoicemailGreeting(token, file);
-      // Upload endpoint also flips mode → 'audio' server-side.
-      setGreeting((g) => ({
-        url: result.url,
-        filename: result.filename,
-        text: g?.text ?? null,
-        mode: 'audio',
-      }));
-      setActiveTab('audio');
-      setOkMsg('Audio greeting saved. Callers will hear this recording when your line falls to voicemail.');
-      if (fileInputRef.current) fileInputRef.current.value = '';
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setSubmitting(false);
-    }
+    await handleAudioBlobUpload(file, file.name);
   }
 
   async function handleDeleteAudio() {
-    if (!confirm('Remove your uploaded audio greeting? Your text-to-speech greeting (if any) and default fallback remain available.')) return;
+    if (!confirm('Remove this audio greeting?')) return;
     setError(null);
     setOkMsg(null);
     setSubmitting(true);
     try {
       const token = sessionStorage.getItem('ace_token');
       if (!token) { setError('Sign in again.'); return; }
-      await deleteVoicemailGreeting(token);
-      // Audio is gone — fall back to whichever mode still has content,
-      // preferring tts (since user explicitly saved text) over default.
-      const fallbackMode: VoicemailGreetingMode = (greeting?.text && greeting.text.length > 0) ? 'tts' : 'default';
-      const token2 = sessionStorage.getItem('ace_token') ?? '';
-      if (token2) {
-        await setVoicemailGreetingMode(token2, fallbackMode).catch(() => undefined);
-      }
-      setGreeting((g) => ({
-        url: null,
-        filename: null,
-        text: g?.text ?? null,
-        mode: fallbackMode,
-      }));
-      setActiveTab(fallbackMode);
-      setOkMsg(`Audio greeting removed. Callers will now hear the ${fallbackMode === 'tts' ? 'text-to-speech' : 'default'} greeting.`);
+      await deleteVoicemailGreeting(token, type);
+      const fallback: VoicemailGreetingMode = hasText ? 'tts' : 'default';
+      await setVoicemailGreetingMode(token, fallback, type).catch(() => undefined);
+      await onChanged();
+      setActiveTab(fallback);
+      setOkMsg('Audio greeting removed.');
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -1453,151 +1611,102 @@ function VoicemailGreetingSection() {
     }
   }
 
-  if (loading) return <div className="muted">Loading…</div>;
-
-  const activeMode = (greeting?.mode ?? 'default') as VoicemailGreetingMode;
-  const hasAudio = !!greeting?.url;
-  const hasText = !!greeting?.text;
-  const charsRemaining = 500 - ttsDraft.length;
-
-  // Visual styling for the tab strip — we reuse the project's small
-  // pill button look so it matches Settings elsewhere without needing
-  // new CSS classes.
   const tabBtnStyle = (isActive: boolean): React.CSSProperties => ({
-    padding: '8px 14px',
+    padding: '6px 12px',
     border: isActive ? '1px solid var(--brand, #2563eb)' : '1px solid var(--border, #e2e8f0)',
     background: isActive ? 'var(--brand, #2563eb)' : 'transparent',
     color: isActive ? '#fff' : 'inherit',
-    borderRadius: 8,
+    borderRadius: 6,
     cursor: 'pointer',
     fontWeight: 500,
-    fontSize: 13,
+    fontSize: 12,
   });
 
   return (
-    <div className="settings-section">
-      <h2 className="settings-title">Voicemail greeting</h2>
-      <p className="settings-blurb">
-        Choose what callers hear when they reach your voicemail. You can use
-        a stock greeting, type something you want read aloud, or upload your
-        own audio recording. Whichever you save last becomes the active
-        greeting — but text and audio are stored independently, so switching
-        modes won&apos;t erase what you set up before.
-      </p>
-
-      {/* Currently-active banner */}
-      <div
-        style={{
-          background: 'rgba(37, 99, 235, 0.08)',
-          border: '1px solid rgba(37, 99, 235, 0.3)',
-          borderRadius: 10,
-          padding: '12px 16px',
-          marginBottom: 16,
-          display: 'flex',
-          alignItems: 'center',
-          gap: 10,
-        }}
-      >
-        <Mic size={18} style={{ color: '#2563eb' }} />
-        <div>
-          <strong>Currently active:</strong>{' '}
-          {activeMode === 'audio' && (
-            <>Uploaded audio recording{greeting?.filename ? <> — <code>{greeting.filename}</code></> : null}</>
-          )}
-          {activeMode === 'tts' && <>Text-to-speech greeting</>}
-          {activeMode === 'default' && <>Default stock greeting (uses your first name)</>}
-        </div>
+    <div
+      style={{
+        border: '1px solid var(--border, #e2e8f0)',
+        borderRadius: 10,
+        padding: 14,
+        marginBottom: 16,
+      }}
+    >
+      <div style={{ marginBottom: 6, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        <strong style={{ fontSize: 15 }}>{label}</strong>
+        <span
+          className="muted small"
+          style={{
+            padding: '2px 8px',
+            borderRadius: 6,
+            background: 'rgba(37, 99, 235, 0.08)',
+            color: '#2563eb',
+            fontWeight: 500,
+          }}
+        >
+          {activeMode === 'audio' && 'Audio'}
+          {activeMode === 'tts' && 'Text-to-speech'}
+          {activeMode === 'default' && 'Default'}
+        </span>
       </div>
+      <p className="muted small" style={{ marginTop: 0, marginBottom: 10 }}>{blurb}</p>
 
       {/* Tab strip */}
-      <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
-        <button
-          type="button"
-          style={tabBtnStyle(activeTab === 'default')}
-          onClick={() => setActiveTab('default')}
-        >
+      <div style={{ display: 'flex', gap: 6, marginBottom: 12, flexWrap: 'wrap' }}>
+        <button type="button" style={tabBtnStyle(activeTab === 'default')} onClick={() => setActiveTab('default')}>
           Default {activeMode === 'default' && '✓'}
         </button>
-        <button
-          type="button"
-          style={tabBtnStyle(activeTab === 'tts')}
-          onClick={() => setActiveTab('tts')}
-        >
+        <button type="button" style={tabBtnStyle(activeTab === 'tts')} onClick={() => setActiveTab('tts')}>
           Text-to-speech {activeMode === 'tts' && '✓'} {hasText && activeMode !== 'tts' && '•'}
         </button>
-        <button
-          type="button"
-          style={tabBtnStyle(activeTab === 'audio')}
-          onClick={() => setActiveTab('audio')}
-        >
-          Audio upload {activeMode === 'audio' && '✓'} {hasAudio && activeMode !== 'audio' && '•'}
+        <button type="button" style={tabBtnStyle(activeTab === 'audio')} onClick={() => setActiveTab('audio')}>
+          Audio {activeMode === 'audio' && '✓'} {hasAudio && activeMode !== 'audio' && '•'}
         </button>
       </div>
 
-      {/* ─────────────── Default tab ─────────────── */}
       {activeTab === 'default' && (
-        <div style={{ marginBottom: 12 }}>
-          <p className="muted small" style={{ marginBottom: 12 }}>
-            Callers hear a stock greeting that mentions your first name —
-            something like &quot;You&apos;ve reached <em>{`{your name}`}</em>&apos;s
-            voicemail. Please leave a message after the tone, and they&apos;ll
-            get back to you as soon as possible.&quot; Nothing to configure.
+        <div>
+          <p className="muted small" style={{ marginBottom: 10 }}>
+            Stock greeting using your first name. Nothing to configure.
           </p>
           {activeMode !== 'default' && (
-            <button
-              type="button"
-              className="device-action"
-              onClick={() => activateMode('default')}
-              disabled={submitting}
-            >
+            <button type="button" className="device-action" onClick={() => activateMode('default')} disabled={submitting}>
               Use default greeting
             </button>
-          )}
-          {activeMode === 'default' && (
-            <p className="muted small">This is your active greeting.</p>
           )}
         </div>
       )}
 
-      {/* ─────────────── Text-to-speech tab ─────────────── */}
       {activeTab === 'tts' && (
-        <div style={{ marginBottom: 12 }}>
-          <label
-            className="fav-modal-label"
-            style={{ display: 'block', marginBottom: 6 }}
-            htmlFor="vm-tts-textarea"
-          >
-            Greeting text (read aloud by Telnyx TTS):
-          </label>
+        <div>
           <textarea
-            id="vm-tts-textarea"
             value={ttsDraft}
             onChange={(e) => setTtsDraft(e.target.value.slice(0, 500))}
-            placeholder="Hi, you've reached Abdulla. I can't pick up right now — please leave your name, number, and a brief message, and I'll get back to you shortly."
-            rows={5}
+            placeholder={
+              type === 'busy'
+                ? "Hi, I'm on another call right now. Please leave a message and I'll get back to you as soon as possible."
+                : "Hi, you've reached me. I can't pick up right now — please leave your name, number, and a brief message, and I'll get back to you shortly."
+            }
+            rows={4}
             style={{
               width: '100%',
               padding: 10,
-              borderRadius: 8,
+              borderRadius: 6,
               border: '1px solid var(--border, #cbd5e1)',
               fontFamily: 'inherit',
-              fontSize: 14,
+              fontSize: 13,
               resize: 'vertical',
-              minHeight: 100,
+              minHeight: 80,
             }}
             disabled={submitting}
             maxLength={500}
           />
-          <div
-            className="muted small"
-            style={{ marginTop: 4, display: 'flex', justifyContent: 'space-between' }}
-          >
-            <span>Max 500 characters. Keep it short — long greetings get cut off in caller patience.</span>
+          <div className="muted small" style={{ marginTop: 4, display: 'flex', justifyContent: 'space-between' }}>
+            <span>Max 500 characters.</span>
             <span style={{ color: charsRemaining < 50 ? '#d97706' : undefined }}>
               {charsRemaining} characters left
             </span>
           </div>
-          <div style={{ marginTop: 12, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <div style={{ marginTop: 10, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             <button
               type="button"
               className="device-action"
@@ -1607,12 +1716,7 @@ function VoicemailGreetingSection() {
               {hasText ? 'Update text greeting' : 'Save text greeting'}
             </button>
             {hasText && activeMode !== 'tts' && (
-              <button
-                type="button"
-                className="device-action"
-                onClick={() => activateMode('tts')}
-                disabled={submitting}
-              >
+              <button type="button" className="device-action" onClick={() => activateMode('tts')} disabled={submitting}>
                 Make text greeting active
               </button>
             )}
@@ -1620,75 +1724,65 @@ function VoicemailGreetingSection() {
         </div>
       )}
 
-      {/* ─────────────── Audio upload tab ─────────────── */}
       {activeTab === 'audio' && (
-        <div style={{ marginBottom: 12 }}>
-          {hasAudio ? (
+        <div>
+          {hasAudio && (
             <div
               style={{
                 background: 'rgba(52, 199, 89, 0.08)',
                 border: '1px solid rgba(52, 199, 89, 0.3)',
-                borderRadius: 10,
-                padding: '12px 14px',
-                marginBottom: 12,
+                borderRadius: 8,
+                padding: 10,
+                marginBottom: 10,
               }}
             >
-              <div className="muted small" style={{ marginBottom: 8 }}>
-                Current file: <code>{greeting?.filename || '(unnamed)'}</code>
+              <div className="muted small" style={{ marginBottom: 6 }}>
+                Current: <code>{variant.filename || '(unnamed)'}</code>
               </div>
-              {greeting?.url && (
-                <audio
-                  controls
-                  src={greeting.url}
-                  style={{ width: '100%', maxWidth: 420 }}
-                  preload="none"
-                />
+              {variant.url && (
+                <audio controls src={variant.url} style={{ width: '100%', maxWidth: 380 }} preload="none" />
               )}
-              <div style={{ marginTop: 12, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                <button
-                  type="button"
-                  className="device-action"
-                  onClick={handleDeleteAudio}
-                  disabled={submitting}
-                >
-                  Remove audio greeting
+              <div style={{ marginTop: 8, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                <button type="button" className="device-action" onClick={handleDeleteAudio} disabled={submitting}>
+                  Remove audio
                 </button>
                 {activeMode !== 'audio' && (
-                  <button
-                    type="button"
-                    className="device-action"
-                    onClick={() => activateMode('audio')}
-                    disabled={submitting}
-                  >
-                    Make audio greeting active
+                  <button type="button" className="device-action" onClick={() => activateMode('audio')} disabled={submitting}>
+                    Make audio active
                   </button>
                 )}
               </div>
             </div>
-          ) : (
-            <p className="muted small" style={{ marginBottom: 12 }}>
-              Upload a short MP3, WAV, M4A, AAC, or OGG file — 5-15 seconds
-              is the sweet spot. Maximum file size is 2 MB.
-            </p>
           )}
 
-          <label
-            className="fav-modal-label"
-            style={{ display: 'block', marginBottom: 6 }}
-          >
-            {hasAudio ? 'Replace with new audio:' : 'Choose an audio file:'}
-          </label>
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept="audio/mpeg,audio/mp3,audio/wav,audio/x-wav,audio/m4a,audio/mp4,audio/ogg,audio/aac,.mp3,.wav,.m4a,.aac,.ogg"
-            onChange={handleFileChange}
+          {/* v0.10.100 — In-app microphone recording. */}
+          <MicrophoneRecorder
+            onRecordingReady={(blob) => {
+              // Default filename embeds the type + timestamp so admins can
+              // see at a glance which slot it belongs to in Supabase Storage.
+              const ext = (blob.type.split('/')[1] ?? 'webm').split(';')[0];
+              void handleAudioBlobUpload(blob, `recording-${type}-${Date.now()}.${ext}`);
+            }}
             disabled={submitting}
+            maxSeconds={30}
           />
+
+          {/* File-upload fallback. */}
+          <div style={{ marginTop: 12 }}>
+            <label className="fav-modal-label" style={{ display: 'block', marginBottom: 4, fontSize: 12 }}>
+              …or upload an existing file (MP3 / WAV / M4A / AAC / OGG, ≤ 2 MB):
+            </label>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="audio/mpeg,audio/mp3,audio/wav,audio/x-wav,audio/m4a,audio/mp4,audio/ogg,audio/aac,audio/webm,.mp3,.wav,.m4a,.aac,.ogg,.webm"
+              onChange={handleFileChange}
+              disabled={submitting}
+              style={{ fontSize: 12 }}
+            />
+          </div>
           {submitting && (
-            <div className="muted small" style={{ marginTop: 8 }}>
-              Uploading and saving — usually 2-5 seconds…
-            </div>
+            <div className="muted small" style={{ marginTop: 8 }}>Saving…</div>
           )}
         </div>
       )}
@@ -1697,12 +1791,13 @@ function VoicemailGreetingSection() {
         <div
           className="error small"
           style={{
-            marginTop: 12,
-            padding: '8px 12px',
+            marginTop: 10,
+            padding: '6px 10px',
             background: 'rgba(215, 0, 21, 0.08)',
             border: '1px solid rgba(215, 0, 21, 0.3)',
             borderRadius: 6,
             wordBreak: 'break-word',
+            color: '#dc2626',
           }}
         >
           {error}
@@ -1712,8 +1807,8 @@ function VoicemailGreetingSection() {
         <div
           className="muted small"
           style={{
-            marginTop: 12,
-            padding: '8px 12px',
+            marginTop: 10,
+            padding: '6px 10px',
             background: 'rgba(52, 199, 89, 0.08)',
             border: '1px solid rgba(52, 199, 89, 0.3)',
             borderRadius: 6,
@@ -1723,11 +1818,67 @@ function VoicemailGreetingSection() {
           {okMsg}
         </div>
       )}
+    </div>
+  );
+}
 
-      {/* How to test — guidance after configuring */}
+function VoicemailGreetingSection() {
+  const [greeting, setGreeting] = useState<VoicemailGreeting | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [submitting] = useState(false);
+
+  const reload = useCallback(async () => {
+    const token = sessionStorage.getItem('ace_token');
+    if (!token) return;
+    const g = await getVoicemailGreeting(token);
+    setGreeting(g);
+  }, []);
+
+  useEffect(() => {
+    void reload().finally(() => setLoading(false));
+  }, [reload]);
+
+  if (loading) return <div className="muted">Loading…</div>;
+
+  const noanswer = greeting?.noanswer ?? { url: null, filename: null, text: null, mode: null };
+  const busy = greeting?.busy ?? { url: null, filename: null, text: null, mode: null };
+  const busyConfigured = !!(busy.url || busy.text);
+
+  return (
+    <div className="settings-section">
+      <h2 className="settings-title">Voicemail greeting</h2>
+      <p className="settings-blurb">
+        Choose what callers hear when they reach your voicemail. You can set
+        a different message for when you don’t pick up versus when you’re
+        already on another call. Each greeting can be the stock default,
+        text we read aloud, or your own recording — captured right here
+        from your microphone or uploaded as a file.
+      </p>
+      {!busyConfigured && (
+        <p className="muted small" style={{ marginBottom: 12 }}>
+          <em>Tip: if you only set up the &quot;not available&quot; greeting,
+          we&apos;ll use it for both situations — callers never hit silence.</em>
+        </p>
+      )}
+
+      <GreetingVariantPanel
+        type="noanswer"
+        label="When you don’t pick up"
+        blurb="Plays when your softphone rings out without being answered (about 25 seconds)."
+        variant={noanswer}
+        onChanged={reload}
+      />
+      <GreetingVariantPanel
+        type="busy"
+        label="When you’re on another call"
+        blurb="Plays when your softphone is already busy on another call and declines the new one. Leave this blank to reuse your &quot;not available&quot; greeting."
+        variant={busy}
+        onChanged={reload}
+      />
+
       <details
         style={{
-          marginTop: 20,
+          marginTop: 16,
           padding: 12,
           background: 'var(--bg-soft, #f8fafc)',
           borderRadius: 8,
@@ -1735,19 +1886,19 @@ function VoicemailGreetingSection() {
         }}
       >
         <summary style={{ cursor: 'pointer', fontWeight: 600 }}>
-          How to verify your greeting plays correctly
+          How to verify your greetings play correctly
         </summary>
         <ol style={{ margin: '8px 0 0 0', paddingLeft: 20 }}>
-          <li>Save the greeting you want active (above).</li>
-          <li>From a different phone (your cell, a colleague), call your ACE DID number.</li>
-          <li>Don&apos;t pick up — let the call ring through the no-answer timeout (~30s).</li>
-          <li>You should hear the greeting you configured. If you still hear Telnyx&apos;s default voicemail message, the per-DID Call Control cutover hasn&apos;t happened yet — let your admin know.</li>
+          <li>Save the greeting(s) you want above.</li>
+          <li>From a different phone, call your ACE DID number.</li>
+          <li><strong>To test the &quot;not available&quot; greeting:</strong> don’t pick up. After about 25 seconds the call falls to voicemail and you should hear your no-answer greeting.</li>
+          <li><strong>To test the &quot;busy&quot; greeting:</strong> while already on a call (or with your softphone signed out), call your DID. Your busy greeting plays immediately.</li>
         </ol>
         <p className="muted small" style={{ marginTop: 10, marginBottom: 0 }}>
-          <strong>Heads up for admins:</strong> the custom greeting flow only
-          fires once each DID is routed to the ACE Voicemail Call Control App
-          in Telnyx (scheduled for v0.10.100 rollout). Until then, callers
-          continue to hear the legacy hosted voicemail default.
+          <strong>Heads up:</strong> custom greetings only fire on DIDs that
+          have been migrated to the ACE Voicemail Call Control App by an
+          admin. If you hear Telnyx&apos;s default robotic message instead,
+          let your admin know to run the migration for your number.
         </p>
       </details>
     </div>
@@ -2661,6 +2812,8 @@ function UsersAdminSection() {
   const [hardDeleteTarget, setHardDeleteTarget] = useState<AdminUserRow | null>(null);
   // v0.10.0 Task 27 — Manage Lines modal target. null = closed.
   const [linesTarget, setLinesTarget] = useState<AdminUserRow | null>(null);
+  // v0.10.100 — Voicemail Call Control migration modal target.
+  const [voicemailMigrationTarget, setVoicemailMigrationTarget] = useState<AdminUserRow | null>(null);
   // v0.9.9 — Hide deactivated users by default (so "delete" feels like
   // delete even when FK constraints force soft-deactivate). Admin can
   // toggle to see the full list.
@@ -3126,6 +3279,21 @@ function UsersAdminSection() {
                         Manage lines
                       </button>
 
+                      {/* v0.10.100 — Migrate this user's DIDs from Hosted VM to
+                          the new Call Control voicemail flow (ring softphone
+                          first, fall to custom greeting on no-answer). */}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setOpenMenuId(null);
+                          setVoicemailMigrationTarget(r);
+                        }}
+                        title="Switch this user from legacy Hosted Voicemail to the new Call Control voicemail (ring + fallback)"
+                      >
+                        <Mic size={14} />
+                        Voicemail migration
+                      </button>
+
                       {/* v0.10.60 — Per-user Connection Health beta toggle.
                           Smooths the disconnect/reconnect flicker and (in
                           a follow-up RC) responds to Telnyx-pushed eviction
@@ -3317,6 +3485,17 @@ function UsersAdminSection() {
           onClose={() => {
             setLinesTarget(null);
             load();  // refresh the table — userDid changes can affect didNumber column display
+          }}
+        />
+      )}
+
+      {/* v0.10.100 — Voicemail Call Control migration modal */}
+      {voicemailMigrationTarget && (
+        <VoicemailMigrationModal
+          user={voicemailMigrationTarget}
+          onClose={() => {
+            setVoicemailMigrationTarget(null);
+            load();
           }}
         />
       )}
@@ -7952,5 +8131,323 @@ function TipsAdminRow({
         )}
       </div>
     </li>
+  );
+}
+
+// v0.10.100 - VoicemailMigrationModal - Per-user admin migration flow
+// for the Call Control voicemail rollout. Loads the user's current
+// migration state, lets the admin run migrate or rollback, and shows the
+// per-DID outcome inline.
+function VoicemailMigrationModal({
+  user,
+  onClose,
+}: {
+  user: AdminUserRow;
+  onClose: () => void;
+}) {
+  const [status, setStatus] = useState<VoicemailMigrationStatus | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [running, setRunning] = useState<'migrate' | 'rollback' | null>(null);
+  const [result, setResult] = useState<VoicemailMigrationResponse | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const bodyRef = useRef<HTMLDivElement | null>(null);
+
+  const load = useCallback(async () => {
+    setError(null);
+    setLoading(true);
+    try {
+      const token = sessionStorage.getItem('ace_token');
+      if (!token) { setError('Sign in again.'); return; }
+      const s = await getVoicemailMigrationStatus(token, user.id);
+      setStatus(s);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  }, [user.id]);
+
+  useEffect(() => { void load(); }, [load]);
+  useEffect(() => { bodyRef.current?.scrollTo({ top: 0 }); }, []);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  async function runMigrate() {
+    if (!status) return;
+    if (!status.ccAppConfigured) {
+      setError('TELNYX_VOICEMAIL_CC_APP_ID is not configured on the API service. Set it in Render env vars and redeploy.');
+      return;
+    }
+    if (!confirm(
+      'Migrate all ' + status.totalDids + ' DID(s) for ' + (status.user.name || status.user.email) + ' to the Call Control voicemail flow?\n\n' +
+      'This switches inbound call routing from their SIP credential to the ACE Voicemail Voice API app. Their softphone will continue to ring; on no-answer or busy, the new custom-greeting flow takes over.\n\n' +
+      'You can roll back from this same modal at any time.',
+    )) return;
+    setError(null);
+    setResult(null);
+    setRunning('migrate');
+    try {
+      const token = sessionStorage.getItem('ace_token');
+      if (!token) { setError('Sign in again.'); return; }
+      const r = await migrateUserToCallControlVoicemail(token, user.id);
+      setResult(r);
+      await load();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setRunning(null);
+    }
+  }
+
+  async function runRollback() {
+    if (!status) return;
+    if (!confirm(
+      'Roll back ' + status.migratedDids + ' migrated DID(s) for ' + (status.user.name || status.user.email) + '?\n\n' +
+      'This restores their previous SIP credential routing and re-enables Telnyx Hosted Voicemail. The custom greeting flow stops firing for these DIDs.',
+    )) return;
+    setError(null);
+    setResult(null);
+    setRunning('rollback');
+    try {
+      const token = sessionStorage.getItem('ace_token');
+      if (!token) { setError('Sign in again.'); return; }
+      const r = await rollbackUserFromCallControlVoicemail(token, user.id);
+      setResult(r);
+      await load();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setRunning(null);
+    }
+  }
+
+  return (
+    <div
+      className="compose-modal-backdrop"
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+      style={{
+        position: 'fixed',
+        inset: 0,
+        background: 'rgba(0, 0, 0, 0.78)',
+        zIndex: 1000,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: 20,
+      }}
+    >
+      <div
+        className="compose-modal"
+        style={{
+          background: 'var(--bg, #fff)',
+          color: 'var(--fg, #111)',
+          borderRadius: 12,
+          maxWidth: 720,
+          width: '100%',
+          maxHeight: '85vh',
+          display: 'flex',
+          flexDirection: 'column',
+          boxShadow: '0 25px 50px -12px rgba(0,0,0,0.5)',
+        }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div
+          style={{
+            padding: '14px 18px',
+            borderBottom: '1px solid var(--border, #e2e8f0)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            flexShrink: 0,
+          }}
+        >
+          <h3 style={{ margin: 0, fontSize: 17 }}>
+            <Mic size={18} style={{ verticalAlign: 'middle', marginRight: 6 }} />
+            Voicemail migration - {[user.firstName, user.lastName].filter(Boolean).join(' ') || user.email}
+          </h3>
+          <button
+            type="button"
+            className="icon-btn"
+            onClick={onClose}
+            aria-label="Close"
+            style={{ fontSize: 20, lineHeight: 1 }}
+          >
+            x
+          </button>
+        </div>
+        <div
+          ref={bodyRef}
+          className="modal-body"
+          style={{ padding: 18, overflowY: 'auto', flex: 1 }}
+        >
+          {loading && <div className="muted">Loading migration state...</div>}
+          {!loading && status && (
+            <>
+              <p className="muted small" style={{ marginTop: 0 }}>
+                Migration switches this user's DID routing from the legacy
+                SIP-credential / Hosted Voicemail path to the new Call Control
+                flow (softphone rings for ~25s, then falls to their custom
+                greeting). Rollback restores the previous routing exactly.
+              </p>
+              {!status.ccAppConfigured && (
+                <div
+                  className="error small"
+                  style={{
+                    padding: 10,
+                    background: 'rgba(215, 0, 21, 0.08)',
+                    border: '1px solid rgba(215, 0, 21, 0.3)',
+                    borderRadius: 6,
+                    color: '#dc2626',
+                    marginBottom: 12,
+                  }}
+                >
+                  <strong>TELNYX_VOICEMAIL_CC_APP_ID not set.</strong> Set the env
+                  var on the API service in Render (the Application ID of your
+                  ACE Voicemail Voice API app in Telnyx) and redeploy.
+                </div>
+              )}
+              {!status.user.sipUsername && (
+                <div
+                  className="error small"
+                  style={{
+                    padding: 10,
+                    background: 'rgba(245, 158, 11, 0.08)',
+                    border: '1px solid rgba(245, 158, 11, 0.3)',
+                    borderRadius: 6,
+                    marginBottom: 12,
+                  }}
+                >
+                  <strong>User has no SIP credential.</strong> Provision one first
+                  via Manage lines.
+                </div>
+              )}
+              <div style={{ marginBottom: 14 }}>
+                <strong>DIDs ({status.totalDids} total, {status.migratedDids} migrated):</strong>
+              </div>
+              {status.dids.length === 0 ? (
+                <p className="muted small">No DIDs assigned to this user.</p>
+              ) : (
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, marginBottom: 14 }}>
+                  <thead>
+                    <tr style={{ background: 'var(--bg-soft, #f8fafc)' }}>
+                      <th style={{ padding: 8, textAlign: 'left', borderBottom: '1px solid var(--border, #e2e8f0)' }}>DID</th>
+                      <th style={{ padding: 8, textAlign: 'left', borderBottom: '1px solid var(--border, #e2e8f0)' }}>Label</th>
+                      <th style={{ padding: 8, textAlign: 'left', borderBottom: '1px solid var(--border, #e2e8f0)' }}>State</th>
+                      <th style={{ padding: 8, textAlign: 'left', borderBottom: '1px solid var(--border, #e2e8f0)' }}>Migrated</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {status.dids.map((d) => (
+                      <tr key={d.id}>
+                        <td style={{ padding: 8, borderBottom: '1px solid var(--border, #e2e8f0)' }}>
+                          <code>{d.didNumber}</code> {d.isDefault && <span className="muted small">(default)</span>}
+                        </td>
+                        <td style={{ padding: 8, borderBottom: '1px solid var(--border, #e2e8f0)' }}>{d.label}</td>
+                        <td style={{ padding: 8, borderBottom: '1px solid var(--border, #e2e8f0)' }}>
+                          {d.migratedAt ? (
+                            <span style={{ color: '#0a7d23', fontWeight: 500 }}>Call Control</span>
+                          ) : (
+                            <span className="muted">Legacy SIP / Hosted VM</span>
+                          )}
+                        </td>
+                        <td style={{ padding: 8, borderBottom: '1px solid var(--border, #e2e8f0)' }}>
+                          {d.migratedAt ? new Date(d.migratedAt).toLocaleString() : '-'}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+              <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                <button
+                  type="button"
+                  className="device-action primary"
+                  disabled={
+                    running !== null ||
+                    !status.ccAppConfigured ||
+                    !status.user.sipUsername ||
+                    status.totalDids === 0 ||
+                    status.migratedDids === status.totalDids
+                  }
+                  onClick={runMigrate}
+                  style={{
+                    background: '#2563eb',
+                    color: '#fff',
+                    borderColor: '#2563eb',
+                  }}
+                >
+                  {running === 'migrate' ? 'Migrating...' : 'Migrate to Call Control'}
+                </button>
+                <button
+                  type="button"
+                  className="device-action"
+                  disabled={running !== null || status.migratedDids === 0}
+                  onClick={runRollback}
+                >
+                  {running === 'rollback' ? 'Rolling back...' : 'Roll back'}
+                </button>
+              </div>
+              {error && (
+                <div
+                  className="error small"
+                  style={{
+                    marginTop: 14,
+                    padding: 10,
+                    background: 'rgba(215, 0, 21, 0.08)',
+                    border: '1px solid rgba(215, 0, 21, 0.3)',
+                    borderRadius: 6,
+                    color: '#dc2626',
+                    wordBreak: 'break-word',
+                  }}
+                >
+                  {error}
+                </div>
+              )}
+              {result && (
+                <div
+                  style={{
+                    marginTop: 14,
+                    padding: 12,
+                    background: result.ok ? 'rgba(52, 199, 89, 0.08)' : 'rgba(245, 158, 11, 0.08)',
+                    border: '1px solid ' + (result.ok ? 'rgba(52, 199, 89, 0.3)' : 'rgba(245, 158, 11, 0.3)'),
+                    borderRadius: 6,
+                  }}
+                >
+                  <div style={{ fontWeight: 600, marginBottom: 6 }}>
+                    {result.ok ? 'Success: ' : 'Partial: '}
+                    {result.summary.successCount} succeeded
+                    {result.summary.failCount > 0 ? ', ' + result.summary.failCount + ' failed' : ''}
+                    {result.summary.alreadyCount ? ', ' + result.summary.alreadyCount + ' already migrated' : ''}.
+                  </div>
+                  {result.message && <div className="muted small">{result.message}</div>}
+                  {result.results.length > 0 && (
+                    <ul style={{ margin: '6px 0 0 0', paddingLeft: 18, fontSize: 12 }}>
+                      {result.results.map((r) => (
+                        <li key={r.didId}>
+                          <code>{r.didNumber}</code>{' - '}
+                          {r.status === 'failed'
+                            ? <span style={{ color: '#dc2626' }}>{r.error}</span>
+                            : r.status === 'already_migrated'
+                              ? 'already migrated'
+                              : r.status === 'rolled_back'
+                                ? 'rolled back'
+                                : 'migrated'}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              )}
+            </>
+          )}
+          {!loading && !status && error && (
+            <div className="error small" style={{ color: '#dc2626' }}>{error}</div>
+          )}
+        </div>
+      </div>
+    </div>
   );
 }

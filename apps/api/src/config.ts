@@ -52,6 +52,16 @@ export const config = {
   telnyxTemplateConnectionDid: optional('TELNYX_TEMPLATE_CONNECTION_DID', '+17322001305'),
   telnyxTemplateConnectionId: optional('TELNYX_TEMPLATE_CONNECTION_ID'),
 
+  // v0.10.100 — Telnyx Voice API Application ID for the "ACE Voicemail"
+  // app (created in Mission Control → Voice API Applications). Used by
+  // the admin migration endpoint (POST /admin/users/:id/migrate-voicemail)
+  // to re-bind a user's DIDs from their SIP credential to this app, so
+  // inbound calls flow through our /webhooks/telnyx/voicemail-cc handler
+  // (ring softphone → fall to custom voicemail on no-answer).
+  // Find the ID in Mission Control: Voice → Voice API Apps → ACE Voicemail
+  // → Application ID at the top of the Details tab.
+  telnyxVoicemailCcAppId: optional('TELNYX_VOICEMAIL_CC_APP_ID'),
+
   // Supabase Storage (for MMS uploads)
   supabaseUrl: optional('SUPABASE_URL'),
   supabaseServiceKey: optional('SUPABASE_SERVICE_ROLE_KEY'),

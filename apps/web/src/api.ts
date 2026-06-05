@@ -703,24 +703,44 @@ export async function saveCallForwarding(
 // that fall to voicemail; 'tts' = synthesize voicemailGreetingText via TTS;
 // 'default' = fall back to "You've reached <firstName>'s voicemail" stock.
 export type VoicemailGreetingMode = 'audio' | 'tts' | 'default';
-export interface VoicemailGreeting {
+// v0.10.100 — Per-greeting (no-answer vs busy) variant. Each variant has
+// its own URL/filename/text/mode, configured independently in Settings.
+export type VoicemailGreetingType = 'noanswer' | 'busy';
+export interface VoicemailGreetingVariant {
   url: string | null;
   filename: string | null;
-  text?: string | null;
-  mode?: VoicemailGreetingMode | null;
+  text: string | null;
+  mode: VoicemailGreetingMode | null;
+}
+export interface VoicemailGreeting extends VoicemailGreetingVariant {
+  // v0.10.100 — Per-type breakdown. Top-level url/filename/text/mode
+  // remain for v0.10.99 backward compatibility (they mirror noanswer).
+  noanswer?: VoicemailGreetingVariant;
+  busy?: VoicemailGreetingVariant;
+}
+function emptyVariant(): VoicemailGreetingVariant {
+  return { url: null, filename: null, text: null, mode: null };
 }
 export async function getVoicemailGreeting(token: string): Promise<VoicemailGreeting> {
   const res = await fetch(`${API_URL}/voicemail-greeting`, {
     headers: { Authorization: `Bearer ${token}` },
   });
-  if (!res.ok) return { url: null, filename: null, text: null, mode: null };
-  return res.json();
+  if (!res.ok) {
+    return { url: null, filename: null, text: null, mode: null,
+             noanswer: emptyVariant(), busy: emptyVariant() };
+  }
+  const j = (await res.json()) as VoicemailGreeting;
+  // Defensive: older API (v0.10.99) doesn't send noanswer/busy. Fill in.
+  if (!j.noanswer) j.noanswer = { url: j.url, filename: j.filename, text: j.text ?? null, mode: j.mode ?? null };
+  if (!j.busy) j.busy = emptyVariant();
+  return j;
 }
 export async function setVoicemailGreetingText(
   token: string,
   text: string,
+  type: VoicemailGreetingType = 'noanswer',
 ): Promise<{ text: string; mode: VoicemailGreetingMode }> {
-  const res = await fetch(`${API_URL}/voicemail-greeting/tts`, {
+  const res = await fetch(`${API_URL}/voicemail-greeting/${type}/tts`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
     body: JSON.stringify({ text }),
@@ -731,8 +751,9 @@ export async function setVoicemailGreetingText(
 export async function setVoicemailGreetingMode(
   token: string,
   mode: VoicemailGreetingMode,
+  type: VoicemailGreetingType = 'noanswer',
 ): Promise<{ mode: VoicemailGreetingMode }> {
-  const res = await fetch(`${API_URL}/voicemail-greeting/mode`, {
+  const res = await fetch(`${API_URL}/voicemail-greeting/${type}/mode`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
     body: JSON.stringify({ mode }),
@@ -740,10 +761,19 @@ export async function setVoicemailGreetingMode(
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return res.json();
 }
+// v0.10.100 — Upload supports both File objects (from <input type="file">)
+// and Blob objects (from MediaRecorder for in-app recording). Pass
+// filename explicitly when uploading a Blob; for File it defaults to file.name.
 export async function uploadVoicemailGreeting(
   token: string,
-  file: File,
-): Promise<VoicemailGreeting> {
+  fileOrBlob: File | Blob,
+  type: VoicemailGreetingType = 'noanswer',
+  filenameOverride?: string,
+): Promise<VoicemailGreetingVariant> {
+  const filename = filenameOverride
+    ?? (fileOrBlob instanceof File ? fileOrBlob.name : `recording-${Date.now()}.webm`);
+  const mimeType = fileOrBlob.type || 'audio/mpeg';
+
   // Read as base64 to match the JSON-body upload pattern the API expects.
   const dataBase64 = await new Promise<string>((resolve, reject) => {
     const r = new FileReader();
@@ -753,43 +783,114 @@ export async function uploadVoicemailGreeting(
       resolve(idx >= 0 ? result.slice(idx + 1) : result);
     };
     r.onerror = () => reject(r.error);
-    r.readAsDataURL(file);
+    r.readAsDataURL(fileOrBlob);
   });
-  const res = await fetch(`${API_URL}/voicemail-greeting`, {
+  const res = await fetch(`${API_URL}/voicemail-greeting/${type}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-    body: JSON.stringify({
-      filename: file.name,
-      mimeType: file.type || 'audio/mpeg',
-      dataBase64,
-    }),
+    body: JSON.stringify({ filename, mimeType, dataBase64 }),
   });
   if (!res.ok) {
     const err = (await res.json().catch(() => ({}))) as {
       error?: string;
-      telnyxStatus?: number;
-      telnyxBody?: unknown;
       details?: unknown;
     };
-    // Surface Telnyx's own error verbatim. Helps diagnose which field
-    // they're rejecting (greeting_audio_url vs something else).
     const detail =
-      err.telnyxBody
-        ? `: ${JSON.stringify(err.telnyxBody)}`
-        : err.details
-          ? `: ${typeof err.details === 'string' ? err.details : JSON.stringify(err.details)}`
-          : '';
+      err.details
+        ? `: ${typeof err.details === 'string' ? err.details : JSON.stringify(err.details)}`
+        : '';
     // eslint-disable-next-line no-console
     console.error('[vm-greeting] upload failed', err);
     throw new Error((err.error || `HTTP ${res.status}`) + detail);
   }
   return res.json();
 }
-export async function deleteVoicemailGreeting(token: string): Promise<void> {
-  await fetch(`${API_URL}/voicemail-greeting`, {
+export async function deleteVoicemailGreeting(
+  token: string,
+  type: VoicemailGreetingType = 'noanswer',
+): Promise<void> {
+  await fetch(`${API_URL}/voicemail-greeting/${type}`, {
     method: 'DELETE',
     headers: { Authorization: `Bearer ${token}` },
   });
+}
+
+// ──────────────────────────────────────────────────────────────────
+// v0.10.100 — Admin migration to Call Control voicemail (per-user).
+// Replaces "DID → SIP credential → Hosted VM" with "DID → ACE Voicemail
+// Voice API app → ring softphone, fall to custom greeting on no-answer."
+// ──────────────────────────────────────────────────────────────────
+export interface VoicemailMigrationDid {
+  id: number;
+  didNumber: string;
+  label: string;
+  isDefault: boolean;
+  migratedAt: string | null;
+  currentConnectionId: string | null;
+  previousConnectionId: string | null;
+  previousHostedVmEnabled: boolean | null;
+}
+export interface VoicemailMigrationStatus {
+  user: { id: number; email: string; name: string; sipUsername: string | null };
+  ccAppConfigured: boolean;
+  totalDids: number;
+  migratedDids: number;
+  dids: VoicemailMigrationDid[];
+}
+export interface VoicemailMigrationResult {
+  didId: number;
+  didNumber: string;
+  status: 'migrated' | 'already_migrated' | 'rolled_back' | 'failed';
+  previousConnectionId?: string | null;
+  previousHostedVmEnabled?: boolean | null;
+  restoredConnectionId?: string | null;
+  restoredHostedVmEnabled?: boolean | null;
+  error?: string;
+}
+export interface VoicemailMigrationResponse {
+  ok: boolean;
+  user: { id: number; email: string; name: string };
+  summary: { successCount: number; alreadyCount?: number; failCount: number; total: number };
+  results: VoicemailMigrationResult[];
+  message?: string;
+}
+export async function getVoicemailMigrationStatus(
+  token: string,
+  userId: number,
+): Promise<VoicemailMigrationStatus> {
+  const res = await fetch(`${API_URL}/admin/users/${userId}/voicemail-migration`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+export async function migrateUserToCallControlVoicemail(
+  token: string,
+  userId: number,
+): Promise<VoicemailMigrationResponse> {
+  const res = await fetch(`${API_URL}/admin/users/${userId}/voicemail-migrate`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    const err = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new Error(err.error || `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+export async function rollbackUserFromCallControlVoicemail(
+  token: string,
+  userId: number,
+): Promise<VoicemailMigrationResponse> {
+  const res = await fetch(`${API_URL}/admin/users/${userId}/voicemail-rollback`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    const err = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new Error(err.error || `HTTP ${res.status}`);
+  }
+  return res.json();
 }
 
 // How many days a voicemail is retained before auto-delete. Server-controlled

@@ -1,54 +1,51 @@
-// v0.10.99 — Custom voicemail via Telnyx Call Control.
+// v0.10.100 - Full inbound-call flow over Telnyx Call Control.
 //
-// REPLACES Telnyx Hosted Voicemail (which only supports a default robotic
-// greeting). This module handles the full call lifecycle when an inbound
-// call falls to voicemail:
+// REPLACES the legacy DID -> SIP-credential -> Hosted Voicemail routing.
+// All inbound calls to a migrated DID now flow through this handler.
 //
-//   1. Caller dials user's DID → Telnyx routes to user's SIP credential.
-//   2. User doesn't answer (no-answer timeout).
-//   3. Telnyx routes the call to a Call Control Application (admin
-//      configures this on each DID's voice settings in Mission Control).
-//   4. That Call Control App's webhook URL points at our endpoint
-//      /webhooks/telnyx/voicemail-cc.
-//   5. We receive `call.initiated` → look up the user by called DID →
-//      answer the call programmatically.
-//   6. On `call.answered` → play the user's custom greeting:
-//        • mode='audio' → playback_start with greeting URL (Supabase Storage)
-//        • mode='tts'   → speak the user's saved text via Telnyx TTS
-//        • mode='default' (or null) → speak a stock greeting that
-//          interpolates the user's first name.
-//   7. On `call.playback.ended` / `call.speak.ended` → record_start with
-//      play_beep:true so the caller hears the beep before leaving a message.
-//   8. On `call.recording.saved` → write a Voicemail row in our DB,
-//      kick off Deepgram transcription (existing flow), hang up.
+// LIFECYCLE for one inbound call:
 //
-// ADMIN SETUP NEEDED (one-time, in Telnyx Mission Control):
-//   1. Create a new Call Control Application named "ACE Voicemail."
-//   2. Set its webhook URL to: <our-webhooks-host>/webhooks/telnyx/voicemail-cc
-//   3. Note the application_id (e.g. 2974xxxx...).
-//   4. Set the env var TELNYX_VOICEMAIL_CC_APP_ID on the API + webhooks
-//      services (used by future migration script).
-//   5. For each DID we want custom voicemail on, in Mission Control:
-//      - Disable Hosted Voicemail
-//      - Set the "voice settings → fallback connection / forward-on-no-answer"
-//        to the new Call Control Application
-//   (v0.10.100 will provide an admin endpoint to automate step 5.)
+//   1. Caller dials DID -> Telnyx routes to the ACE Voicemail Voice API
+//      app -> we receive `call.initiated` for the inbound (caller) leg.
+//   2. We look up the user by DID. If found and they have a sipUsername,
+//      we issue `transfer` on the caller leg with target
+//      `sip:<sipUsername>@sip.telnyx.com` and `timeout_secs=25`. This
+//      makes Telnyx ring the user's softphone(s) (registered against
+//      that SIP credential) while keeping the caller leg alive and
+//      playing carrier ringback to them.
+//   3a. SOFTPHONE ANSWERS within 25s:
+//       - `call.bridged` fires for both legs -> audio flows.
+//       - When either party hangs up, `call.hangup` fires; we clean up.
+//       - NO voicemail row is written.
+//   3b. SOFTPHONE DOES NOT ANSWER (25s timeout, or rejected, or busy):
+//       - `call.hangup` fires for the TRANSFER (dial) leg with a cause
+//         other than `normal_clearing`/`call_completed`. The caller leg
+//         is still alive - Telnyx kept it because of the transfer.
+//       - We `answer` the caller leg, then play their custom greeting
+//         (audio / TTS / default) - picked based on the hangup cause
+//         (user_busy -> busy greeting; everything else -> no-answer
+//         greeting; falls back to the no-answer greeting if busy is not
+//         configured). Then record, then save a Voicemail row.
+//   4. CALLER hangs up at any point: `call.hangup` for the caller leg
+//      fires; we clean up and write no voicemail row.
+//
+// STATE - we pass everything via `client_state` (base64 JSON) on every
+// action so this handler stays stateless across crashes / instance
+// restarts. There is no in-memory map of in-flight calls.
 
 import { prisma } from '@ace/db';
 
 type LogFn = (obj: Record<string, unknown>, msg: string) => void;
 
-// Stock fallback greeting for users who haven't configured anything.
+// How long to ring the softphone before falling to voicemail.
+const RING_TIMEOUT_SECS = 25;
+
 function defaultGreetingFor(firstName: string | null): string {
   const name = (firstName ?? '').trim() || 'this user';
   return `You've reached ${name}'s voicemail. Please leave a message after the tone, and they'll get back to you as soon as possible.`;
 }
 
-/**
- * Issue a Call Control command (answer, speak, playback, record, hangup).
- * Wraps the POST /v2/calls/{id}/actions/{action} pattern. Returns the raw
- * Telnyx response so callers can log / branch on it.
- */
+// v0.10.100 - Swallow Telnyx error 90018 ("Call has already ended").
 async function callControlAction(
   callControlId: string,
   action: string,
@@ -57,7 +54,7 @@ async function callControlAction(
 ): Promise<{ ok: boolean; status: number; body: unknown }> {
   const apiKey = (process.env.TELNYX_API_KEY ?? '').trim();
   if (!apiKey) {
-    logger({ action, callControlId }, '[vm-cc] TELNYX_API_KEY missing — cannot issue command');
+    logger({ action, callControlId }, '[vm-cc] TELNYX_API_KEY missing - cannot issue command');
     return { ok: false, status: 0, body: 'TELNYX_API_KEY missing' };
   }
   const url = `https://api.telnyx.com/v2/calls/${encodeURIComponent(callControlId)}/actions/${action}`;
@@ -72,7 +69,13 @@ async function callControlAction(
     });
     const respBody = await res.json().catch(() => ({}));
     if (!res.ok) {
-      logger({ action, status: res.status, respBody }, '[vm-cc] action failed');
+      const errors = (respBody as { errors?: Array<{ code?: string }> })?.errors ?? [];
+      const isCallEnded = errors.some((e) => e?.code === '90018');
+      if (!isCallEnded) {
+        logger({ action, status: res.status, respBody }, '[vm-cc] action failed');
+      } else {
+        logger({ action, callControlId }, '[vm-cc] action skipped (call already ended)');
+      }
     }
     return { ok: res.ok, status: res.status, body: respBody };
   } catch (e) {
@@ -81,13 +84,7 @@ async function callControlAction(
   }
 }
 
-/**
- * Look up the user the call is destined for, based on the called DID.
- * Returns null if no user owns this number (Telnyx misrouted, or DID
- * was reassigned and we haven't caught up).
- */
 async function findUserByDid(toNumber: string, logger: LogFn) {
-  // Try exact match first; if no hit, try without country code prefix.
   const tries = [toNumber];
   if (toNumber.startsWith('+1')) tries.push(toNumber.slice(2));
   for (const candidate of tries) {
@@ -100,9 +97,13 @@ async function findUserByDid(toNumber: string, logger: LogFn) {
           select: {
             id: true,
             firstName: true,
+            sipUsername: true,
             voicemailGreetingUrl: true,
             voicemailGreetingText: true,
             voicemailGreetingMode: true,
+            voicemailBusyGreetingUrl: true,
+            voicemailBusyGreetingText: true,
+            voicemailBusyGreetingMode: true,
           },
         },
       },
@@ -113,10 +114,109 @@ async function findUserByDid(toNumber: string, logger: LogFn) {
   return null;
 }
 
-// ─────────────────────────────────────────────────────────────────────
-// Public entry point — called from main.ts for events arriving at
-// /webhooks/telnyx/voicemail-cc.
-// ─────────────────────────────────────────────────────────────────────
+interface ClientState {
+  stage: 'transfer_pending' | 'voicemail_active';
+  callerCallId: string;
+  fromNumber: string;
+  toNumber: string;
+  reason?: 'busy' | 'no_answer';
+}
+
+function encodeState(s: ClientState): string {
+  return Buffer.from(JSON.stringify(s)).toString('base64');
+}
+
+function decodeState(raw: unknown): ClientState | null {
+  if (typeof raw !== 'string' || !raw) return null;
+  try {
+    const json = Buffer.from(raw, 'base64').toString('utf-8');
+    const obj = JSON.parse(json) as ClientState;
+    if (!obj?.stage || !obj?.callerCallId) return null;
+    return obj;
+  } catch {
+    return null;
+  }
+}
+
+interface UserGreetingFields {
+  firstName: string | null;
+  voicemailGreetingUrl: string | null;
+  voicemailGreetingText: string | null;
+  voicemailGreetingMode: string | null;
+  voicemailBusyGreetingUrl: string | null;
+  voicemailBusyGreetingText: string | null;
+  voicemailBusyGreetingMode: string | null;
+}
+
+function pickGreeting(
+  user: UserGreetingFields,
+  reason: 'busy' | 'no_answer' | undefined,
+): { mode: string; url: string | null; text: string | null } {
+  if (reason === 'busy') {
+    const mode = user.voicemailBusyGreetingMode;
+    if (mode === 'audio' && user.voicemailBusyGreetingUrl) {
+      return { mode: 'audio', url: user.voicemailBusyGreetingUrl, text: null };
+    }
+    if (mode === 'tts' && user.voicemailBusyGreetingText) {
+      return { mode: 'tts', url: null, text: user.voicemailBusyGreetingText };
+    }
+    // Busy not configured - fall back to no-answer.
+  }
+  const mode = user.voicemailGreetingMode ?? 'default';
+  if (mode === 'audio' && user.voicemailGreetingUrl) {
+    return { mode: 'audio', url: user.voicemailGreetingUrl, text: null };
+  }
+  if (mode === 'tts' && user.voicemailGreetingText) {
+    return { mode: 'tts', url: null, text: user.voicemailGreetingText };
+  }
+  return { mode: 'default', url: null, text: null };
+}
+
+async function playGreeting(
+  callerCallId: string,
+  user: UserGreetingFields,
+  state: ClientState,
+  logger: LogFn,
+) {
+  const picked = pickGreeting(user, state.reason);
+  const clientState = encodeState(state);
+  logger(
+    { callerCallId, reason: state.reason, mode: picked.mode },
+    '[vm-cc] playing greeting',
+  );
+  if (picked.mode === 'audio' && picked.url) {
+    await callControlAction(
+      callerCallId,
+      'playback_start',
+      { audio_url: picked.url, client_state: clientState },
+      logger,
+    );
+  } else if (picked.mode === 'tts' && picked.text) {
+    await callControlAction(
+      callerCallId,
+      'speak',
+      {
+        payload: picked.text,
+        voice: 'female',
+        language: 'en-US',
+        client_state: clientState,
+      },
+      logger,
+    );
+  } else {
+    await callControlAction(
+      callerCallId,
+      'speak',
+      {
+        payload: defaultGreetingFor(user.firstName),
+        voice: 'female',
+        language: 'en-US',
+        client_state: clientState,
+      },
+      logger,
+    );
+  }
+}
 
 interface TelnyxEventLike {
   event_type: string;
@@ -128,6 +228,8 @@ interface TelnyxEventLike {
     recording_urls?: { mp3?: string[] } | string[] | string;
     recording_url?: string;
     client_state?: string;
+    hangup_cause?: string;
+    hangup_source?: string;
   };
 }
 
@@ -138,120 +240,141 @@ export async function handleVoicemailCallControlEvent(
   const logger: LogFn = loggerIn ?? ((o, m) => console.info(m, o));
   const payload = event.payload ?? {};
   const callControlId = payload.call_control_id ?? '';
+  const state = decodeState(payload.client_state);
 
   switch (event.event_type) {
-    // ────────────── 1. Call arrives at our Call Control app ──────────
+    // 1. INITIAL inbound call from carrier - issue transfer to SIP creds.
     case 'call.initiated': {
+      if (state) {
+        logger(
+          { callControlId, stage: state.stage },
+          '[vm-cc] call.initiated for tagged leg - no-op',
+        );
+        return;
+      }
+
       const toNumber = (payload.to ?? '').toString();
       const fromNumber = (payload.from ?? '').toString();
-      logger({ callControlId, toNumber, fromNumber }, '[vm-cc] call.initiated');
+      logger({ callControlId, toNumber, fromNumber }, '[vm-cc] call.initiated (caller leg)');
       if (!callControlId) return;
-      // Answer the call so we can issue subsequent actions (speak, record).
-      // Pass through the from/to in client_state so we can recover them
-      // on the recording.saved event if we lose context.
-      const stateBlob = Buffer.from(JSON.stringify({ to: toNumber, from: fromNumber })).toString('base64');
-      await callControlAction(
-        callControlId,
-        'answer',
-        { client_state: stateBlob },
-        logger,
-      );
-      break;
-    }
 
-    // ────────────── 2. Call is answered — play greeting ──────────────
-    case 'call.answered': {
-      const toNumber = (payload.to ?? '').toString();
-      logger({ callControlId, toNumber }, '[vm-cc] call.answered');
-      if (!callControlId) return;
       const found = await findUserByDid(toNumber, logger);
-      if (!found) {
-        // No user found — caller dialed an orphaned DID. Just play a
-        // generic greeting and record (so we at least capture the
-        // recording for admin investigation).
+      if (!found || !found.user.sipUsername) {
+        logger(
+          { toNumber, hasUser: !!found, hasSip: !!found?.user.sipUsername },
+          '[vm-cc] cannot bridge - answering for voicemail directly',
+        );
+        const voicemailState: ClientState = {
+          stage: 'voicemail_active',
+          callerCallId: callControlId,
+          fromNumber,
+          toNumber,
+          reason: 'no_answer',
+        };
         await callControlAction(
           callControlId,
-          'speak',
-          {
-            payload: 'You have reached ACE Dialer. Please leave a message after the tone.',
-            voice: 'female',
-            language: 'en-US',
-          },
+          'answer',
+          { client_state: encodeState(voicemailState) },
           logger,
         );
         return;
       }
-      const { user } = found;
-      const mode = user.voicemailGreetingMode ?? 'default';
 
-      // Branch by configured greeting mode.
-      if (mode === 'audio' && user.voicemailGreetingUrl) {
-        await callControlAction(
-          callControlId,
-          'playback_start',
-          { audio_url: user.voicemailGreetingUrl },
-          logger,
-        );
-      } else if (mode === 'tts' && user.voicemailGreetingText) {
-        await callControlAction(
-          callControlId,
-          'speak',
-          {
-            payload: user.voicemailGreetingText,
-            voice: 'female',
-            language: 'en-US',
-          },
-          logger,
-        );
-      } else {
-        // 'default' (or anything else) — stock greeting with first name.
-        await callControlAction(
-          callControlId,
-          'speak',
-          {
-            payload: defaultGreetingFor(user.firstName),
-            voice: 'female',
-            language: 'en-US',
-          },
-          logger,
-        );
-      }
-      break;
-    }
-
-    // ────────────── 3. Greeting finished — start recording ────────────
-    // Both events possible depending on whether we used audio playback
-    // or TTS speak. We handle both with the same followup action.
-    case 'call.playback.ended':
-    case 'call.speak.ended': {
-      logger({ callControlId, ended: event.event_type }, '[vm-cc] greeting ended; start recording');
-      if (!callControlId) return;
+      const sipUri = `sip:${found.user.sipUsername}@sip.telnyx.com`;
+      const transferState: ClientState = {
+        stage: 'transfer_pending',
+        callerCallId: callControlId,
+        fromNumber,
+        toNumber,
+      };
+      logger(
+        { callControlId, toNumber, fromNumber, sipUri, timeout: RING_TIMEOUT_SECS },
+        '[vm-cc] issuing transfer to SIP credential',
+      );
       await callControlAction(
         callControlId,
-        'record_start',
+        'transfer',
         {
-          format: 'mp3',
-          channels: 'single',
-          // Beep so the caller knows when to start talking — replaces
-          // the "after the tone" promise of the greeting.
-          play_beep: true,
-          // 5-minute cap on a single voicemail message. Telnyx aborts
-          // cleanly at this limit and fires recording.saved.
-          max_length: 300,
-          // 4-second silence detection so we hang up shortly after the
-          // caller stops speaking. Saves cost vs full 5min hold.
-          timeout_secs: 4,
+          to: sipUri,
+          from: fromNumber,
+          timeout_secs: RING_TIMEOUT_SECS,
+          client_state: encodeState(transferState),
         },
         logger,
       );
       break;
     }
 
-    // ────────────── 4. Recording saved — write voicemail row, hang up ─
+    // 2. Bridge succeeded - softphone picked up. Audio flowing.
+    case 'call.bridged': {
+      logger({ callControlId, stage: state?.stage }, '[vm-cc] call.bridged');
+      break;
+    }
+
+    // 3. Softphone answered, or we just answered the caller leg post-fail.
+    case 'call.answered': {
+      logger({ callControlId, stage: state?.stage }, '[vm-cc] call.answered');
+      if (!state) return;
+      if (state.stage === 'voicemail_active') {
+        const found = await findUserByDid(state.toNumber, logger);
+        if (!found) {
+          await callControlAction(
+            callControlId,
+            'speak',
+            {
+              payload: 'You have reached ACE Dialer. Please leave a message after the tone.',
+              voice: 'female',
+              language: 'en-US',
+              client_state: encodeState(state),
+            },
+            logger,
+          );
+        } else {
+          await playGreeting(callControlId, found.user, state, logger);
+        }
+      }
+      break;
+    }
+
+    // 4. Greeting finished -> start recording (with beep).
+    case 'call.playback.ended':
+    case 'call.speak.ended': {
+      logger(
+        { callControlId, ended: event.event_type, stage: state?.stage },
+        '[vm-cc] greeting ended; start recording',
+      );
+      if (!callControlId || state?.stage !== 'voicemail_active') return;
+      await callControlAction(
+        callControlId,
+        'record_start',
+        {
+          format: 'mp3',
+          channels: 'single',
+          play_beep: true,
+          max_length: 300,
+          timeout_secs: 4,
+          client_state: encodeState(state),
+        },
+        logger,
+      );
+      break;
+    }
+
+    // 5. Greeting just started - log cleanly (no longer "unhandled").
+    case 'call.playback.started':
+    case 'call.speak.started': {
+      logger(
+        { callControlId, started: event.event_type, stage: state?.stage },
+        '[vm-cc] greeting playing',
+      );
+      break;
+    }
+
+    // 6. Recording captured - write Voicemail row, hang up.
     case 'call.recording.saved': {
-      logger({ callControlId, payload }, '[vm-cc] recording.saved');
+      logger({ callControlId, stage: state?.stage }, '[vm-cc] recording.saved');
       if (!callControlId) return;
-      // Pull the recording URL — Telnyx may send mp3 array OR single URL.
+
       const rec = payload.recording_urls;
       let recordingUrl: string | null = null;
       if (rec && typeof rec === 'object' && !Array.isArray(rec) && Array.isArray(rec.mp3) && rec.mp3.length > 0) {
@@ -264,21 +387,8 @@ export async function handleVoicemailCallControlEvent(
         recordingUrl = payload.recording_url;
       }
 
-      // Recover to/from from client_state (set on answer above) — Telnyx
-      // doesn't always echo them on recording events.
-      let toNumber = (payload.to ?? '').toString();
-      let fromNumber = (payload.from ?? '').toString();
-      if ((!toNumber || !fromNumber) && payload.client_state) {
-        try {
-          const decoded = JSON.parse(
-            Buffer.from(String(payload.client_state), 'base64').toString('utf-8'),
-          );
-          if (!toNumber && decoded?.to) toNumber = String(decoded.to);
-          if (!fromNumber && decoded?.from) fromNumber = String(decoded.from);
-        } catch {
-          /* harmless — best-effort recovery */
-        }
-      }
+      const toNumber = state?.toNumber ?? (payload.to ?? '').toString();
+      const fromNumber = state?.fromNumber ?? (payload.from ?? '').toString();
 
       if (recordingUrl && toNumber) {
         const found = await findUserByDid(toNumber, logger);
@@ -292,35 +402,99 @@ export async function handleVoicemailCallControlEvent(
                 fromNumber,
                 toNumber,
                 recordingUrl,
-                durationSeconds: 0, // Telnyx may include later; Deepgram step backfills
+                durationSeconds: 0,
                 transcription: null,
                 receivedAt: new Date(),
               },
             });
-            logger({ userId: found.user.id, fromNumber, toNumber }, '[vm-cc] voicemail row created');
-            // Note: existing /webhooks/telnyx/calls handler also has its own
-            // voicemail logic for the OLD Hosted VM path (calls.voicemail.completed).
-            // Once admin disables Hosted VM and routes to this Call Control app,
-            // only this handler will fire — no double-write risk.
+            logger(
+              { userId: found.user.id, fromNumber, toNumber },
+              '[vm-cc] voicemail row created',
+            );
           } catch (e) {
-            logger({ err: e instanceof Error ? e.message : String(e) }, '[vm-cc] voicemail row insert failed');
+            logger(
+              { err: e instanceof Error ? e.message : String(e) },
+              '[vm-cc] voicemail row insert failed',
+            );
           }
         }
       }
 
-      // Hang up the call once we've saved the recording. play_beep on
-      // record_start already played the beep; nothing more to say.
-      await callControlAction(callControlId, 'hangup', {}, logger);
+      await callControlAction(
+        callControlId,
+        'hangup',
+        {
+          client_state: encodeState(
+            state ?? {
+              stage: 'voicemail_active',
+              callerCallId: callControlId,
+              fromNumber,
+              toNumber,
+            },
+          ),
+        },
+        logger,
+      );
       break;
     }
 
-    // ────────────── 5. Call ended — nothing to do ─────────────────────
+    // 7. Hangup - branch on which leg and what stage.
     case 'call.hangup': {
-      logger({ callControlId }, '[vm-cc] call.hangup (cleanup)');
+      const cause = (payload.hangup_cause ?? '').toString();
+      const source = (payload.hangup_source ?? '').toString();
+      logger(
+        { callControlId, stage: state?.stage, cause, source },
+        '[vm-cc] call.hangup',
+      );
+
+      if (
+        state?.stage === 'transfer_pending' &&
+        callControlId === state.callerCallId
+      ) {
+        logger({ callControlId, cause }, '[vm-cc] caller hung up during ring');
+        return;
+      }
+
+      const busyCauses = new Set(['user_busy', 'call_rejected']);
+      const noAnswerCauses = new Set([
+        'originator_cancel',
+        'no_answer',
+        'no_user_response',
+        'no_answer_timeout',
+        'normal_temporary_failure',
+        'recovery_on_timer_expire',
+      ]);
+      const dialLegFailedCauses = new Set([...busyCauses, ...noAnswerCauses]);
+
+      if (state?.stage === 'transfer_pending' && dialLegFailedCauses.has(cause)) {
+        const reason: 'busy' | 'no_answer' = busyCauses.has(cause) ? 'busy' : 'no_answer';
+        logger(
+          { callerCallId: state.callerCallId, cause, reason },
+          '[vm-cc] dial leg failed - falling to voicemail',
+        );
+        const vmState: ClientState = {
+          stage: 'voicemail_active',
+          callerCallId: state.callerCallId,
+          fromNumber: state.fromNumber,
+          toNumber: state.toNumber,
+          reason,
+        };
+        await callControlAction(
+          state.callerCallId,
+          'answer',
+          { client_state: encodeState(vmState) },
+          logger,
+        );
+        return;
+      }
+
       break;
     }
 
     default:
-      logger({ eventType: event.event_type }, '[vm-cc] unhandled event');
+      logger(
+        { eventType: event.event_type, stage: state?.stage },
+        '[vm-cc] unhandled event',
+      );
   }
 }

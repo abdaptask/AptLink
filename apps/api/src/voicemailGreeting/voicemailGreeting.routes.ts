@@ -1,22 +1,20 @@
-// Custom Voicemail Greeting.
+// Custom Voicemail Greeting API.
+//
+// v0.10.100 - Two greetings per user (no-answer + busy). The legacy
+// /voicemail-greeting endpoints (v0.10.99 single-greeting model) keep
+// working as aliases for the noanswer variant so v0.10.99 clients
+// continue to function during the rollout window.
 //
 // Flow:
-//   1. Client POSTs an audio file as base64 JSON (same pattern as
-//      /messages/upload for MMS).
+//   1. Client POSTs an audio file (or in-app recording Blob) as base64
+//      JSON to POST /voicemail-greeting/:type (type = noanswer | busy).
 //   2. We store the file in Supabase Storage (ace-media bucket) under
-//      voicemail-greetings/u{userId}/...
-//   3. We PATCH Telnyx with the greeting URL so callers hear the user's
-//      greeting on no-answer instead of the default Telnyx voice.
-//   4. We save the URL + filename on the User row.
+//      voicemail-greetings/u{userId}/{type}/...
+//   3. We save the URL + filename on the User row and flip mode='audio'.
 //
-// Telnyx phone_numbers/voicemail endpoint accepts a `greeting_audio_url`
-// field on PATCH (it doesn't on POST — the POST is for enabling). The
-// audio file must be publicly fetchable, which is why we use the public
-// Supabase bucket (same one MMS uses).
-//
-// DELETE removes the greeting — both from Telnyx (so it falls back to
-// default) and from the User row. The file in Supabase isn't deleted
-// (kept for audit; cheap to store). User can upload a new one to replace.
+// The Call Control voicemail webhook (apps/webhooks/src/voicemailCallControl.ts)
+// reads the active variant's URL/text/mode on each inbound voicemail-bound
+// call and plays the right greeting.
 
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
@@ -32,7 +30,6 @@ interface JwtPayload {
 const UploadSchema = z.object({
   filename: z.string().min(1).max(200),
   mimeType: z.string().min(1),
-  // Base64-encoded file contents. Caps at 2 MB (matches hold-music limit).
   dataBase64: z.string().min(1),
 });
 
@@ -48,79 +45,41 @@ const ALLOWED_MIMES = new Set([
   'audio/x-m4a',
   'audio/ogg',
   'audio/aac',
+  // v0.10.100 - MediaRecorder output (in-app recording).
+  'audio/webm',
 ]);
 
-// Lazy-resolve the Telnyx-side phone_number_id and cache on the User row.
-async function resolveTelnyxNumberId(
-  userId: number,
-  didNumber: string,
-): Promise<string | null> {
-  const user = await prisma.user.findUnique({ where: { id: userId } });
-  if (user?.telnyxNumberId) return user.telnyxNumberId;
-  if (!config.telnyxApiKey) return null;
-  const url = `https://api.telnyx.com/v2/phone_numbers?filter[phone_number]=${encodeURIComponent(didNumber)}&page[size]=10`;
-  const res = await fetch(url, {
-    headers: { Authorization: `Bearer ${config.telnyxApiKey}` },
-  });
-  if (!res.ok) return null;
-  const body = (await res.json().catch(() => ({}))) as {
-    data?: Array<{ id?: string; phone_number?: string }>;
-  };
-  const match = body.data?.find((d) => d.phone_number === didNumber);
-  if (!match?.id) return null;
-  await prisma.user.update({
-    where: { id: userId },
-    data: { telnyxNumberId: match.id },
-  });
-  return match.id;
+// v0.10.100 - Type-aware helpers map a 'noanswer' vs 'busy' request to
+// the corresponding User-row columns.
+type GreetingType = 'noanswer' | 'busy';
+
+interface GreetingColumns {
+  url: 'voicemailGreetingUrl' | 'voicemailBusyGreetingUrl';
+  filename: 'voicemailGreetingFilename' | 'voicemailBusyGreetingFilename';
+  text: 'voicemailGreetingText' | 'voicemailBusyGreetingText';
+  mode: 'voicemailGreetingMode' | 'voicemailBusyGreetingMode';
 }
 
-async function setTelnyxGreeting(
-  numberId: string,
-  greetingUrl: string | null,
-): Promise<{ ok: boolean; status: number; body: unknown }> {
-  if (!config.telnyxApiKey) {
-    return { ok: false, status: 0, body: 'TELNYX_API_KEY not set' };
-  }
-  const voicemailUrl = `https://api.telnyx.com/v2/phone_numbers/${encodeURIComponent(numberId)}/voicemail`;
-
-  // Telnyx's PATCH for voicemail validates the FULL document, not a partial.
-  // If we omit `pin` or `enabled` it 422s with "can't be blank". So first
-  // GET the current settings, then PATCH with all of them + the new
-  // greeting URL layered on top.
-  const getRes = await fetch(voicemailUrl, {
-    headers: { Authorization: `Bearer ${config.telnyxApiKey}` },
-  });
-  let currentPin = '1234'; // fallback if GET fails or pin missing
-  let currentEnabled = true;
-  if (getRes.ok) {
-    const j = (await getRes.json().catch(() => ({}))) as {
-      data?: { enabled?: boolean; pin?: string };
-    };
-    if (typeof j.data?.pin === 'string' && j.data.pin) currentPin = j.data.pin;
-    if (typeof j.data?.enabled === 'boolean') currentEnabled = j.data.enabled;
-  }
-
-  const res = await fetch(voicemailUrl, {
-    method: 'PATCH',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${config.telnyxApiKey}`,
-    },
-    body: JSON.stringify({
-      enabled: currentEnabled,
-      pin: currentPin,
-      greeting_audio_url: greetingUrl ?? '',
-    }),
-  });
-  const body = await res.json().catch(() => ({}));
-  return { ok: res.ok, status: res.status, body };
+const NOANSWER_COLS: GreetingColumns = {
+  url: 'voicemailGreetingUrl',
+  filename: 'voicemailGreetingFilename',
+  text: 'voicemailGreetingText',
+  mode: 'voicemailGreetingMode',
+};
+const BUSY_COLS: GreetingColumns = {
+  url: 'voicemailBusyGreetingUrl',
+  filename: 'voicemailBusyGreetingFilename',
+  text: 'voicemailBusyGreetingText',
+  mode: 'voicemailBusyGreetingMode',
+};
+function colsFor(type: GreetingType): GreetingColumns {
+  return type === 'busy' ? BUSY_COLS : NOANSWER_COLS;
 }
+
+const ALLOWED_TYPES = new Set<GreetingType>(['noanswer', 'busy']);
 
 export async function voicemailGreetingRoutes(app: FastifyInstance) {
-  // GET /voicemail-greeting — current saved greeting, if any.
-  // v0.10.99 — Now also returns the TTS text + active mode for the new
-  // Call Control voicemail flow. mode is 'audio' | 'tts' | 'default' | null.
+  // GET /voicemail-greeting - full state for BOTH variants.
   app.get(
     '/voicemail-greeting',
     { onRequest: [app.authenticate] },
@@ -133,63 +92,204 @@ export async function voicemailGreetingRoutes(app: FastifyInstance) {
           voicemailGreetingFilename: true,
           voicemailGreetingText: true,
           voicemailGreetingMode: true,
+          voicemailBusyGreetingUrl: true,
+          voicemailBusyGreetingFilename: true,
+          voicemailBusyGreetingText: true,
+          voicemailBusyGreetingMode: true,
         },
       });
       return {
+        // Legacy v0.10.99-shaped fields (noanswer mirror).
         url: row?.voicemailGreetingUrl ?? null,
         filename: row?.voicemailGreetingFilename ?? null,
         text: row?.voicemailGreetingText ?? null,
         mode: row?.voicemailGreetingMode ?? null,
+        noanswer: {
+          url: row?.voicemailGreetingUrl ?? null,
+          filename: row?.voicemailGreetingFilename ?? null,
+          text: row?.voicemailGreetingText ?? null,
+          mode: row?.voicemailGreetingMode ?? null,
+        },
+        busy: {
+          url: row?.voicemailBusyGreetingUrl ?? null,
+          filename: row?.voicemailBusyGreetingFilename ?? null,
+          text: row?.voicemailBusyGreetingText ?? null,
+          mode: row?.voicemailBusyGreetingMode ?? null,
+        },
       };
     },
   );
 
-  // v0.10.99 — PUT /voicemail-greeting/tts
-  // Save text-to-speech greeting. The Call Control webhook handler will
-  // call Telnyx /actions/speak with this text when an inbound call falls
-  // to voicemail (assuming voicemailGreetingMode='tts').
-  app.put(
-    '/voicemail-greeting/tts',
+  // PUT /voicemail-greeting/:type/tts
+  app.put<{ Params: { type: string } }>(
+    '/voicemail-greeting/:type/tts',
     { onRequest: [app.authenticate] },
-    async (request: FastifyRequest, reply) => {
+    async (request, reply) => {
       const u = request.user as JwtPayload;
-      const parsed = z.object({
-        text: z.string().trim().min(1).max(500),
-      }).safeParse(request.body);
+      const type = request.params.type as GreetingType;
+      if (!ALLOWED_TYPES.has(type)) {
+        return reply.code(400).send({ error: 'Invalid type (use noanswer or busy)' });
+      }
+      const parsed = z.object({ text: z.string().trim().min(1).max(500) }).safeParse(request.body);
       if (!parsed.success) {
+        return reply.code(400).send({ error: 'Invalid input', details: parsed.error.flatten() });
+      }
+      const c = colsFor(type);
+      const saved = await prisma.user.update({
+        where: { id: u.sub },
+        data: { [c.text]: parsed.data.text, [c.mode]: 'tts' },
+        select: { [c.text]: true, [c.mode]: true },
+      });
+      return {
+        text: (saved as Record<string, string | null>)[c.text],
+        mode: (saved as Record<string, string | null>)[c.mode],
+      };
+    },
+  );
+
+  // PUT /voicemail-greeting/:type/mode
+  app.put<{ Params: { type: string } }>(
+    '/voicemail-greeting/:type/mode',
+    { onRequest: [app.authenticate] },
+    async (request, reply) => {
+      const u = request.user as JwtPayload;
+      const type = request.params.type as GreetingType;
+      if (!ALLOWED_TYPES.has(type)) {
+        return reply.code(400).send({ error: 'Invalid type (use noanswer or busy)' });
+      }
+      const parsed = z.object({ mode: z.enum(['audio', 'tts', 'default']) }).safeParse(request.body);
+      if (!parsed.success) {
+        return reply.code(400).send({ error: 'Invalid mode (audio, tts, or default)' });
+      }
+      const c = colsFor(type);
+      const saved = await prisma.user.update({
+        where: { id: u.sub },
+        data: { [c.mode]: parsed.data.mode },
+        select: { [c.mode]: true },
+      });
+      return { mode: (saved as Record<string, string | null>)[c.mode] };
+    },
+  );
+
+  // POST /voicemail-greeting/:type - upload audio (file or recording).
+  app.post<{ Params: { type: string } }>(
+    '/voicemail-greeting/:type',
+    { onRequest: [app.authenticate] },
+    async (request, reply) => {
+      const u = request.user as JwtPayload;
+      const type = request.params.type as GreetingType;
+      if (!ALLOWED_TYPES.has(type)) {
+        return reply.code(400).send({ error: 'Invalid type (use noanswer or busy)' });
+      }
+      const parsed = UploadSchema.safeParse(request.body);
+      if (!parsed.success) {
+        return reply.code(400).send({ error: 'Invalid input', details: parsed.error.flatten() });
+      }
+      const { filename, mimeType, dataBase64 } = parsed.data;
+      const normalizedMime = mimeType.toLowerCase().split(';')[0].trim();
+      if (!ALLOWED_MIMES.has(normalizedMime)) {
         return reply.code(400).send({
-          error: 'Invalid input',
-          details: parsed.error.flatten(),
+          error: `Unsupported audio type: ${mimeType}. Use MP3, WAV, M4A, AAC, OGG, or WebM.`,
         });
       }
+      if (!config.supabaseUrl || !config.supabaseServiceKey) {
+        return reply.code(500).send({ error: 'Supabase Storage not configured' });
+      }
+
+      const bytes = Buffer.from(dataBase64, 'base64');
+      if (bytes.length > MAX_BYTES) {
+        return reply.code(413).send({ error: `File too large (max ${MAX_BYTES / 1024 / 1024} MB).` });
+      }
+
+      const safeName = filename.replace(/[^a-zA-Z0-9._-]/g, '_');
+      const objectPath = `voicemail-greetings/u${u.sub}/${type}/${Date.now()}_${safeName}`;
+      const uploadUrl = `${config.supabaseUrl}/storage/v1/object/${config.supabaseMediaBucket}/${objectPath}`;
+      const uploadRes = await fetch(uploadUrl, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${config.supabaseServiceKey}`,
+          'Content-Type': normalizedMime,
+          'x-upsert': 'true',
+        },
+        body: bytes,
+      });
+      if (!uploadRes.ok) {
+        const errText = await uploadRes.text().catch(() => '');
+        app.log.warn(
+          { status: uploadRes.status, errText, type },
+          '[vm-greeting] supabase upload failed',
+        );
+        return reply.code(502).send({ error: 'Storage upload failed', details: errText });
+      }
+      const publicUrl = `${config.supabaseUrl}/storage/v1/object/public/${config.supabaseMediaBucket}/${objectPath}`;
+
+      const c = colsFor(type);
       const saved = await prisma.user.update({
         where: { id: u.sub },
         data: {
-          voicemailGreetingText: parsed.data.text,
-          voicemailGreetingMode: 'tts',
+          [c.url]: publicUrl,
+          [c.filename]: filename,
+          [c.mode]: 'audio',
         },
+        select: { [c.url]: true, [c.filename]: true, [c.mode]: true },
+      });
+      app.log.info({ userId: u.sub, url: publicUrl, type }, '[vm-greeting] saved');
+      return {
+        url: (saved as Record<string, string | null>)[c.url],
+        filename: (saved as Record<string, string | null>)[c.filename],
+        mode: (saved as Record<string, string | null>)[c.mode],
+      };
+    },
+  );
+
+  // DELETE /voicemail-greeting/:type - remove one variant's audio.
+  app.delete<{ Params: { type: string } }>(
+    '/voicemail-greeting/:type',
+    { onRequest: [app.authenticate] },
+    async (request, reply) => {
+      const u = request.user as JwtPayload;
+      const type = request.params.type as GreetingType;
+      if (!ALLOWED_TYPES.has(type)) {
+        return reply.code(400).send({ error: 'Invalid type (use noanswer or busy)' });
+      }
+      const user = await prisma.user.findUnique({ where: { id: u.sub } });
+      if (!user) return reply.code(404).send({ error: 'User not found' });
+      const c = colsFor(type);
+      await prisma.user.update({
+        where: { id: u.sub },
+        data: { [c.url]: null, [c.filename]: null },
+      });
+      return { ok: true };
+    },
+  );
+
+  // ------ Legacy v0.10.99 shim endpoints (alias to noanswer). ------
+  app.put(
+    '/voicemail-greeting/tts',
+    { onRequest: [app.authenticate] },
+    async (request, reply) => {
+      const u = request.user as JwtPayload;
+      const parsed = z.object({ text: z.string().trim().min(1).max(500) }).safeParse(request.body);
+      if (!parsed.success) {
+        return reply.code(400).send({ error: 'Invalid input', details: parsed.error.flatten() });
+      }
+      const saved = await prisma.user.update({
+        where: { id: u.sub },
+        data: { voicemailGreetingText: parsed.data.text, voicemailGreetingMode: 'tts' },
         select: { voicemailGreetingText: true, voicemailGreetingMode: true },
       });
       return { text: saved.voicemailGreetingText, mode: saved.voicemailGreetingMode };
     },
   );
 
-  // v0.10.99 — PUT /voicemail-greeting/mode
-  // Switch active greeting mode without losing the configured TTS text
-  // OR audio URL. Lets users toggle between 'audio', 'tts', and 'default'
-  // (the stock fallback greeting).
   app.put(
     '/voicemail-greeting/mode',
     { onRequest: [app.authenticate] },
-    async (request: FastifyRequest, reply) => {
+    async (request, reply) => {
       const u = request.user as JwtPayload;
-      const parsed = z.object({
-        mode: z.enum(['audio', 'tts', 'default']),
-      }).safeParse(request.body);
+      const parsed = z.object({ mode: z.enum(['audio', 'tts', 'default']) }).safeParse(request.body);
       if (!parsed.success) {
-        return reply.code(400).send({
-          error: 'Invalid mode (must be audio, tts, or default)',
-        });
+        return reply.code(400).send({ error: 'Invalid mode (audio, tts, or default)' });
       }
       const saved = await prisma.user.update({
         where: { id: u.sub },
@@ -200,118 +300,13 @@ export async function voicemailGreetingRoutes(app: FastifyInstance) {
     },
   );
 
-  // POST /voicemail-greeting — replace the user's greeting with the uploaded audio.
-  app.post(
-    '/voicemail-greeting',
-    { onRequest: [app.authenticate] },
-    async (request: FastifyRequest, reply) => {
-      const u = request.user as JwtPayload;
-      const parsed = UploadSchema.safeParse(request.body);
-      if (!parsed.success) {
-        return reply
-          .code(400)
-          .send({ error: 'Invalid input', details: parsed.error.flatten() });
-      }
-      const { filename, mimeType, dataBase64 } = parsed.data;
-      if (!ALLOWED_MIMES.has(mimeType.toLowerCase())) {
-        return reply.code(400).send({
-          error: `Unsupported audio type: ${mimeType}. Use MP3, WAV, M4A, AAC, or OGG.`,
-        });
-      }
-      if (!config.supabaseUrl || !config.supabaseServiceKey) {
-        return reply.code(500).send({ error: 'Supabase Storage not configured' });
-      }
-
-      const bytes = Buffer.from(dataBase64, 'base64');
-      if (bytes.length > MAX_BYTES) {
-        return reply
-          .code(413)
-          .send({ error: `File too large (max ${MAX_BYTES / 1024 / 1024} MB).` });
-      }
-
-      // User's DID and Telnyx number id are required.
-      const user = await prisma.user.findUnique({ where: { id: u.sub } });
-      if (!user?.didNumber) {
-        return reply.code(400).send({
-          error: 'Your account has no DID assigned. Add a phone number first.',
-        });
-      }
-      const telnyxNumberId = await resolveTelnyxNumberId(u.sub, user.didNumber);
-      if (!telnyxNumberId) {
-        return reply.code(502).send({
-          error: 'Could not look up Telnyx phone number id.',
-        });
-      }
-
-      // Upload to Supabase Storage.
-      const safeName = filename.replace(/[^a-zA-Z0-9._-]/g, '_');
-      const objectPath = `voicemail-greetings/u${u.sub}/${Date.now()}_${safeName}`;
-      const uploadUrl = `${config.supabaseUrl}/storage/v1/object/${config.supabaseMediaBucket}/${objectPath}`;
-      const uploadRes = await fetch(uploadUrl, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${config.supabaseServiceKey}`,
-          'Content-Type': mimeType,
-          'x-upsert': 'true',
-        },
-        body: bytes,
-      });
-      if (!uploadRes.ok) {
-        const errText = await uploadRes.text().catch(() => '');
-        app.log.warn({ status: uploadRes.status, errText }, '[vm-greeting] supabase upload failed');
-        return reply.code(502).send({
-          error: 'Storage upload failed',
-          details: errText,
-        });
-      }
-      const publicUrl = `${config.supabaseUrl}/storage/v1/object/public/${config.supabaseMediaBucket}/${objectPath}`;
-
-      // Tell Telnyx to use this URL as the greeting.
-      const telnyx = await setTelnyxGreeting(telnyxNumberId, publicUrl);
-      if (!telnyx.ok) {
-        app.log.warn({ telnyx }, '[vm-greeting] Telnyx PATCH failed');
-        return reply.code(502).send({
-          error: 'Telnyx refused the greeting update',
-          telnyxStatus: telnyx.status,
-          telnyxBody: telnyx.body,
-        });
-      }
-
-      // Persist on the User row.
-      const saved = await prisma.user.update({
-        where: { id: u.sub },
-        data: {
-          voicemailGreetingUrl: publicUrl,
-          voicemailGreetingFilename: filename,
-        },
-        select: { voicemailGreetingUrl: true, voicemailGreetingFilename: true },
-      });
-      app.log.info(
-        { userId: u.sub, url: publicUrl },
-        '[vm-greeting] saved',
-      );
-      return {
-        url: saved.voicemailGreetingUrl,
-        filename: saved.voicemailGreetingFilename,
-      };
-    },
-  );
-
-  // DELETE /voicemail-greeting — revert to Telnyx default greeting.
   app.delete(
     '/voicemail-greeting',
     { onRequest: [app.authenticate] },
-    async (request: FastifyRequest, reply) => {
+    async (request, reply) => {
       const u = request.user as JwtPayload;
       const user = await prisma.user.findUnique({ where: { id: u.sub } });
       if (!user) return reply.code(404).send({ error: 'User not found' });
-      if (user.didNumber) {
-        const telnyxNumberId = await resolveTelnyxNumberId(u.sub, user.didNumber);
-        if (telnyxNumberId) {
-          // Fire-and-forget — even if Telnyx is slow, we clear our DB row.
-          await setTelnyxGreeting(telnyxNumberId, null).catch(() => undefined);
-        }
-      }
       await prisma.user.update({
         where: { id: u.sub },
         data: { voicemailGreetingUrl: null, voicemailGreetingFilename: null },
