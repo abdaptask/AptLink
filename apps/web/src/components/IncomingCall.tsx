@@ -183,7 +183,7 @@ export default function IncomingCall() {
               >
                 <MessageSquare size={28} />
               </button>
-              <div className="incoming-action-label">Reply</div>
+              <div className="incoming-action-label">Reply with Text</div>
             </div>
           )}
           <div className="incoming-action-stack">
