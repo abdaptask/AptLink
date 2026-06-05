@@ -22,7 +22,7 @@ import {
 
 // Hard-coded so the export filename has a version stamp. Bump when bumping
 // the rest of the version-bumped files.
-const APP_VERSION = '0.10.92';
+const APP_VERSION = '0.10.93';
 
 export default function DiagnosticsSection() {
   const [bufferSize, setBufferSize] = useState<number>(0);

@@ -299,7 +299,11 @@ const SECTIONS: SectionDef[] = [
   // v0.10.52 — Tenant SMS templates (admin only).
   { key: 'sms-templates', category: 'Admin', label: 'SMS templates', icon: MessageSquare, blurb: 'Curate the recruiter SMS playbook for all users', Component: SmsTemplatesAdminSection, adminOnly: true },
   // v0.10.74 — Admin Praise / Announcements.
-  { key: 'praise', category: 'Admin', label: 'Send praise', icon: Sparkles, blurb: 'Celebrate a new hire, offer, birthday, anniversary — one user or broadcast', Component: PraiseAdminSection, adminOnly: true },
+  // v0.10.93 — Repurposed from "Send praise" into a full Broadcast tool.
+  // Same underlying flow (PraiseAdminSection function + Praise DB model)
+  // but now covers celebrations, announcements, alerts, reminders, and
+  // welcomes — all the things admin needs to communicate to the fleet.
+  { key: 'praise', category: 'Admin', label: 'Broadcast', icon: Sparkles, blurb: 'Send announcements, alerts, reminders, welcomes, or celebrations — one user or broadcast to everyone', Component: PraiseAdminSection, adminOnly: true },
   // v0.10.92 — Feature tips admin. Toggle built-in tips on/off and add custom ones.
   { key: 'tips-admin', category: 'Admin', label: 'Feature tips', icon: Sparkles, blurb: 'Curate the rotating tips shown to users on every screen', Component: TipsAdminSection, adminOnly: true },
   // v0.10.76 — Admin-uploaded ringtones (tenant-wide library).
@@ -6674,40 +6678,63 @@ function PraiseAdminSection() {
     setHistory((prev) => prev.filter((p) => p.id !== praiseId));
   }
 
-  const categoryLabel = (c: PraiseCategoryUI): string => {
-    switch (c) {
-      case 'new_hire': return 'New hire';
-      case 'new_offer': return 'New offer';
-      case 'birthday': return 'Birthday';
-      case 'anniversary': return 'Anniversary';
-      case 'custom': return 'Custom';
-    }
+  // v0.10.93 — Just pull from BROADCAST_META now that we have 15 categories.
+  // Falls back gracefully if a row has an unknown category from a future
+  // version (e.g. database has a category we don't recognize in this build).
+  const categoryLabel = (c: PraiseCategoryUI | string): string => {
+    return BROADCAST_META[c as PraiseCategoryUI]?.label ?? `(${c})`;
   };
 
   return (
     <div className="settings-section praise-admin">
       <p className="settings-blurb">
-        Send a celebratory pop-up to one user or broadcast to everyone.
-        Recipients see a big modal next time they\'re idle in the dialer
+        Send a pop-up message to one user or broadcast to everyone.
+        Recipients see a big modal next time they're idle in the dialer
         (mid-call recipients see it after the call ends). One-way — no
-        replies. Use for new hires, new offers, birthdays, work
-        anniversaries, or any custom shout-out.
+        replies. Use for celebrations (new hires, offers, birthdays,
+        anniversaries), announcements (version updates, maintenance,
+        office closures, policy changes), alerts (urgent notices,
+        service outages), reminders (deadlines, training), and
+        welcomes (onboarding).
       </p>
 
       <div className="praise-admin-form">
+        {/* v0.10.93 — Category dropdown grouped by type. Five groups:
+            Celebrations (existing praise), Announcements, Alerts,
+            Reminders, Welcomes. Each option's default headline appears
+            in the Headline field below the moment it's selected. */}
         <label className="fav-modal-field">
           <span className="fav-modal-label">Category</span>
           <select
             className="fav-modal-input"
             value={category}
-            onChange={(e) => setCategory(e.target.value as PraiseCategoryUI)}
+            onChange={(e) => {
+              const next = e.target.value as PraiseCategoryUI;
+              setCategory(next);
+              // Auto-suggest headline + clear stale message when admin
+              // switches category groups (e.g. moving from celebration
+              // to alert — old message no longer makes sense).
+              const meta = BROADCAST_META[next];
+              setHeadline(''); // clear so the new default headline shows in preview
+              if (!message.trim() || BROADCAST_META[category].messagePlaceholder === message.trim()) {
+                // optional: clear if it was still the placeholder
+              }
+              // Note: we don't auto-populate message. Admin still writes
+              // it; the placeholder gives them a starting point.
+            }}
             disabled={sending}
           >
-            <option value="new_offer">New offer</option>
-            <option value="new_hire">New hire</option>
-            <option value="birthday">Birthday</option>
-            <option value="anniversary">Work anniversary</option>
-            <option value="custom">Custom</option>
+            {(['Celebrations', 'Announcements', 'Alerts', 'Reminders', 'Welcomes'] as const).map((groupName) => {
+              const optionsInGroup = (Object.entries(BROADCAST_META) as Array<[PraiseCategoryUI, BroadcastCategoryMeta]>)
+                .filter(([, m]) => m.group === groupName);
+              return (
+                <optgroup key={groupName} label={groupName}>
+                  {optionsInGroup.map(([value, m]) => (
+                    <option key={value} value={value}>{m.label}</option>
+                  ))}
+                </optgroup>
+              );
+            })}
           </select>
         </label>
 
@@ -6783,20 +6810,17 @@ function PraiseAdminSection() {
             className="fav-modal-input"
             value={headline}
             onChange={(e) => setHeadline(e.target.value)}
-            placeholder={
-              category === 'new_hire' ? `e.g. Great work${recipientName ? ', ' + recipientName.split(' ')[0] : ''}! Another placement landed.` :
-              category === 'new_offer' ? `e.g. Congrats${recipientName ? ' ' + recipientName.split(' ')[0] : ''} — new offer secured!` :
-              category === 'birthday' ? `e.g. Happy birthday${recipientName ? ' ' + recipientName.split(' ')[0] : ''}!` :
-              category === 'anniversary' ? `e.g. ${recipientName ? recipientName.split(' ')[0] + ' — ' : ''}happy work anniversary` :
-              'Write whatever fits the occasion'
-            }
+            // v0.10.93 — Headline placeholder pulls the category's default
+            // headline straight from BROADCAST_META. Admin can override
+            // freely; blank → recipient sees the default.
+            placeholder={`e.g. ${BROADCAST_META[category].defaultHeadline}${recipientName ? ' ' + recipientName.split(' ')[0] : ''}`}
             disabled={sending}
             maxLength={120}
           />
           <span className="muted small" style={{ marginTop: 4, display: 'block' }}>
-            Leave blank to use the default for this category. Customize when the
-            default doesn't fit — e.g. praising the recruiter for a new hire
-            instead of welcoming the new hire themselves.
+            Leave blank to use the default headline for <strong>{BROADCAST_META[category].label}</strong>:
+            "{BROADCAST_META[category].defaultHeadline}".
+            Customize when the default doesn't fit.
           </span>
         </label>
 
@@ -6806,13 +6830,8 @@ function PraiseAdminSection() {
             className="fav-modal-input"
             value={message}
             onChange={(e) => setMessage(e.target.value)}
-            placeholder={
-              category === 'new_offer' ? 'on your offer with Mphasis - Puneeth' :
-              category === 'new_hire' ? 'Welcome to ApTask! Excited to have you on the team.' :
-              category === 'birthday' ? 'Hope you have an amazing day 🎂' :
-              category === 'anniversary' ? '3 years at ApTask today — thank you for everything!' :
-              'Write a short, celebratory message…'
-            }
+            // v0.10.93 — Message placeholder also from BROADCAST_META.
+            placeholder={BROADCAST_META[category].messagePlaceholder}
             rows={3}
             disabled={sending}
           />
@@ -6847,13 +6866,18 @@ function PraiseAdminSection() {
                 marginBottom: 8,
               }}>
                 {headline.trim() || (() => {
-                  // Match PraiseModal's fallback: category headline + recipientName
-                  const base = category === 'new_hire' ? 'Welcome aboard'
-                    : category === 'new_offer' ? 'New offer!'
-                    : category === 'birthday' ? 'Happy birthday'
-                    : category === 'anniversary' ? 'Work anniversary'
-                    : 'A note from the team';
-                  return recipientName.trim() ? `${base} ${recipientName.trim()}` : base;
+                  // v0.10.93 — Match PraiseModal's fallback exactly. BROADCAST_META
+                  // is the source of truth for default headline per category.
+                  // For celebration-style categories we still append the
+                  // recipientName (legacy behavior); for announcements/alerts/
+                  // reminders/welcomes we don't (e.g. "Service notice Loretta"
+                  // would read awkwardly).
+                  const meta = BROADCAST_META[category];
+                  const base = meta.defaultHeadline;
+                  const isCelebration = meta.group === 'Celebrations';
+                  return isCelebration && recipientName.trim()
+                    ? `${base} ${recipientName.trim()}`
+                    : base;
                 })()}
               </div>
               <div style={{
@@ -6930,7 +6954,48 @@ function PraiseAdminSection() {
 
 // Local type alias matching the API. Mirrored here so this file's imports
 // stay tight; the source-of-truth is PraiseCategory in api.ts.
-type PraiseCategoryUI = 'new_hire' | 'new_offer' | 'birthday' | 'anniversary' | 'custom';
+// v0.10.93 — Broadcast categories. Mirrors PraiseCategory from api.ts.
+// Originally only celebration variants; now spans Celebrations, Announcements,
+// Alerts, Reminders, and Welcomes.
+type PraiseCategoryUI =
+  | 'new_hire' | 'new_offer' | 'birthday' | 'anniversary' | 'custom'
+  | 'announcement' | 'update_required' | 'maintenance' | 'holiday' | 'policy_update'
+  | 'alert_urgent' | 'service_outage'
+  | 'reminder' | 'training'
+  | 'welcome';
+
+// Metadata used by the admin Broadcast form: label, group, default
+// headline, and placeholder message. The PraiseModal has the
+// authoritative icon/accent map — this metadata is just for the admin
+// composer dropdown + suggested copy.
+type BroadcastCategoryMeta = {
+  label: string;
+  group: 'Celebrations' | 'Announcements' | 'Alerts' | 'Reminders' | 'Welcomes';
+  defaultHeadline: string;
+  messagePlaceholder: string;
+};
+const BROADCAST_META: Record<PraiseCategoryUI, BroadcastCategoryMeta> = {
+  // Celebrations
+  new_hire:    { label: 'New hire',         group: 'Celebrations', defaultHeadline: 'Welcome aboard',       messagePlaceholder: 'Welcome to ApTask! Excited to have you on the team.' },
+  new_offer:   { label: 'New offer',        group: 'Celebrations', defaultHeadline: 'New offer!',           messagePlaceholder: 'on your offer with Mphasis — Puneeth' },
+  birthday:    { label: 'Birthday',         group: 'Celebrations', defaultHeadline: 'Happy birthday',       messagePlaceholder: 'Hope you have an amazing day 🎂' },
+  anniversary: { label: 'Work anniversary', group: 'Celebrations', defaultHeadline: 'Work anniversary',     messagePlaceholder: '3 years at ApTask today — thank you for everything!' },
+  custom:      { label: 'Custom praise',    group: 'Celebrations', defaultHeadline: 'A note from the team', messagePlaceholder: 'Write a short, celebratory message…' },
+  // Announcements
+  announcement:    { label: 'General announcement', group: 'Announcements', defaultHeadline: 'Announcement',              messagePlaceholder: 'Share what the team needs to know.' },
+  update_required: { label: 'Update required',      group: 'Announcements', defaultHeadline: 'Please update your dialer', messagePlaceholder: 'Quit and reopen ACE Dialer to install the latest version. Lots of fixes for connection stability — worth doing today.' },
+  maintenance:     { label: 'Maintenance window',   group: 'Announcements', defaultHeadline: 'Scheduled maintenance',     messagePlaceholder: 'We\'ll be doing maintenance on the phone system from 9–10 PM tonight. Calls may briefly be unavailable.' },
+  holiday:         { label: 'Holiday / office closure', group: 'Announcements', defaultHeadline: 'Office closed',         messagePlaceholder: 'The office will be closed on Monday for Memorial Day. Calls will continue to route normally.' },
+  policy_update:   { label: 'Policy update',        group: 'Announcements', defaultHeadline: 'Policy update',             messagePlaceholder: 'New policy effective Monday — please read the updated SOP in the shared drive.' },
+  // Alerts
+  alert_urgent:   { label: 'Urgent alert',  group: 'Alerts', defaultHeadline: 'Important — please read', messagePlaceholder: 'Something urgent the team needs to know NOW.' },
+  service_outage: { label: 'Service notice', group: 'Alerts', defaultHeadline: 'Service notice',         messagePlaceholder: 'Telnyx is experiencing a partial outage. Calls may be intermittent for the next hour.' },
+  // Reminders
+  reminder: { label: 'Generic reminder',  group: 'Reminders', defaultHeadline: 'Reminder',         messagePlaceholder: 'Don\'t forget timesheets are due by EOD Friday.' },
+  training: { label: 'Training reminder', group: 'Reminders', defaultHeadline: 'Training session', messagePlaceholder: 'Training session at 3 PM EST today — Zoom link in your calendar.' },
+  // Welcomes
+  welcome: { label: 'Welcome', group: 'Welcomes', defaultHeadline: 'Welcome to the team', messagePlaceholder: 'A short welcome note for someone joining the team.' },
+};
 
 function WhatsNewSection() {
   return (

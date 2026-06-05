@@ -22,10 +22,30 @@ interface JwtPayload {
   isAdmin: boolean;
 }
 
-// Valid category values. Mirrored on the frontend in praise icon mapping.
-// Adding a new category here requires adding the icon + headline mapping
-// in apps/web/src/components/PraiseModal.tsx (see the CATEGORY_META map).
-const CATEGORY_VALUES = ['new_hire', 'new_offer', 'birthday', 'anniversary', 'custom'] as const;
+// Valid category values. Mirrored on the frontend in PraiseModal's
+// CATEGORY_META map and in Settings.tsx's BroadcastAdminSection grouping.
+//
+// v0.10.93 — Repurposed from a praise-only system into a general
+// broadcast platform. The DB table and code paths still use the
+// `Praise` model name for compatibility, but the UI is now branded
+// "Broadcast" and supports five category groups (Celebrations,
+// Announcements, Alerts, Reminders, Welcomes). When adding a new
+// category, add it to all THREE locations:
+//   1. This CATEGORY_VALUES list
+//   2. apps/web/src/api.ts -- PraiseCategory type
+//   3. apps/web/src/components/PraiseModal.tsx -- CATEGORY_META map
+const CATEGORY_VALUES = [
+  // Celebrations (legacy praise categories)
+  'new_hire', 'new_offer', 'birthday', 'anniversary', 'custom',
+  // v0.10.93 — Announcements
+  'announcement', 'update_required', 'maintenance', 'holiday', 'policy_update',
+  // v0.10.93 — Alerts
+  'alert_urgent', 'service_outage',
+  // v0.10.93 — Reminders
+  'reminder', 'training',
+  // v0.10.93 — Welcomes
+  'welcome',
+] as const;
 type Category = typeof CATEGORY_VALUES[number];
 
 const CreatePraiseSchema = z.object({

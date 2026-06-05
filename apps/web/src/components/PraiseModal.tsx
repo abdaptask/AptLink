@@ -14,20 +14,76 @@
 // Mounted once at the Layout level so it's available on every tab.
 
 import { useEffect, useRef, useState } from 'react';
-import { PartyPopper, Cake, Award, UserPlus, Star, X } from 'lucide-react';
+import {
+  PartyPopper, Cake, Award, UserPlus, Star, X,
+  Megaphone, RefreshCw, Wrench, TreePine, Clipboard,
+  AlertTriangle, AlertOctagon, Bell, GraduationCap, Hand,
+} from 'lucide-react';
 import { listMyPraises, markPraiseRead, type Praise, type PraiseCategory } from '../api';
 import { useSip } from '../contexts/SipContext';
 
-// Icon + default headline per category. Customizable later if needed.
-// Keep this in sync with the CATEGORY_VALUES list in
-// apps/api/src/praises/praises.routes.ts.
-const CATEGORY_META: Record<PraiseCategory, { icon: typeof PartyPopper; headline: string; accent: string }> = {
-  new_hire: { icon: UserPlus, headline: 'Welcome aboard', accent: '#0a84ff' },
-  new_offer: { icon: Star, headline: 'New offer!', accent: '#34c759' },
-  birthday: { icon: Cake, headline: 'Happy birthday', accent: '#ff2d55' },
-  anniversary: { icon: Award, headline: 'Work anniversary', accent: '#ffcc00' },
-  custom: { icon: PartyPopper, headline: 'A note from the team', accent: '#af52de' },
+// v0.10.93 — Broadcast metadata.
+//
+// Each category has:
+//   icon     — Lucide React component shown in the modal's circle icon
+//   headline — default text the recipient sees if admin doesn't override
+//   accent   — primary color (icon background + border accent)
+//   group    — visual grouping ('celebration' | 'announcement' | 'alert' |
+//              'reminder' | 'welcome'). Drives the modal's overall mood —
+//              alerts get red borders, celebrations get festive treatment,
+//              reminders get amber prominence, etc.
+//
+// Keep this in sync with:
+//   - apps/api/src/praises/praises.routes.ts CATEGORY_VALUES
+//   - apps/web/src/api.ts PraiseCategory type
+//   - apps/web/src/pages/Settings.tsx CATEGORY_LABELS + BroadcastAdminSection grouping
+type CategoryGroup = 'celebration' | 'announcement' | 'alert' | 'reminder' | 'welcome';
+
+const CATEGORY_META: Record<PraiseCategory, {
+  icon: typeof PartyPopper;
+  headline: string;
+  accent: string;
+  group: CategoryGroup;
+}> = {
+  // ── Celebrations ───────────────────────────────────────────────────
+  new_hire:    { icon: UserPlus,    headline: 'Welcome aboard',         accent: '#0a84ff', group: 'celebration' },
+  new_offer:   { icon: Star,        headline: 'New offer!',             accent: '#34c759', group: 'celebration' },
+  birthday:    { icon: Cake,        headline: 'Happy birthday',         accent: '#ff2d55', group: 'celebration' },
+  anniversary: { icon: Award,       headline: 'Work anniversary',       accent: '#ffcc00', group: 'celebration' },
+  custom:      { icon: PartyPopper, headline: 'A note from the team',   accent: '#af52de', group: 'celebration' },
+  // ── Announcements ──────────────────────────────────────────────────
+  announcement:    { icon: Megaphone, headline: 'Announcement',              accent: '#0a84ff', group: 'announcement' },
+  update_required: { icon: RefreshCw, headline: 'Please update your dialer', accent: '#5e5ce6', group: 'announcement' },
+  maintenance:     { icon: Wrench,    headline: 'Scheduled maintenance',     accent: '#64748b', group: 'announcement' },
+  holiday:         { icon: TreePine,  headline: 'Office closed',             accent: '#14b8a6', group: 'announcement' },
+  policy_update:   { icon: Clipboard, headline: 'Policy update',             accent: '#6366f1', group: 'announcement' },
+  // ── Alerts ─────────────────────────────────────────────────────────
+  alert_urgent:    { icon: AlertTriangle, headline: 'Important — please read', accent: '#dc2626', group: 'alert' },
+  service_outage:  { icon: AlertOctagon,  headline: 'Service notice',          accent: '#ea580c', group: 'alert' },
+  // ── Reminders ──────────────────────────────────────────────────────
+  reminder: { icon: Bell,           headline: 'Reminder',           accent: '#f59e0b', group: 'reminder' },
+  training: { icon: GraduationCap,  headline: 'Training session',   accent: '#0891b2', group: 'reminder' },
+  // ── Welcomes ───────────────────────────────────────────────────────
+  welcome:  { icon: Hand, headline: 'Welcome to the team', accent: '#f97316', group: 'welcome' },
 };
+
+// Per-group visual treatment for the modal container itself.
+//   alert   → red border ring (draws extra attention)
+//   announcement → subtle blue accent border
+//   reminder → amber accent
+//   celebration / welcome → no extra ring (the icon color carries the mood)
+function modalContainerStyle(group: CategoryGroup): React.CSSProperties {
+  switch (group) {
+    case 'alert':
+      return { boxShadow: '0 0 0 2px rgba(220, 38, 38, 0.35), 0 8px 32px rgba(15, 23, 42, 0.25)' };
+    case 'announcement':
+      return { boxShadow: '0 0 0 1px rgba(10, 132, 255, 0.25), 0 8px 32px rgba(15, 23, 42, 0.18)' };
+    case 'reminder':
+      return { boxShadow: '0 0 0 1px rgba(245, 158, 11, 0.30), 0 8px 32px rgba(15, 23, 42, 0.18)' };
+    default:
+      return {};
+  }
+}
 
 interface PraiseModalProps {
   /** Optional ref-style polling tick. When the parent dispatches the
@@ -115,6 +171,10 @@ export default function PraiseModal({}: PraiseModalProps) {
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-labelledby="praise-modal-headline"
+        // v0.10.93 — per-category-group visual treatment. Alerts get an
+        // attention-grabbing red ring; reminders amber; announcements
+        // blue; celebrations/welcomes use the standard shadow.
+        style={modalContainerStyle(meta.group)}
       >
         <button
           type="button"

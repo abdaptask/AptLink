@@ -24,6 +24,16 @@ export interface ReleaseEntry {
 
 export const WHATS_NEW: ReleaseEntry[] = [
   {
+    version: '0.10.93',
+    date: 'June 5, 2026',
+    highlight: 'Send praise expanded into a full Broadcast system — 15 categories across 5 type groups',
+    changes: [
+      { type: 'new', text: 'Settings → Admin → "Send praise" is now Settings → Admin → "Broadcast." Same flow, same recipient experience, but the category dropdown now includes 15 options across 5 groups: Celebrations (new hire, new offer, birthday, anniversary, custom), Announcements (general, update required, maintenance, holiday, policy update), Alerts (urgent, service outage), Reminders (general, training), and Welcomes. Each category has its own icon, default headline, and color treatment in the recipient modal. Urgent alerts get a red ring around the modal for extra attention.' },
+      { type: 'new', text: 'Use cases the Broadcast system now covers: "please update to the latest version," "maintenance window 9–10 PM tonight," "Memorial Day office closure," "new SOP — please review," "Telnyx service degradation in effect," "training session at 3 PM," "happy Diwali," "welcome our new colleague," and the existing recruitment celebrations.' },
+      { type: 'improved', text: 'Live preview pane on the Broadcast composer now reflects the selected category\'s default headline correctly. The recipient name is only auto-appended to the headline for Celebrations (it would read awkwardly on an announcement like "Service notice Loretta").' },
+    ],
+  },
+  {
     version: '0.10.92',
     date: 'June 5, 2026',
     highlight: 'Floating Did-You-Know tips + Message quality on the Quality & Health page',
