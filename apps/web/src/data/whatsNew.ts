@@ -24,6 +24,16 @@ export interface ReleaseEntry {
 
 export const WHATS_NEW: ReleaseEntry[] = [
   {
+    version: '0.10.92',
+    date: 'June 5, 2026',
+    highlight: 'Floating Did-You-Know tips + Message quality on the Quality & Health page',
+    changes: [
+      { type: 'new', text: 'A floating "Did you know?" tip appears on every screen of the dialer. Each tip stays visible for at least 10 seconds, then auto-rotates to the next one. We ship with 20 curated tips covering scheduling SMS, blocking numbers, voicemail transcripts, hold music, diagnostics, microphone selection, and more. Dismiss the X to hide for the session; click the chevron to skip ahead. Tips are suppressed during active calls.' },
+      { type: 'new', text: 'Admin → Feature tips section lets you toggle built-in tips on/off and author your own custom tips with title, body, and an emoji icon. Custom tips can be marked Admin-only so they don\'t appear to regular users.' },
+      { type: 'new', text: 'Quality & Health report now includes Message metrics alongside the existing call metrics. See outbound delivery rate, sent/delivered/failed/undelivered counts, and click into any failure cause to see the exact recipient numbers + timestamps. Common Telnyx error codes are now annotated with human-readable explanations.' },
+    ],
+  },
+  {
     version: '0.10.91',
     date: 'June 5, 2026',
     highlight: 'Cleanup + UX polish — fewer settings entries, sortable users, all times in EST',

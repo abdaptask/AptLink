@@ -1826,6 +1826,74 @@ export async function deletePraise(token: string, id: number): Promise<{ ok: boo
   return body as { ok: boolean };
 }
 
+// v0.10.92 — Feature Tips. Used by TipBanner (rotating floating card) +
+// the admin Tips management page.
+export interface Tip {
+  id: number;
+  title: string;
+  body: string;
+  icon: string | null;
+  adminOnly: boolean;
+  isBuiltIn: boolean;
+}
+export interface AdminTip extends Tip {
+  isEnabled: boolean;
+  createdAt: string;
+  createdBy?: { id: number; firstName: string | null; lastName: string | null; email: string } | null;
+}
+export async function listMyTips(token: string): Promise<Tip[]> {
+  const res = await fetch(`${API_URL}/me/tips`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) return [];
+  const body = (await res.json().catch(() => ({}))) as { tips?: Tip[] };
+  return body.tips ?? [];
+}
+export async function listAdminTips(token: string): Promise<AdminTip[]> {
+  const res = await fetch(`${API_URL}/admin/tips`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) return [];
+  const body = (await res.json().catch(() => ({}))) as { tips?: AdminTip[] };
+  return body.tips ?? [];
+}
+export async function createTip(
+  token: string,
+  input: { title: string; body: string; icon?: string; adminOnly?: boolean },
+): Promise<AdminTip | { error: string }> {
+  const res = await fetch(`${API_URL}/admin/tips`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify(input),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) return { error: (body as { error?: string }).error ?? `HTTP ${res.status}` };
+  return body as AdminTip;
+}
+export async function updateTip(
+  token: string,
+  id: number,
+  input: Partial<{ title: string; body: string; icon: string | null; adminOnly: boolean; isEnabled: boolean }>,
+): Promise<AdminTip | { error: string }> {
+  const res = await fetch(`${API_URL}/admin/tips/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify(input),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) return { error: (body as { error?: string }).error ?? `HTTP ${res.status}` };
+  return body as AdminTip;
+}
+export async function deleteTip(token: string, id: number): Promise<{ ok: boolean; error?: string }> {
+  const res = await fetch(`${API_URL}/admin/tips/${id}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) return { ok: false, error: (body as { error?: string }).error ?? `HTTP ${res.status}` };
+  return body as { ok: boolean };
+}
+
 // v0.10.59 — Scheduled messages (one-off).
 export interface ScheduledMessage {
   id: number;
@@ -2511,6 +2579,25 @@ export interface QualityReport {
   hangupCauses: Array<{ cause: string; count: number }>;
   totals: { shortCalls: number; totalCalls: number };
   heatmap: number[][]; // 7 rows (days, 0=Sun) x 24 cols (hours UTC)
+  // v0.10.92 — Message quality merged into the same report. Frontend
+  // renders this in the same Quality & Health page alongside calls.
+  messages?: {
+    totalMessages: number;
+    byStatus: Record<string, number>;
+    outboundCount: number;
+    outboundFailures: number;
+    outboundDeliveryRate: number;
+    failureCauses: Array<{
+      cause: string;
+      count: number;
+      samples: Array<{
+        id: number;
+        toNumber: string;
+        sentAt: string;
+        errorCode: string | null;
+      }>;
+    }>;
+  };
 }
 
 export async function getQualityReport(token: string, range: '7d' | '30d' = '7d'): Promise<QualityReport> {

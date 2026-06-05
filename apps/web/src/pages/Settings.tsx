@@ -96,6 +96,12 @@ import {
   createPraise,
   deletePraise,
   type Praise,
+  // v0.10.92 — Feature Tips admin management.
+  listAdminTips,
+  createTip,
+  updateTip,
+  deleteTip,
+  type AdminTip,
   // v0.10.76 — Admin-uploaded ringtones.
   listMyRingtones,
   listAdminRingtones,
@@ -294,6 +300,8 @@ const SECTIONS: SectionDef[] = [
   { key: 'sms-templates', category: 'Admin', label: 'SMS templates', icon: MessageSquare, blurb: 'Curate the recruiter SMS playbook for all users', Component: SmsTemplatesAdminSection, adminOnly: true },
   // v0.10.74 — Admin Praise / Announcements.
   { key: 'praise', category: 'Admin', label: 'Send praise', icon: Sparkles, blurb: 'Celebrate a new hire, offer, birthday, anniversary — one user or broadcast', Component: PraiseAdminSection, adminOnly: true },
+  // v0.10.92 — Feature tips admin. Toggle built-in tips on/off and add custom ones.
+  { key: 'tips-admin', category: 'Admin', label: 'Feature tips', icon: Sparkles, blurb: 'Curate the rotating tips shown to users on every screen', Component: TipsAdminSection, adminOnly: true },
   // v0.10.76 — Admin-uploaded ringtones (tenant-wide library).
   { key: 'ringtones-admin', category: 'Admin', label: 'Ringtones', icon: Bell, blurb: 'Upload custom ringtones — every user can pick from the list', Component: RingtonesAdminSection, adminOnly: true },
   // v0.10.51 — Admin view of all users' blocked numbers + override.
@@ -5249,8 +5257,178 @@ function QualitySection() {
           </React.Fragment>
         ))}
       </div>
+
+      {/* v0.10.92 — Message quality + health section. Same time window as
+          the call quality data above. Shows aggregate counts, outbound
+          delivery rate, and a drill-down list of failure causes with
+          sample messages so admin can see WHICH numbers failed. */}
+      {data.messages && (
+        <MessagesQualityBlock messages={data.messages} />
+      )}
     </div>
   );
+}
+
+// v0.10.92 — Renders the message-side metrics of the Quality & Health
+// report. Separated from QualitySection for readability; takes only the
+// `messages` sub-object as a prop so it's easy to test in isolation.
+function MessagesQualityBlock({ messages }: { messages: NonNullable<QualityReport['messages']> }) {
+  const [expandedCause, setExpandedCause] = useState<string | null>(null);
+  const deliveryPct = (messages.outboundDeliveryRate * 100).toFixed(1);
+  const failureRatePct = messages.outboundCount > 0
+    ? ((messages.outboundFailures / messages.outboundCount) * 100).toFixed(1)
+    : '0.0';
+
+  return (
+    <div className="quality-messages" style={{ marginTop: 28, paddingTop: 24, borderTop: '1px solid var(--border, #e2e8f0)' }}>
+      <h4 style={{ marginBottom: 4 }}>Message quality &amp; health</h4>
+      <p className="muted small" style={{ marginTop: 0, marginBottom: 14 }}>
+        SMS sent + received during the same window as the call data above.
+      </p>
+
+      {/* Aggregate counts by status */}
+      <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 18 }}>
+        <StatCard label="Total messages" value={messages.totalMessages} />
+        <StatCard label="Outbound delivery rate" value={`${deliveryPct}%`} accent={Number(deliveryPct) >= 95 ? 'ok' : Number(deliveryPct) >= 85 ? 'warn' : 'err'} />
+        <StatCard label="Sent" value={messages.byStatus.sent ?? 0} />
+        <StatCard label="Delivered" value={messages.byStatus.delivered ?? 0} accent="ok" />
+        <StatCard label="Failed" value={messages.byStatus.failed ?? 0} accent={messages.byStatus.failed > 0 ? 'err' : undefined} />
+        <StatCard label="Undelivered" value={messages.byStatus.undelivered ?? 0} accent={messages.byStatus.undelivered > 0 ? 'warn' : undefined} />
+        <StatCard label="Received (inbound)" value={messages.byStatus.received ?? 0} />
+      </div>
+
+      {/* Failure causes with drill-down */}
+      {messages.failureCauses.length > 0 ? (
+        <div>
+          <h5 style={{ marginBottom: 6 }}>Top failure causes ({failureRatePct}% failure rate)</h5>
+          <p className="muted small" style={{ marginTop: 0, marginBottom: 10 }}>
+            Click a cause to see specific failed messages and the recipient numbers.
+          </p>
+          <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {messages.failureCauses.map((c) => {
+              const expanded = expandedCause === c.cause;
+              return (
+                <li key={c.cause} style={{ border: '1px solid var(--border, #e2e8f0)', borderRadius: 8 }}>
+                  <button
+                    type="button"
+                    onClick={() => setExpandedCause(expanded ? null : c.cause)}
+                    style={{
+                      display: 'flex',
+                      width: '100%',
+                      padding: '10px 14px',
+                      background: expanded ? 'var(--bg-soft, #f8fafc)' : 'transparent',
+                      border: 'none',
+                      borderRadius: 8,
+                      cursor: 'pointer',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      fontSize: 14,
+                      textAlign: 'left',
+                    }}
+                  >
+                    <span>
+                      <strong style={{ fontFamily: 'ui-monospace, SFMono-Regular, monospace' }}>
+                        {c.cause}
+                      </strong>
+                      <span className="muted small" style={{ marginLeft: 10 }}>
+                        {telnyxErrorLabel(c.cause)}
+                      </span>
+                    </span>
+                    <span>
+                      <strong>{c.count}</strong> {c.count === 1 ? 'failure' : 'failures'}
+                      <span style={{ marginLeft: 8, color: 'var(--text-muted, #64748b)' }}>{expanded ? '▾' : '▸'}</span>
+                    </span>
+                  </button>
+                  {expanded && (
+                    <div style={{ padding: '8px 14px 14px', borderTop: '1px solid var(--border, #e2e8f0)' }}>
+                      <p className="muted small" style={{ marginTop: 0, marginBottom: 8 }}>
+                        Showing up to 5 sample failures (most recent):
+                      </p>
+                      <table className="users-admin-table" style={{ fontSize: 13 }}>
+                        <thead>
+                          <tr>
+                            <th>Recipient</th>
+                            <th>Sent at</th>
+                            <th>Error code</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {c.samples.map((s) => (
+                            <tr key={s.id}>
+                              <td>{s.toNumber}</td>
+                              <td>{new Date(s.sentAt).toLocaleString('en-US', { timeZone: 'America/New_York' })}</td>
+                              <td style={{ fontFamily: 'ui-monospace, SFMono-Regular, monospace' }}>{s.errorCode ?? '(none)'}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      ) : (
+        <div className="muted small">No outbound message failures in this period. Nice. ✓</div>
+      )}
+    </div>
+  );
+}
+
+// Small reusable stat card used in MessagesQualityBlock above.
+function StatCard({
+  label,
+  value,
+  accent,
+}: {
+  label: string;
+  value: string | number;
+  accent?: 'ok' | 'warn' | 'err';
+}) {
+  const color = accent === 'ok' ? '#0a7d23'
+    : accent === 'warn' ? '#ff9500'
+    : accent === 'err' ? '#d70015'
+    : 'var(--text, #0f172a)';
+  return (
+    <div
+      style={{
+        padding: '10px 14px',
+        borderRadius: 8,
+        border: '1px solid var(--border, #e2e8f0)',
+        minWidth: 130,
+        background: 'var(--bg, #ffffff)',
+      }}
+    >
+      <div className="muted small" style={{ marginBottom: 4 }}>{label}</div>
+      <div style={{ fontSize: 22, fontWeight: 700, color }}>{value}</div>
+    </div>
+  );
+}
+
+// Maps known Telnyx error codes to human-readable descriptions so admin
+// doesn't need to cross-reference Telnyx's error code reference every time.
+// Extend this list as we encounter more codes in production.
+function telnyxErrorLabel(code: string): string {
+  const map: Record<string, string> = {
+    '30001': 'Queue overflow / rate-limited',
+    '30002': 'Account suspended',
+    '30003': 'Unreachable destination handset',
+    '30004': 'Message blocked by recipient',
+    '30005': 'Unknown destination handset',
+    '30006': 'Landline / unreachable carrier',
+    '30007': 'Carrier filtering / message rejected by carrier',
+    '30008': 'Unknown error from Telnyx',
+    '30009': 'Missing inbound segment',
+    '30010': 'Message price exceeds max price',
+    '40002': 'Message body too long',
+    '40003': 'Invalid sender / destination number',
+    '40004': 'Invalid SMS encoding',
+    '40005': 'Missing required parameter',
+    '40010': 'Message blocked by content filter',
+    '(no error code)': '(Telnyx returned no error code on this failure)',
+  };
+  return map[code] ?? '(see Telnyx error reference)';
 }
 
 // ---------------------------------------------------------------------------
@@ -6883,6 +7061,271 @@ function ChangeRow({ type, text }: { type: ChangeType; text: string }) {
         {config.label}
       </span>
       <span style={{ flex: 1 }}>{text}</span>
+    </li>
+  );
+}
+
+// ─── v0.10.92 — TipsAdminSection ───────────────────────────────────────────
+//
+// Admin-only management page for the floating tip banner. Lets admins:
+//   * Toggle built-in tips on/off (default tips seeded at first API boot)
+//   * Author custom tips (title, body, optional emoji, adminOnly flag)
+//   * Edit / delete custom tips
+//
+// Built-in tips can be DISABLED (so admin can hide a tip without losing
+// its content) but not deleted — keeping the curated content available.
+// Custom tips are fully editable + deletable.
+function TipsAdminSection() {
+  const [tips, setTips] = useState<AdminTip[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [okMsg, setOkMsg] = useState<string | null>(null);
+  // Custom-tip form state
+  const [newTitle, setNewTitle] = useState('');
+  const [newBody, setNewBody] = useState('');
+  const [newIcon, setNewIcon] = useState('💡');
+  const [newAdminOnly, setNewAdminOnly] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+
+  function refresh() {
+    const token = sessionStorage.getItem('ace_token');
+    if (!token) return;
+    setLoading(true);
+    void listAdminTips(token).then((rows) => {
+      setTips(rows);
+      setLoading(false);
+    }).catch((e) => {
+      setError((e as Error).message ?? 'Failed to load tips');
+      setLoading(false);
+    });
+  }
+  useEffect(() => { refresh(); }, []);
+
+  async function handleToggleEnabled(id: number, isEnabled: boolean) {
+    const token = sessionStorage.getItem('ace_token');
+    if (!token) return;
+    setError(null);
+    const r = await updateTip(token, id, { isEnabled });
+    if ('error' in r) { setError(r.error); return; }
+    setTips((prev) => prev.map((t) => (t.id === id ? { ...t, isEnabled } : t)));
+  }
+
+  async function handleDelete(id: number) {
+    if (!confirm('Delete this custom tip? Built-ins can\'t be deleted — disable instead.')) return;
+    const token = sessionStorage.getItem('ace_token');
+    if (!token) return;
+    setError(null);
+    const r = await deleteTip(token, id);
+    if (!r.ok) { setError(r.error ?? 'Delete failed'); return; }
+    setTips((prev) => prev.filter((t) => t.id !== id));
+  }
+
+  async function handleCreate() {
+    setError(null);
+    setOkMsg(null);
+    const title = newTitle.trim();
+    const body = newBody.trim();
+    if (!title || !body) {
+      setError('Both Title and Body are required.');
+      return;
+    }
+    const token = sessionStorage.getItem('ace_token');
+    if (!token) return;
+    setSubmitting(true);
+    const r = await createTip(token, {
+      title,
+      body,
+      icon: newIcon.trim() || undefined,
+      adminOnly: newAdminOnly,
+    });
+    setSubmitting(false);
+    if ('error' in r) { setError(r.error); return; }
+    setTips((prev) => [...prev, r]);
+    setNewTitle('');
+    setNewBody('');
+    setNewIcon('💡');
+    setNewAdminOnly(false);
+    setOkMsg('Tip created. It\'ll appear in users\' rotation within ~5 minutes (or sooner if they refresh).');
+    setTimeout(() => setOkMsg(null), 4000);
+  }
+
+  if (loading && tips.length === 0) {
+    return <div className="muted">Loading tips…</div>;
+  }
+
+  const builtIns = tips.filter((t) => t.isBuiltIn);
+  const customs = tips.filter((t) => !t.isBuiltIn);
+
+  return (
+    <div className="settings-section tips-admin">
+      <p className="settings-blurb">
+        These tips rotate in a floating card on every screen of the dialer.
+        Each one stays visible for at least 10 seconds before auto-advancing.
+        Built-in tips can be disabled but not deleted. Custom tips are
+        fully editable.
+      </p>
+
+      {/* Custom-tip create form */}
+      <div className="praise-admin-form" style={{ marginBottom: 28 }}>
+        <h4 style={{ marginTop: 0, marginBottom: 12 }}>Add a custom tip</h4>
+        <label className="fav-modal-field" style={{ marginBottom: 8 }}>
+          <span className="fav-modal-label">Icon (single emoji, optional)</span>
+          <input
+            type="text"
+            className="fav-modal-input"
+            value={newIcon}
+            onChange={(e) => setNewIcon(e.target.value.slice(0, 4))}
+            placeholder="💡"
+            maxLength={4}
+            style={{ width: 80 }}
+          />
+        </label>
+        <label className="fav-modal-field" style={{ marginBottom: 8 }}>
+          <span className="fav-modal-label">Title</span>
+          <input
+            type="text"
+            className="fav-modal-input"
+            value={newTitle}
+            onChange={(e) => setNewTitle(e.target.value)}
+            placeholder="Short headline (max 120 chars)"
+            maxLength={120}
+          />
+        </label>
+        <label className="fav-modal-field" style={{ marginBottom: 8 }}>
+          <span className="fav-modal-label">Body</span>
+          <textarea
+            className="fav-modal-input"
+            value={newBody}
+            onChange={(e) => setNewBody(e.target.value)}
+            placeholder="One-sentence explanation of the feature and where to find it."
+            rows={3}
+            maxLength={500}
+          />
+        </label>
+        <label className="fav-modal-field" style={{ display: 'flex', flexDirection: 'row', gap: 8, alignItems: 'center' }}>
+          <input
+            type="checkbox"
+            checked={newAdminOnly}
+            onChange={(e) => setNewAdminOnly(e.target.checked)}
+          />
+          <span>Admin only (hide from regular users)</span>
+        </label>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 12 }}>
+          <button
+            type="button"
+            className="device-action primary"
+            onClick={handleCreate}
+            disabled={submitting || !newTitle.trim() || !newBody.trim()}
+          >
+            {submitting ? 'Adding…' : 'Add tip'}
+          </button>
+        </div>
+        {error && <div className="error small" style={{ marginTop: 8 }}>{error}</div>}
+        {okMsg && <div className="muted small" style={{ marginTop: 8, color: '#34c759' }}>{okMsg}</div>}
+      </div>
+
+      {/* Built-in tips — list */}
+      <div style={{ marginBottom: 24 }}>
+        <h4 style={{ marginBottom: 8 }}>Built-in tips ({builtIns.length})</h4>
+        <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {builtIns.map((t) => (
+            <TipsAdminRow
+              key={t.id}
+              tip={t}
+              onToggleEnabled={(en) => handleToggleEnabled(t.id, en)}
+            />
+          ))}
+        </ul>
+      </div>
+
+      {/* Custom tips — list */}
+      {customs.length > 0 && (
+        <div>
+          <h4 style={{ marginBottom: 8 }}>Custom tips ({customs.length})</h4>
+          <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {customs.map((t) => (
+              <TipsAdminRow
+                key={t.id}
+                tip={t}
+                onToggleEnabled={(en) => handleToggleEnabled(t.id, en)}
+                onDelete={() => handleDelete(t.id)}
+              />
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TipsAdminRow({
+  tip,
+  onToggleEnabled,
+  onDelete,
+}: {
+  tip: AdminTip;
+  onToggleEnabled: (en: boolean) => void;
+  onDelete?: () => void;
+}) {
+  return (
+    <li
+      style={{
+        display: 'flex',
+        gap: 12,
+        alignItems: 'flex-start',
+        padding: 12,
+        borderRadius: 8,
+        background: tip.isEnabled ? 'var(--bg-soft, #f8fafc)' : 'transparent',
+        border: '1px solid var(--border, #e2e8f0)',
+        opacity: tip.isEnabled ? 1 : 0.55,
+      }}
+    >
+      <div style={{ flexShrink: 0, fontSize: 22, lineHeight: 1, paddingTop: 2 }}>
+        {tip.icon || '💡'}
+      </div>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 4 }}>
+          {tip.title}
+          {tip.adminOnly && (
+            <span
+              style={{
+                marginLeft: 8,
+                fontSize: 10,
+                padding: '2px 6px',
+                background: 'rgba(176, 0, 191, 0.12)',
+                color: '#9c1bb3',
+                borderRadius: 4,
+                fontWeight: 600,
+              }}
+            >
+              ADMIN ONLY
+            </span>
+          )}
+        </div>
+        <div className="muted small">{tip.body}</div>
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'flex-end' }}>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
+          <input
+            type="checkbox"
+            checked={tip.isEnabled}
+            onChange={(e) => onToggleEnabled(e.target.checked)}
+          />
+          Enabled
+        </label>
+        {onDelete && (
+          <button
+            type="button"
+            className="icon-btn"
+            onClick={onDelete}
+            aria-label="Delete tip"
+            title="Delete custom tip"
+            style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: '#d70015' }}
+          >
+            <Trash2 size={14} />
+          </button>
+        )}
+      </div>
     </li>
   );
 }

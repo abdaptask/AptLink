@@ -122,6 +122,8 @@ model User {
   praisesSent     Praise[]    @relation("PraiseFrom")
   praisesReceived Praise[]    @relation("PraiseTo")
   praiseReads     PraiseRead[]
+  /// v0.10.92 — Tips this admin authored (custom tips).
+  tipsCreated     Tip[]       @relation("TipCreatedBy")
   internalSent       InternalMessage[] @relation("InternalMessageSender")
   internalReceived   InternalMessage[] @relation("InternalMessageRecipient")
   blockedNumbers     BlockedNumber[]
@@ -619,6 +621,43 @@ model Ringtone {
 
   @@index([isActive, sortOrder])
   @@map("ringtones")
+}
+
+/// v0.10.92 — Feature tips shown on a floating card visible on every screen.
+///
+/// Auto-rotates one tip at a time (12s minimum, longer if dismissed manually
+/// only after the user has seen at least 10s of the current one). Lets us
+/// surface features that users wouldn't otherwise discover — quick replies,
+/// scheduling SMS, call forwarding, etc.
+///
+/// Built-in tips are seeded by the API on first boot if the table is empty;
+/// admins can also add their own custom tips via Settings → Admin → Tips.
+/// adminOnly=true tips are only shown to admin users (the non-admin tip
+/// pool excludes them — keeps regular users from seeing tips pointing at
+/// features they can't access).
+model Tip {
+  id          Int      @id @default(autoincrement())
+  title       String   @db.VarChar(120)
+  body        String   @db.VarChar(500)
+  /// Optional emoji (single char) or short URL — rendered as the icon
+  /// on the floating tip card. Falls back to a generic lightbulb when null.
+  icon        String?
+  /// When true, only show to users whose isAdmin=true.
+  adminOnly   Boolean  @default(false) @map("admin_only")
+  /// Admin can disable a tip without deleting it (so the default tips can
+  /// be turned off temporarily while keeping their seeded content).
+  isEnabled   Boolean  @default(true)  @map("is_enabled")
+  /// True for seeded default tips — these can be enabled/disabled but
+  /// not deleted. Custom tips created by admins have isBuiltIn=false and
+  /// can be deleted freely.
+  isBuiltIn   Boolean  @default(false) @map("is_built_in")
+  createdById Int?     @map("created_by_id")
+  createdBy   User?    @relation("TipCreatedBy", fields: [createdById], references: [id])
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt      @map("updated_at")
+
+  @@index([isEnabled, adminOnly])
+  @@map("tips")
 }
 
 /// v0.10.74 — Admin Praise / Announcements.

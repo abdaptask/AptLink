@@ -2083,6 +2083,97 @@ export async function adminRoutes(app: FastifyInstance) {
 
       const totalShort = Array.from(ua.values()).reduce((sum, u) => sum + u.short, 0);
 
+      // v0.10.92 — Message quality + health, unified with the call quality
+      // report so admins see voice AND SMS reliability on one page. Same
+      // time window (`range`), same shape: aggregate totals + top failure
+      // causes with sample drill-down rows.
+      const messages = await prisma.message.findMany({
+        where: { sentAt: { gte: since } },
+        select: {
+          id: true,
+          direction: true,
+          status: true,
+          fromNumber: true,
+          toNumber: true,
+          sentAt: true,
+          // Telnyx error details. Schema stores as Json — typical shape is
+          // an array of { code, title, detail } objects per their API.
+          // We extract the first object's `code` for failure aggregation.
+          errors: true,
+        },
+      });
+
+      // Aggregate counts by status. Telnyx's status vocabulary on outbound
+      // messages is: 'sent', 'delivered', 'failed', 'undelivered', 'queued'.
+      // Inbound messages have status 'received' (delivered to us by Telnyx).
+      const messageTotals: Record<string, number> = {
+        sent: 0, delivered: 0, failed: 0, undelivered: 0, queued: 0, received: 0, other: 0,
+      };
+      // Failure cause aggregation — only for outbound failed/undelivered,
+      // grouped by errorCode (e.g. Telnyx error code 30001-30022, 40002-40010).
+      // Each cause carries up to 5 sample messages for the drill-down UI.
+      const failureCauses = new Map<string, {
+        count: number;
+        samples: Array<{ id: number; toNumber: string; sentAt: string; errorCode: string | null }>;
+      }>();
+
+      // Helper: extract Telnyx error code from the Prisma Json `errors`
+      // column. Telnyx returns an array shape; we take the first entry.
+      // Returns null when no errors present (or shape is unexpected).
+      function extractTelnyxErrorCode(errs: unknown): string | null {
+        if (!errs) return null;
+        if (Array.isArray(errs) && errs.length > 0) {
+          const first = errs[0] as Record<string, unknown> | null;
+          if (first && typeof first === 'object') {
+            const code = first.code;
+            if (typeof code === 'string') return code;
+            if (typeof code === 'number') return String(code);
+          }
+        }
+        if (typeof errs === 'object' && errs !== null) {
+          const code = (errs as Record<string, unknown>).code;
+          if (typeof code === 'string') return code;
+        }
+        return null;
+      }
+
+      let outboundCount = 0;
+      let outboundFailures = 0;
+      for (const m of messages) {
+        const dir = (m.direction || '').toLowerCase();
+        const status = (m.status || '').toLowerCase();
+        if (status in messageTotals) {
+          messageTotals[status] += 1;
+        } else {
+          messageTotals.other += 1;
+        }
+        if (dir === 'outbound') {
+          outboundCount += 1;
+          if (status === 'failed' || status === 'undelivered') {
+            outboundFailures += 1;
+            const errorCode = extractTelnyxErrorCode(m.errors);
+            const causeKey = errorCode || '(no error code)';
+            const entry = failureCauses.get(causeKey) ?? { count: 0, samples: [] };
+            entry.count += 1;
+            if (entry.samples.length < 5) {
+              entry.samples.push({
+                id: m.id,
+                toNumber: m.toNumber ?? '(unknown)',
+                sentAt: (m.sentAt ?? now).toISOString(),
+                errorCode,
+              });
+            }
+            failureCauses.set(causeKey, entry);
+          }
+        }
+      }
+      const failureCausesArr = Array.from(failureCauses.entries())
+        .map(([cause, data]) => ({ cause, count: data.count, samples: data.samples }))
+        .sort((a, b) => b.count - a.count);
+      const outboundDeliveryRate = outboundCount > 0
+        ? (outboundCount - outboundFailures) / outboundCount
+        : 1;
+
       return {
         range,
         generatedAt: now.toISOString(),
@@ -2090,6 +2181,16 @@ export async function adminRoutes(app: FastifyInstance) {
         hangupCauses: hangupCausesArr,
         totals: { shortCalls: totalShort, totalCalls: calls.length },
         heatmap,
+        // v0.10.92 — Unified message quality block. Frontend renders this
+        // alongside the call section on the Quality & Health page.
+        messages: {
+          totalMessages: messages.length,
+          byStatus: messageTotals,
+          outboundCount,
+          outboundFailures,
+          outboundDeliveryRate,
+          failureCauses: failureCausesArr,
+        },
       };
     },
   );

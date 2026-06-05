@@ -28,6 +28,8 @@ import VoicemailNotifier from '../components/VoicemailNotifier';
 import UpdateBanner from '../components/UpdateBanner';
 // v0.10.74 — Admin Praise / Announcement modal.
 import PraiseModal from '../components/PraiseModal';
+// v0.10.92 — Floating tip banner that rotates feature suggestions.
+import TipBanner from '../components/TipBanner';
 import { getTenantHoldMusic } from '../api';
 import {
   getHoldMusicDataUrl,
@@ -447,6 +449,12 @@ export default function Layout({ user, onLogout }: Props) {
           /me/praises every 60s, suppresses during active calls. Shows the
           celebratory pop-over once the user is idle and dismissable. */}
       <PraiseModal />
+
+      {/* v0.10.92 — Floating tip banner. Cycles one tip at a time (12s
+          each, min 10s per user requirement), suppressed during active
+          calls. Visible on every screen since this Layout wraps all
+          routes. User can dismiss for the session via X button. */}
+      <TipBanner />
 
       <nav className="tab-bar">
         <NavLink to="/favorites" className={({ isActive }) => (isActive ? 'tab active' : 'tab')}>

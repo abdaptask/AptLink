@@ -18,6 +18,10 @@ import { scheduledMessagesRoutes } from './messages/scheduledMessages.routes.js'
 import { startScheduledMessageWorker } from './messages/scheduledMessageWorker.js';
 import { praisesRoutes } from './praises/praises.routes.js';
 import { ringtonesRoutes } from './ringtones/ringtones.routes.js';
+// v0.10.92 — Feature Tips. Seeds 20 default tips on first boot, exposes
+// CRUD + read endpoints so the dialer can rotate them through the floating
+// banner and admins can author custom ones.
+import { tipsRoutes, seedDefaultTipsIfEmpty } from './tips/tips.routes.js';
 import { voicemailsRoutes } from './voicemails/voicemails.routes.js';
 import { voicemailGreetingRoutes } from './voicemailGreeting/voicemailGreeting.routes.js';
 import { jobDivaRoutes } from './jobdiva/jobdiva.routes.js';
@@ -102,6 +106,12 @@ await app.register(messagesRoutes);
 await app.register(scheduledMessagesRoutes);
 await app.register(praisesRoutes);
 await app.register(ringtonesRoutes);
+await app.register(tipsRoutes);
+// v0.10.92 — populate default tips on first boot after this version ships.
+// Safe to run on every startup — idempotent (no-op if rows already exist).
+void seedDefaultTipsIfEmpty().catch((e) =>
+  app.log.warn({ err: e instanceof Error ? e.message : String(e) }, '[tips] default seed threw'),
+);
 await app.register(voicemailsRoutes);
 await app.register(voicemailGreetingRoutes);
 await app.register(jobDivaRoutes);
