@@ -3251,3 +3251,68 @@ export async function getPendingUserCredentials(
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return (await res.json()) as PendingUserCredentials;
 }
+// ──────────────────────────────────────────────────────────────────────
+// v0.10.101 — Device heartbeat + admin device management.
+// ──────────────────────────────────────────────────────────────────────
+export interface HeartbeatResult {
+  ok: boolean;
+  forceUpdate: boolean;
+  forceUpdateRequestedAt: string | null;
+}
+
+export async function sendHeartbeat(
+  token: string,
+  payload: { deviceId: string; platform: string; appVersion: string; osLabel?: string | null },
+): Promise<HeartbeatResult> {
+  const res = await fetch(`${API_URL}/me/heartbeat`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
+export async function ackForceUpdate(token: string, deviceId: string): Promise<void> {
+  await fetch(`${API_URL}/me/heartbeat/ack-update`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ deviceId }),
+  });
+}
+
+export interface UserDeviceRow {
+  id: number;
+  deviceId: string;
+  platform: string;
+  appVersion: string;
+  osLabel: string | null;
+  firstSeenAt: string;
+  lastSeenAt: string;
+  forceUpdateRequestedAt: string | null;
+  forceUpdateAckedAt: string | null;
+}
+
+export async function getUserDevices(token: string, userId: number): Promise<UserDeviceRow[]> {
+  const res = await fetch(`${API_URL}/admin/users/${userId}/devices`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const j = (await res.json()) as { devices: UserDeviceRow[] };
+  return j.devices;
+}
+
+export async function requestDeviceForceUpdate(
+  token: string,
+  userId: number,
+  deviceId: string,
+): Promise<void> {
+  const res = await fetch(
+    `${API_URL}/admin/users/${userId}/devices/${encodeURIComponent(deviceId)}/force-update`,
+    { method: 'POST', headers: { Authorization: `Bearer ${token}` } },
+  );
+  if (!res.ok) {
+    const err = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new Error(err.error || `HTTP ${res.status}`);
+  }
+}

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import HeartbeatReporter from '../components/HeartbeatReporter';
 import { NavLink, Outlet, useNavigate, useLocation } from 'react-router-dom';
 import {
   MessageSquare,
@@ -270,6 +271,7 @@ export default function Layout({ user, onLogout }: Props) {
 
   return (
     <div className="app-shell">
+      <HeartbeatReporter />
       <IncomingCall />
       {/* Mounted OUTSIDE IncomingCall so the quick-reply sheet survives the
           call's UI unmounting on decline. Listens for the
