@@ -1735,7 +1735,22 @@ export async function deleteRingtone(token: string, id: number): Promise<{ ok: b
 }
 
 // v0.10.74 — Admin Praise / Announcements.
-export type PraiseCategory = 'new_hire' | 'new_offer' | 'birthday' | 'anniversary' | 'custom';
+// v0.10.93 — Broadcast categories. Originally "Praise" was the only kind
+// of pop-up message admins could send to users; v0.10.93 expanded the
+// system into a general broadcast platform with multiple type-groups:
+// Celebrations (the old praise), Announcements, Alerts, Reminders, Welcomes.
+// Keep in sync with apps/api/src/praises/praises.routes.ts CATEGORY_VALUES.
+export type PraiseCategory =
+  // Celebrations (legacy)
+  | 'new_hire' | 'new_offer' | 'birthday' | 'anniversary' | 'custom'
+  // Announcements
+  | 'announcement' | 'update_required' | 'maintenance' | 'holiday' | 'policy_update'
+  // Alerts
+  | 'alert_urgent' | 'service_outage'
+  // Reminders
+  | 'reminder' | 'training'
+  // Welcomes
+  | 'welcome';
 
 export interface Praise {
   id: number;
