@@ -50,7 +50,7 @@ function formatTime(iso: string): string {
   const date = new Date(iso);
   if (!iso || Number.isNaN(date.getTime())) return '';
   const now = new Date();
-  const timeStr = date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  const timeStr = date.toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit' });
   const sameDay =
     date.getFullYear() === now.getFullYear() &&
     date.getMonth() === now.getMonth() &&
@@ -63,7 +63,7 @@ function formatTime(iso: string): string {
     date.getMonth() === yesterday.getMonth() &&
     date.getDate() === yesterday.getDate();
   if (isYesterday) return `Yesterday, ${timeStr}`;
-  return `${date.toLocaleDateString([], { month: 'short', day: 'numeric' })}, ${timeStr}`;
+  return `${date.toLocaleDateString('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric' })}, ${timeStr}`;
 }
 
 export default function Voicemail() {

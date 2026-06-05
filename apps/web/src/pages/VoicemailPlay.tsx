@@ -49,7 +49,7 @@ function formatDuration(seconds: number): string {
 
 function formatFullTime(iso: string): string {
   const date = new Date(iso);
-  return date.toLocaleString([], {
+  return date.toLocaleString('en-US', { timeZone: 'America/New_York',
     month: 'short',
     day: 'numeric',
     year: 'numeric',

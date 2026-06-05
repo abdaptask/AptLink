@@ -40,7 +40,7 @@ function yesterdayWindow(): { since: Date; until: Date } {
 
 function formatRange(since: Date): string {
   // E.g. "Mon, Jun 1"
-  return since.toLocaleDateString(undefined, {
+  return since.toLocaleDateString('en-US', { timeZone: 'America/New_York',
     weekday: 'short',
     month: 'short',
     day: 'numeric',

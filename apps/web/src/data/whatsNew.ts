@@ -24,6 +24,18 @@ export interface ReleaseEntry {
 
 export const WHATS_NEW: ReleaseEntry[] = [
   {
+    version: '0.10.91',
+    date: 'June 5, 2026',
+    highlight: 'Cleanup + UX polish — fewer settings entries, sortable users, all times in EST',
+    changes: [
+      { type: 'fixed', text: 'All timestamps across the dialer (Recents, Messages, Voicemail, Audit Log, Health Alerts, Praise) now display in Eastern Time regardless of your computer\'s timezone. Previously, India-based teammates saw times in IST and US-based teammates saw EST, making it confusing to compare timestamps when discussing incidents. Now everyone agrees on "what time it happened" — EST is the source of truth.' },
+      { type: 'fixed', text: 'Garbled emoji and middle-dot characters in the Live Ops health alerts page (and a few other places). Was a UTF-8 encoding bug in the source file that produced things like "Â·" instead of "·" and "ðŸŽ‰" instead of "🎉". Now displays correctly.' },
+      { type: 'improved', text: 'Settings → Personal → Notifications is now a single entry with Email and Teams as sub-tabs (instead of two separate sidebar entries). The in-app sound + desktop popup settings moved to a renamed "Sound & alerts" entry so the difference is clear.' },
+      { type: 'improved', text: 'Sortable Users table in Admin. Click any column header (User, Email, Role, Status, DID, Last sign-in) to sort by it; click again to reverse direction. Default ordering is unchanged (newest users first).' },
+      { type: 'fixed', text: 'Removed the obsolete "Telnyx" SIP credentials entry from Settings → Calling. That form was a leftover from the early manual-setup days; today all users get auto-provisioned credentials via the admin invite / migrate flows. Nobody should have been typing in there anyway.' },
+    ],
+  },
+  {
     version: '0.10.90',
     date: 'June 4, 2026',
     highlight: 'Active WebSocket keepalive — detects dead connections in seconds (per Telnyx recommendation)',
