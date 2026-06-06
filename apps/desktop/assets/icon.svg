@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%">
+  <defs>
+    <linearGradient id="bg-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1E293B" />
+      <stop offset="100%" stop-color="#0F172A" />
+    </linearGradient>
+    
+    <linearGradient id="accent-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#10B981" />
+      <stop offset="100%" stop-color="#059669" />
+    </linearGradient>
+    
+    <filter id="smooth-shadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="16" stdDeviation="20" flood-color="#000000" flood-opacity="0.3" />
+    </filter>
+  </defs>
+
+  <rect x="32" y="32" width="448" height="448" rx="100" fill="url(#bg-grad)" filter="url(#smooth-shadow)" />
+
+  <g fill="#94A3B8" opacity="0.4">
+    <circle cx="192" cy="180" r="10" />
+    <circle cx="256" cy="180" r="10" />
+    <circle cx="320" cy="180" r="10" />
+    <circle cx="192" cy="244" r="10" />
+    <circle cx="256" cy="244" r="10" />
+    <circle cx="320" cy="244" r="10" />
+    <circle cx="192" cy="308" r="10" />
+    <circle cx="256" cy="308" r="10" />
+    <circle cx="320" cy="308" r="10" />
+  </g>
+
+  <g filter="drop-shadow(0px 8px 12px rgba(16, 185, 129, 0.2))">
+    <rect x="176" y="360" width="160" height="48" rx="24" fill="url(#accent-grad)" />
+    
+    <path d="M242 376C242 374.9 242.9 374 244 374H249.5C251.21 374 252.70 375.19 252.95 376.89L253.75 382.49C253.96 383.99 253.11 385.41 251.72 385.92L249.5 386.74C251.19 390.41 254.09 393.31 257.76 395L258.58 392.78C259.09 391.39 260.51 390.54 262.01 390.75L267.61 391.55C269.31 391.8 270.5 393.29 270.5 395V400.5C270.5 401.6 269.6 402.5 268.5 402.5C253.86 402.5 242 390.64 242 376Z" 
+          fill="#FFFFFF" />
+  </g>
+</svg>
