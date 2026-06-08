@@ -1318,6 +1318,15 @@ const port = Number(process.env.PORT ?? 3002);
 const host = '0.0.0.0';
 
 try {
+// v0.10.102 - Public Telnyx status endpoint. Read by the dialer's status
+// banner on focus and every 60s.
+app.get('/telnyx-status', async () => {
+  return getTelnyxStatus();
+});
+
+// v0.10.102 - Kick off the Telnyx status poller. Runs once at startup
+// (cached in memory), then every 60s. Fires Teams card on transitions.
+startTelnyxStatusPoller((obj, msg) => app.log.info(obj, msg));
   await app.listen({ port, host });
   app.log.info({ port, host }, `[${SERVICE_NAME}] listening`);
 } catch (err) {
@@ -1332,13 +1341,3 @@ const shutdown = async (signal: string) => {
 };
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT', () => shutdown('SIGINT'));
-// v0.10.102 - Public Telnyx status endpoint. Read by the dialer's status
-// banner (web + Electron) on focus and every 60s.
-app.get('/telnyx-status', async () => {
-  return getTelnyxStatus();
-});
-
-// v0.10.102 - Kick off the Telnyx status poller. Runs once at startup
-// (cached in memory), then every 60s. Fires Teams/email notifications
-// on indicator transitions.
-startTelnyxStatusPoller((obj, msg) => app.log.info(obj, msg));
