@@ -24,6 +24,14 @@ export interface ReleaseEntry {
 
 export const WHATS_NEW: ReleaseEntry[] = [
   {
+    version: '0.10.105',
+    date: 'June 8, 2026',
+    highlight: 'Voicemails now actually mark as listened when you play them (real fix this time)',
+    changes: [
+      { type: 'fixed', text: 'When you played a voicemail, the unread badge on the Voicemail tab stayed at the same count even though the row visually appeared collapsed. Root cause: the client was sending the wrong JSON shape to the server (listenedAt timestamp instead of a listened boolean), so the server silently ignored the update. The mark-as-listened call now sends the shape the server expects.' },
+    ],
+  },
+  {
     version: '0.10.104',
     date: 'June 8, 2026',
     highlight: 'Missed calls now show as missed (not just incoming) + voicemails mark as listened the moment audio plays',

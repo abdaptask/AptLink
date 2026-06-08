@@ -926,7 +926,7 @@ export async function markVoicemailListened(token: string, id: number, listened:
   await fetch(`${API_URL}/voicemails/${id}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-    body: JSON.stringify({ listenedAt: listened ? new Date().toISOString() : null }),
+    body: JSON.stringify({ listened }),
   });
 }
 
