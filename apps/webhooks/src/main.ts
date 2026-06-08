@@ -1,6 +1,7 @@
 // ACE Dialer Webhooks — Telnyx inbound webhook receiver.
 // Phase 5.1: persist call lifecycle events to the database.
 import Fastify from 'fastify';
+import { startTelnyxStatusPoller, getTelnyxStatus } from './telnyxStatus.js';
 import cors from '@fastify/cors';
 import formbody from '@fastify/formbody';
 import { prisma } from '@ace/db';
@@ -1331,3 +1332,13 @@ const shutdown = async (signal: string) => {
 };
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT', () => shutdown('SIGINT'));
+// v0.10.102 - Public Telnyx status endpoint. Read by the dialer's status
+// banner (web + Electron) on focus and every 60s.
+app.get('/telnyx-status', async () => {
+  return getTelnyxStatus();
+});
+
+// v0.10.102 - Kick off the Telnyx status poller. Runs once at startup
+// (cached in memory), then every 60s. Fires Teams/email notifications
+// on indicator transitions.
+startTelnyxStatusPoller((obj, msg) => app.log.info(obj, msg));

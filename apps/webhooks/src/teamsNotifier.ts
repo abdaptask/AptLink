@@ -538,3 +538,23 @@ export function scheduleVoicemailTimeoutFallback(opts: {
     );
   }, 30_000);
 }
+// v0.10.102 - Generic tenant-channel card sender used by the Telnyx status
+// notifier. Wraps the existing POST-to-webhook pattern with caller-provided
+// adaptive card content.
+type LogFn2 = (obj: Record<string, unknown>, msg: string) => void;
+export async function sendTenantTeamsCard(card: unknown, logger?: LogFn2): Promise<void> {
+  const url = (process.env.TEAMS_TENANT_WEBHOOK_URL ?? '').trim();
+  if (!url) {
+    (logger ?? console.info)({}, '[teams] TEAMS_TENANT_WEBHOOK_URL not set - card not sent');
+    return;
+  }
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(card),
+  });
+  if (!res.ok) {
+    const errText = await res.text().catch(() => '');
+    (logger ?? console.warn)({ status: res.status, errText }, '[teams] tenant card POST failed');
+  }
+}

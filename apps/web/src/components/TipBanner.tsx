@@ -103,7 +103,7 @@ export default function TipBanner() {
       style={{
         position: 'fixed',
         right: 20,
-        bottom: 20,
+        bottom: 90,
         zIndex: 950,            // below modals (z 1000+), above main content
         width: 320,
         maxWidth: 'calc(100vw - 40px)',
