@@ -495,17 +495,24 @@ app.post('/webhooks/telnyx/calls', async (request) => {
         const wasAnswered = priorCall?.answeredAt != null;
         const status: string = (() => {
           if (direction === 'inbound' && !wasAnswered) {
-            // Inbound + never picked up + this is the hangup event = missed.
-            // Still classify the specific reason if Telnyx told us so the
-            // statusLabel UI can show "Declined" vs "Missed" vs "Busy".
+            // v0.10.108 - finer-grained classification of unanswered inbound.
+            // Each of these is a different user story:
+            //   call_rejected -> you (or your dialer) actively rejected (486)  -> "Declined"
+            //   user_busy     -> Telnyx returned 486 on your behalf            -> "Busy"
+            //   originator_cancel -> caller hung up before you could pick up   -> "Caller canceled"
+            //   forwarded/transferred/redirect -> the call took another path   -> "Forwarded"
+            //   no_answer / no_user_response   -> rang full timeout no pickup  -> "Missed"
+            //   anything else                   -> generic missed              -> "Missed"
             if (lc === 'call_rejected' || lc === 'rejected') return 'rejected';
-            if (lc === 'user_busy' || lc === 'busy') return 'rejected';
+            if (lc === 'user_busy' || lc === 'busy') return 'busy';
+            if (lc === 'originator_cancel') return 'caller_canceled';
             if (lc.includes('forward') || lc.includes('transfer') || lc.includes('redirect')) return 'forwarded';
+            if (lc === 'no_answer' || lc === 'no_user_response') return 'no_answer';
             return 'missed';
           }
           if (lc === 'no_answer' || lc === 'no_user_response') return 'no_answer';
           if (lc === 'call_rejected' || lc === 'rejected') return 'rejected';
-          if (lc === 'user_busy' || lc === 'busy') return 'rejected';
+          if (lc === 'user_busy' || lc === 'busy') return 'busy';
           // Forwarded / transferred — call DID route, just not to the dialer.
           if (lc.includes('forward') || lc.includes('transfer') || lc.includes('redirect')) {
             return 'forwarded';

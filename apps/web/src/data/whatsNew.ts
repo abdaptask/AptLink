@@ -26,11 +26,13 @@ export const WHATS_NEW: ReleaseEntry[] = [
   {
     version: '0.10.108',
     date: 'June 8, 2026',
-    highlight: 'Easier-to-scan Recents (direction filter), cleaner Keypad, and Admin Users now shows every line a user has',
+    highlight: 'Recents direction filter, cleaner Keypad, Admin shows all DIDs, and far more accurate missed-call labels',
     changes: [
       { type: 'new', text: 'Recents tab now has a direction filter at the top: All / Inbound / Outgoing / Missed. Tap a chip to narrow the list. Your choice is remembered across app restarts.' },
+      { type: 'new', text: 'Smarter unanswered-call labels in Recents. Previously every unanswered inbound call just said "Missed." Now you can tell at a glance what actually happened: "Missed" (rang full timeout, you missed it - red), "Caller canceled" (caller hung up before you could pick up - orange), "Busy" (line was busy / your dialer was on another call - orange), "Declined" (you actively rejected - red), "Forwarded" (call took another path - gray). Existing call history relabels automatically.' },
       { type: 'improved', text: 'Admin > Users table now shows every DID a user has (with a "default" badge on the primary line) instead of just showing the default DID with a "+N" badge. No more guessing what numbers are assigned without opening Manage Lines.' },
       { type: 'improved', text: 'Keypad page is cleaner: removed the inline Recent quick-pick panel (Contacts icon next to the Call button). The Recents tab in the bottom nav now has the dedicated direction filter and is the single place for recent calls.' },
+      { type: 'improved', text: 'Direction filter "Inbound" chip is now mutually exclusive with "Missed" - tapping Inbound shows only calls you actually answered, not unanswered ones.' },
     ],
   },
   {

@@ -2963,6 +2963,11 @@ body {
 .ico.out { color: #007aff; }
 .ico.in { color: #34c759; }
 .ico.missed { color: #ff3b30; }
+/* v0.10.108 - finer-grained inbound classification icons */
+.ico.canceled { color: #f59e0b; }  /* amber/orange - caller bailed before you could answer */
+.ico.busy { color: #f97316; }      /* darker orange - line was busy / declined by your side */
+.ico.forwarded { color: #6b7280; } /* gray - call got forwarded elsewhere */
+.ico.blocked { color: #9ca3af; }   /* gray neutral - you've blocked this number */
 .call-text { min-width: 0; }
 .call-number {
   font-size: 1rem;

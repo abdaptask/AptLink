@@ -46,35 +46,62 @@ function formatTime(iso: string): string {
   return `${date.toLocaleDateString('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric' })}, ${timeStr}`;
 }
 
+// v0.10.108 - finer-grained call classification. Each unanswered inbound
+// shape now gets its own label + icon so users can tell at a glance whether
+// they missed a call (rang full timeout) vs the caller bailed quickly vs
+// declined vs busy. Backward-compat: old rows with status='missed' and
+// hangupCause='originator_cancel' are treated as caller_canceled in the UI.
+function effectiveStatus(c: CallRecord): string {
+  // Treat legacy data as the new caller_canceled bucket so today's existing
+  // rows relabel without needing a DB migration.
+  if (
+    c.direction === 'inbound' &&
+    c.status === 'missed' &&
+    (c.hangupCause ?? '').toLowerCase() === 'originator_cancel'
+  ) {
+    return 'caller_canceled';
+  }
+  return c.status;
+}
+
 function isMissed(c: CallRecord): boolean {
-  // Any inbound call that didn't connect counts as red:
-  // - missed (rang out)
-  // - no_answer (Telnyx-side timeout)
-  // - rejected (user clicked Decline)
-  // - failed
+  // "Missed" in the red-dot sense = inbound that genuinely rang out and you
+  // failed to pick up. Caller_canceled and busy and forwarded are NOT in this
+  // bucket - they get their own non-red treatment.
   if (c.direction !== 'inbound') return false;
-  return (
-    c.status === 'missed' ||
-    c.status === 'no_answer' ||
-    c.status === 'rejected' ||
-    c.status === 'failed' ||
-    c.status === 'blocked'
-  );
+  const s = effectiveStatus(c);
+  return s === 'missed' || s === 'no_answer' || s === 'failed' || s === 'blocked';
+}
+
+function isCallerCanceled(c: CallRecord): boolean {
+  return c.direction === 'inbound' && effectiveStatus(c) === 'caller_canceled';
 }
 
 function callIcon(c: CallRecord) {
-  if (c.status === 'blocked') return <Ban size={18} className="ico blocked" />;
+  const s = effectiveStatus(c);
+  if (s === 'blocked') return <Ban size={18} className="ico blocked" />;
   if (isMissed(c)) return <PhoneMissed size={18} className="ico missed" />;
+  if (isCallerCanceled(c)) return <PhoneMissed size={18} className="ico canceled" />;
+  if (c.direction === 'inbound' && (s === 'busy' || s === 'rejected')) {
+    return <PhoneMissed size={18} className="ico busy" />;
+  }
+  if (c.direction === 'inbound' && s === 'forwarded') {
+    return <PhoneIncoming size={18} className="ico forwarded" />;
+  }
   if (c.direction === 'inbound') return <PhoneIncoming size={18} className="ico in" />;
   return <PhoneOutgoing size={18} className="ico out" />;
 }
 
 function statusLabel(c: CallRecord): string {
-  if (c.status === 'blocked') return 'Blocked';
+  const s = effectiveStatus(c);
+  if (s === 'blocked') return 'Blocked';
   if (c.direction === 'inbound') {
-    if (c.status === 'rejected') return 'Declined';
-    if (c.status === 'missed' || c.status === 'no_answer') return 'Missed';
-    if (c.status === 'failed') return 'Failed';
+    if (s === 'rejected') return 'Declined';
+    if (s === 'busy') return 'Busy';
+    if (s === 'caller_canceled') return 'Caller canceled';
+    if (s === 'forwarded') return 'Forwarded';
+    if (s === 'missed' || s === 'no_answer') return 'Missed';
+    if (s === 'failed') return 'Failed';
     return 'Incoming';
   }
   return 'Outgoing';
@@ -184,17 +211,17 @@ export default function Recents() {
       });
     }
     // v0.10.108 — Then narrow by call direction (All / Inbound / Outgoing / Missed).
-    // The four buckets are mutually exclusive:
-    //   - inbound  = answered incoming calls
-    //   - outgoing = outbound calls (answered or not)
-    //   - missed   = inbound calls that didn't connect (missed/no_answer/rejected/failed/blocked)
-    // This matches user expectation: clicking "Inbound" shouldn't include
-    // calls that already show up under "Missed".
+    // Buckets are mutually exclusive:
+    //   - inbound  = answered incoming calls (you actually picked up)
+    //   - outgoing = outbound calls (any state)
+    //   - missed   = inbound calls you didn't answer for ANY reason
+    //                (rang out, caller canceled, busy, declined, blocked, failed)
     if (directionFilter !== 'all') {
       base = base.filter((c) => {
-        if (directionFilter === 'missed') return isMissed(c);
-        if (directionFilter === 'inbound') return c.direction === 'inbound' && !isMissed(c);
+        const answeredInbound = c.direction === 'inbound' && c.answeredAt != null;
+        if (directionFilter === 'inbound') return answeredInbound;
         if (directionFilter === 'outgoing') return c.direction === 'outbound';
+        if (directionFilter === 'missed') return c.direction === 'inbound' && !answeredInbound;
         return true;
       });
     }
