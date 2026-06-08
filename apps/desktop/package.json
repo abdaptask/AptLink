@@ -121,7 +121,8 @@
         "repo": "acedialerv4",
         "releaseType": "draft"
       }
-    ]
+    ],
+    "artifactName": "ACE-Dialer-${version}-${arch}.${ext}"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",
