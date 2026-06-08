@@ -6878,12 +6878,18 @@ export async function adminRoutes(app: FastifyInstance) {
       const actor = request.user as JwtPayload;
 
       // Build lookup tables once.
-      const users = await prisma.user.findMany({
-        where: { sipUsername: { not: null } },
+      // v0.10.109 - exclude soft-deleted users from the active set so we
+      // never re-attribute calls to a ghost user. Soft-deleted users have
+      // their email rewritten to '@deleted.ace.local'. If a UserDid still
+      // points at a soft-deleted user, we treat that DID as un-ownable
+      // and leave the row's existing userId alone.
+      const validUsers = await prisma.user.findMany({
+        where: { email: { not: { endsWith: '@deleted.ace.local' } } },
         select: { id: true, sipUsername: true },
       });
+      const validUserIds = new Set<number>(validUsers.map((u) => u.id));
       const sipToUser = new Map<string, number>();
-      for (const u of users) {
+      for (const u of validUsers) {
         if (u.sipUsername) sipToUser.set(u.sipUsername, u.id);
       }
       const userDids = await prisma.userDid.findMany({
@@ -6892,8 +6898,12 @@ export async function adminRoutes(app: FastifyInstance) {
       });
       const last10ToOwner = new Map<string, { userId: number; didId: number }>();
       for (const d of userDids) {
+        // Skip DIDs whose owner is soft-deleted - those rows are owned
+        // by a ghost user and re-attributing to them would just hide
+        // the calls from everyone instead of from non-admins.
+        if (d.userId == null || !validUserIds.has(d.userId)) continue;
         const l10 = (d.didNumber || '').replace(/[^\d]/g, '').slice(-10);
-        if (l10.length === 10 && d.userId != null) {
+        if (l10.length === 10) {
           last10ToOwner.set(l10, { userId: d.userId, didId: d.id });
         }
       }
