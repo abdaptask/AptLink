@@ -24,6 +24,15 @@ export interface ReleaseEntry {
 
 export const WHATS_NEW: ReleaseEntry[] = [
   {
+    version: '0.10.104',
+    date: 'June 8, 2026',
+    highlight: 'Missed calls now show as missed (not just incoming) + voicemails mark as listened the moment audio plays',
+    changes: [
+      { type: 'fixed', text: 'When a caller hung up before you could pick up (or before voicemail kicked in), the call was showing in your Recents tab as a regular incoming call with no red missed indicator. Now any inbound call that ended without being answered shows correctly as missed, matching what your Teams notification already said.' },
+      { type: 'fixed', text: 'Playing a voicemail (via the inline play button or the audio controls) now marks it as listened the moment audio actually starts, so the blue unread dot disappears even if the row-expand mark-as-listened didn\'t stick due to a network race.' },
+    ],
+  },
+  {
     version: '0.10.103',
     date: 'June 8, 2026',
     highlight: 'Telnyx outage detector \u2014 a banner appears across the top of your dialer when Telnyx is having problems',
