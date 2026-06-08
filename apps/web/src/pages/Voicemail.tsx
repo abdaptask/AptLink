@@ -615,6 +615,22 @@ function VoicemailRow({
             src={vm.recordingUrl}
             preload="metadata"
             style={{ width: '100%' }}
+            onPlay={async () => {
+              // v0.10.103 - Failsafe: mark as listened the moment audio
+              // actually plays, in case the row-expand mark didn't stick
+              // (network race, optimistic-update lost, etc).
+              if (vm.listenedAt) return;
+              const token = sessionStorage.getItem('ace_token');
+              if (!token) return;
+              try {
+                const { markVoicemailListened } = await import('../api');
+                await markVoicemailListened(token, vm.id, true);
+                window.dispatchEvent(new CustomEvent('ace:unreadCountChanged'));
+                window.dispatchEvent(new CustomEvent('ace:voicemailMarkedListened', { detail: { id: vm.id } }));
+              } catch {
+                /* silent - user can still mark manually via the check icon */
+              }
+            }}
           />
           <div className="vm-player-controls">
             <span className="vm-controls-label">Speed</span>

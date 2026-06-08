@@ -469,7 +469,30 @@ app.post('/webhooks/telnyx/calls', async (request) => {
         // signals count as failed. Everything else is "completed" — the
         // call happened, even if it took a non-default path.
         const lc = hangupCause.toLowerCase();
+        // v0.10.103 fix - missed-call classification.
+        // Inbound calls that ENDED WITHOUT BEING ANSWERED are missed,
+        // regardless of hangup_cause. Previously originator_cancel
+        // (caller gave up while ringing) mapped to 'completed' which
+        // made Recents show a plain incoming call with no red flag.
+        // We fetch answeredAt inline here because `existing` further
+        // down only selects status for the blocked-preservation check.
+        const priorCall = callId
+          ? await prisma.call.findFirst({
+              where: { telnyxCallId: callId },
+              select: { answeredAt: true },
+            })
+          : null;
+        const wasAnswered = priorCall?.answeredAt != null;
         const status: string = (() => {
+          if (direction === 'inbound' && !wasAnswered) {
+            // Inbound + never picked up + this is the hangup event = missed.
+            // Still classify the specific reason if Telnyx told us so the
+            // statusLabel UI can show "Declined" vs "Missed" vs "Busy".
+            if (lc === 'call_rejected' || lc === 'rejected') return 'rejected';
+            if (lc === 'user_busy' || lc === 'busy') return 'rejected';
+            if (lc.includes('forward') || lc.includes('transfer') || lc.includes('redirect')) return 'forwarded';
+            return 'missed';
+          }
           if (lc === 'no_answer' || lc === 'no_user_response') return 'no_answer';
           if (lc === 'call_rejected' || lc === 'rejected') return 'rejected';
           if (lc === 'user_busy' || lc === 'busy') return 'rejected';
