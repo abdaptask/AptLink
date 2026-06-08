@@ -1,4 +1,4 @@
-﻿// v0.10.102 - Telnyx status poller + state cache + notification firer.
+// v0.10.102 - Telnyx status poller + state cache + notification firer.
 
 import { sendTenantTeamsCard } from './teamsNotifier.js';
 
@@ -13,7 +13,7 @@ interface StatuspageIncident {
 interface IncidentsRoot { incidents?: StatuspageIncident[] }
 
 const POLL_URL_STATUS = 'https://status.telnyx.com/api/v2/status.json';
-const POLL_URL_INCIDENTS = 'https://status.telnyx.com/api/v2/incidents/unresolved.json';
+const POLL_URL_INCIDENTS = 'https://status.telnyx.com/api/v2/incidents.json';
 const POLL_INTERVAL_MS = 60_000;
 
 type LogFn = (obj: Record<string, unknown>, msg: string) => void;
@@ -44,12 +44,26 @@ export function getTelnyxStatus(): TelnyxStatus { return current; }
 
 async function fetchOnce(logger: LogFn): Promise<void> {
   try {
-    const [sJson, iJson] = await Promise.all([
-      fetch(POLL_URL_STATUS).then((r) => (r.ok ? r.json() : Promise.reject('HTTP ' + r.status))),
-      fetch(POLL_URL_INCIDENTS).then((r) => (r.ok ? r.json() : Promise.reject('HTTP ' + r.status))),
-    ]);
-    const s = sJson as StatuspageRoot;
-    const inc = iJson as IncidentsRoot;
+    // Status fetch is required; if it fails we abort the whole poll.
+    const sRes = await fetch(POLL_URL_STATUS);
+    if (!sRes.ok) throw new Error('status HTTP ' + sRes.status);
+    const s = (await sRes.json()) as StatuspageRoot;
+
+    // Incidents fetch is best-effort; failures shouldn't kill the poll.
+    // Telnyx's /api/v2/incidents.json returns all recent incidents (resolved
+    // + unresolved); we filter to unresolved client-side.
+    let inc: IncidentsRoot = { incidents: [] };
+    try {
+      const iRes = await fetch(POLL_URL_INCIDENTS);
+      if (iRes.ok) {
+        const full = (await iRes.json()) as IncidentsRoot;
+        inc = {
+          incidents: (full.incidents ?? []).filter((i) => i.status !== 'resolved' && i.status !== 'postmortem'),
+        };
+      }
+    } catch {
+      /* incidents are optional - banner still works with just status */
+    }
     const indicator = s.status?.indicator ?? 'none';
     const description = s.status?.description ?? 'Unknown';
     const updatedAt = s.page?.updated_at ?? new Date().toISOString();
