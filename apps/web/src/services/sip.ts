@@ -309,7 +309,7 @@ export class SipService {
     // v0.10.90 — Emit the WS keepalive setting at every connect so any
     // diagnostic log a user emails us has explicit proof the new keepalive
     // is in effect (and lets us verify the value if we ever tune it).
-    console.log('[sip] v0.10.90: WebSocket keep_alive_interval=25s (active TCP-layer keepalive enabled)');
+    console.log('[sip] v0.10.110: WebSocket keep_alive_interval=15s (tightened from 25s to fight silent eviction)');
 
     const socket = new JsSIP.WebSocketInterface(wssUri);
     const uri = `sip:${config.username}@${this.realm}`;
@@ -325,7 +325,12 @@ export class SipService {
       // installRegistrationHeartbeat below) that calls ua.register()
       // unconditionally so Telnyx never sees us as expired.
       register: true,
-      register_expires: 600,
+      // v0.10.110 - reduced from 600s to 120s. JsSIP refreshes at
+      // ~expires/2 = 60s. Combined with our 15s force-register,
+      // Telnyx gets a fresh REGISTER from us at minimum every 15s,
+      // so its eviction window for "this client is dead" never
+      // gets close to triggering.
+      register_expires: 120,
       // IMPORTANT: session_timers MUST be false for Telnyx. With it on,
       // JsSIP sends re-INVITE/UPDATE every ~90s and Telnyx 481s the call
       // (no matching dialog) which then teardown the call. Off = the call
@@ -349,12 +354,13 @@ export class SipService {
       // (including the v0.10.80 wildcard wipe to clean up the stale
       // registration on the other side).
       //
-      // VALUE: 25 seconds. Tighter than the 30s force-REGISTER cadence
-      // we already run (v0.10.78), so the WSS layer detects death
-      // before the application layer's REGISTER attempt would. Common
-      // NAT mapping timeouts are 30-60s; 25s comfortably stays inside
-      // the most aggressive NAT windows.
-      keep_alive_interval: 25,
+      // v0.10.110 - tightened from 25s to 15s to fight "silent
+      // eviction" reports where the dialer shows green/registered
+      // during long inactivity (lunch, overnight) but Telnyx has
+      // already stopped routing calls to it. 15s keeps the WSS
+      // layer alive against the most aggressive NAT/proxy idle
+      // timeouts AND ensures WS death is detected within 30s.
+      keep_alive_interval: 15,
       // Use the user's selected mic via global getUserMedia constraints.
       user_agent: 'ACE-Dialer/1.0',
     });
@@ -976,11 +982,11 @@ export class SipService {
       }
       try {
         this.ua.register();
-        console.log('[sip] 30s force-register fired (defensive: NAT keepalive + silent eviction)');
+        console.log('[sip] 15s force-register fired (v0.10.110: tightened from 30s to fight silent eviction during inactivity)');
       } catch (e) {
-        console.warn('[sip] 30s force-register threw', e);
+        console.warn('[sip] 15s force-register threw', e);
       }
-    }, 30_000);
+    }, 15_000);
   }
 
   /**

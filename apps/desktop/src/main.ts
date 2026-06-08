@@ -1,7 +1,7 @@
 // Electron main process — owns the application lifecycle, creates the window,
 // handles the floating-ringer popup for inbound calls, and (Phase 6.4) hides
 // the window to the system tray on close so active calls keep running.
-import { app, BrowserWindow, shell, Menu, ipcMain, screen, Tray, nativeImage, powerMonitor } from 'electron';
+import { app, BrowserWindow, shell, Menu, ipcMain, screen, Tray, nativeImage, powerMonitor, powerSaveBlocker } from 'electron';
 import * as path from 'node:path';
 // electron-updater handles the entire silent-update lifecycle: poll GitHub
 // Releases, download the new installer in the background, and offer to restart.
@@ -681,6 +681,22 @@ function sendSipWake(reason: string) {
 app.whenReady().then(() => {
   // powerMonitor is only available after app.ready
   powerMonitor.on('resume', () => sendSipWake('system resume'));
+
+  // v0.10.110 - prevent the OS from suspending the app during long
+  // inactivity. Without this, Windows/Mac aggressive power management
+  // can pause the renderer's setInterval timers despite
+  // backgroundThrottling:false on webPreferences. That pause causes
+  // the SIP REGISTER refresh to miss its window, Telnyx silently
+  // evicts the Contact, and inbound calls go straight to voicemail.
+  // 'prevent-app-suspension' is the lighter blocker (still allows
+  // display sleep / screen lock - we just stop the app itself from
+  // being suspended).
+  try {
+    const blockerId = powerSaveBlocker.start('prevent-app-suspension');
+    console.log('[main] powerSaveBlocker started (id=' + blockerId + ', type=prevent-app-suspension) - keeps SIP timers alive during inactivity');
+  } catch (e) {
+    console.warn('[main] powerSaveBlocker failed to start', e);
+  }
   powerMonitor.on('unlock-screen', () => sendSipWake('screen unlock'));
   // Some Windows builds also fire 'user-did-become-active' after long
   // idle periods. Harmless extra trigger.
