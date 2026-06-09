@@ -159,10 +159,32 @@ function publicUser(u: {
   // v0.10.60 â€” Beta flag. Optional because legacy SELECT clauses may not
   // include it; treated as false when missing.
   connectionHealthBeta?: boolean;
-  // v0.10.64 â€” Country tag for Telnyx anchorsite. Optional because legacy
+  // v0.10.64 — Country tag for Telnyx anchorsite. Optional because legacy
   // SELECT clauses may not include it; pass-through null when missing.
   country?: string | null;
+  // v0.10.111 - User's registered dialer devices. Optional - legacy
+  // callers don't include it. Used for the Version column in admin
+  // Users panel.
+  userDevices?: Array<{
+    deviceId: string;
+    platform: string;
+    appVersion: string;
+    lastSeenAt: Date;
+  }>;
 }) {
+  const devices = u.userDevices ?? [];
+  // Pick the most-recently-seen device's version. If multiple devices,
+  // surface ALL distinct versions so admin can spot mixed-version users.
+  const sortedDevices = [...devices].sort(
+    (a, b) => b.lastSeenAt.getTime() - a.lastSeenAt.getTime(),
+  );
+  const distinctVersions = Array.from(
+    new Set(sortedDevices.map((d) => d.appVersion).filter(Boolean)),
+  );
+  const latestVersion = sortedDevices[0]?.appVersion ?? null;
+  const latestSeenAt = sortedDevices[0]?.lastSeenAt
+    ? sortedDevices[0].lastSeenAt.toISOString()
+    : null;
   return {
     id: u.id,
     email: u.email,
@@ -178,6 +200,11 @@ function publicUser(u: {
     userDids: u.userDids ?? [],
     connectionHealthBeta: u.connectionHealthBeta ?? false,
     country: u.country ?? null,
+    // v0.10.111 - device version info for admin Users panel.
+    latestVersion,
+    latestSeenAt,
+    distinctVersions,
+    deviceCount: devices.length,
   };
 }
 
@@ -581,6 +608,18 @@ export async function adminRoutes(app: FastifyInstance) {
           userDids: {
             select: { id: true, didNumber: true, label: true, isDefault: true },
             orderBy: [{ isDefault: 'desc' }, { id: 'asc' }],
+          },
+          // v0.10.111 - include user's devices so admin can see what
+          // dialer version each user is on. Sort by most-recently-seen
+          // first so the Users panel shows their current device.
+          userDevices: {
+            select: {
+              deviceId: true,
+              platform: true,
+              appVersion: true,
+              lastSeenAt: true,
+            },
+            orderBy: { lastSeenAt: 'desc' },
           },
         },
       });

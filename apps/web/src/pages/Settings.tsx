@@ -2827,7 +2827,7 @@ function UsersAdminSection() {
   // click again to toggle ascending/descending. Default ordering (sortKey
   // = null) preserves the server-returned createdAt-desc order so new
   // admins land on the familiar "newest users first" view.
-  type SortKey = 'name' | 'email' | 'role' | 'status' | 'did' | 'lastLogin';
+  type SortKey = 'name' | 'email' | 'role' | 'status' | 'did' | 'lastLogin' | 'version';
   const [sortKey, setSortKey] = useState<SortKey | null>(null);
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
   function toggleSort(key: SortKey) {
@@ -2926,6 +2926,12 @@ function UsersAdminSection() {
           // Never-signed-in users go LAST in asc (treat as -Infinity… well,
           // largest negative timestamp). Flip with sortDir for desc.
           return r.lastLoginAt ? new Date(r.lastLoginAt).getTime() : -Infinity;
+        case 'version':
+          // v0.10.111 - sort by semver-ish numeric weight; missing version
+          // sorts to the bottom in asc order.
+          return r.latestVersion
+            ? r.latestVersion.split('.').map((n) => Number(n) || 0).reduce((a, b) => a * 1000 + b, 0)
+            : -Infinity;
       }
     };
     filtered.sort((a, b) => {
@@ -3052,6 +3058,7 @@ function UsersAdminSection() {
                 { key: 'role', label: 'Role' },
                 { key: 'status', label: 'Status' },
                 { key: 'did', label: 'DID' },
+                { key: 'version', label: 'Version' },
                 { key: 'lastLogin', label: 'Last sign-in' },
               ];
               return ths.map((c) => {
@@ -3151,6 +3158,41 @@ function UsersAdminSection() {
                           </span>
                         ))}
                       </div>
+                    );
+                  })()}
+                </td>
+                {/* v0.10.111 - Version column: latest seen dialer version
+                    across this user's devices. Mixed versions get a yellow
+                    badge so admin can spot users running older clients. */}
+                <td className="muted small" style={{ whiteSpace: 'nowrap' }}>
+                  {(() => {
+                    const v = r.latestVersion;
+                    if (!v) return <span style={{ color: '#9ca3af' }}>—</span>;
+                    const distinct = r.distinctVersions || [v];
+                    const mixed = distinct.length > 1;
+                    const tooltip = mixed
+                      ? `Multiple versions in use: ${distinct.join(', ')}`
+                      : (r.latestSeenAt
+                          ? `Last heartbeat: ${new Date(r.latestSeenAt).toLocaleString('en-US', { timeZone: 'America/New_York', dateStyle: 'short', timeStyle: 'short' })}`
+                          : 'Recently seen');
+                    return (
+                      <span title={tooltip} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                        v{v}
+                        {mixed && (
+                          <span
+                            style={{
+                              fontSize: '0.65rem',
+                              padding: '1px 5px',
+                              borderRadius: 4,
+                              background: 'rgba(245,158,11,0.15)',
+                              color: '#92400e',
+                              fontWeight: 600,
+                            }}
+                          >
+                            +{distinct.length - 1}
+                          </span>
+                        )}
+                      </span>
                     );
                   })()}
                 </td>

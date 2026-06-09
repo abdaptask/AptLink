@@ -24,6 +24,14 @@ export interface ReleaseEntry {
 
 export const WHATS_NEW: ReleaseEntry[] = [
   {
+    version: '0.10.112',
+    date: 'June 9, 2026',
+    highlight: 'Admin can now see what dialer version each user is on',
+    changes: [
+      { type: 'new', text: 'Settings > Users now has a Version column showing what dialer version each user is currently on (derived from their most-recent device heartbeat). Sortable - click the column header to find everyone on older versions. If a user has multiple devices on different versions, a yellow "+N" badge highlights the mismatch. Hover the version to see when the user was last seen.' },
+    ],
+  },
+  {
     version: '0.10.111',
     date: 'June 9, 2026',
     highlight: 'Auto-update finally reaches users (was sitting as draft releases on GitHub) + re-release of all v0.10.110 fixes',

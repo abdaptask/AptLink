@@ -1590,6 +1590,13 @@ export interface AdminUserRow {
   // v0.10.64 — Country (IN / US / Other) for Telnyx anchorsite selection.
   // Optional because older API responses don't include it.
   country?: string | null;
+  // v0.10.111 — Dialer version info per user, derived from their most-
+  // recently-seen UserDevice. Optional for back-compat with older API
+  // responses where these fields didn't exist.
+  latestVersion?: string | null;
+  latestSeenAt?: string | null;
+  distinctVersions?: string[];
+  deviceCount?: number;
 }
 
 export async function listAdminUsers(token: string): Promise<AdminUserRow[]> {
