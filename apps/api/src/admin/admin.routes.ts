@@ -165,14 +165,16 @@ function publicUser(u: {
   // v0.10.111 - User's registered dialer devices. Optional - legacy
   // callers don't include it. Used for the Version column in admin
   // Users panel.
-  userDevices?: Array<{
+  // v0.10.114 fix - the Prisma relation field is `devices` (not
+  // `userDevices`) per packages/db/prisma/schema.prisma.
+  devices?: Array<{
     deviceId: string;
     platform: string;
     appVersion: string;
     lastSeenAt: Date;
   }>;
 }) {
-  const devices = u.userDevices ?? [];
+  const devices = u.devices ?? [];
   // Pick the most-recently-seen device's version. If multiple devices,
   // surface ALL distinct versions so admin can spot mixed-version users.
   const sortedDevices = [...devices].sort(
@@ -612,7 +614,8 @@ export async function adminRoutes(app: FastifyInstance) {
           // v0.10.111 - include user's devices so admin can see what
           // dialer version each user is on. Sort by most-recently-seen
           // first so the Users panel shows their current device.
-          userDevices: {
+          // v0.10.114 fix - relation field is `devices`, not `userDevices`.
+          devices: {
             select: {
               deviceId: true,
               platform: true,

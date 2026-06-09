@@ -24,6 +24,14 @@ export interface ReleaseEntry {
 
 export const WHATS_NEW: ReleaseEntry[] = [
   {
+    version: '0.10.114',
+    date: 'June 9, 2026',
+    highlight: 'Hotfix: Admin > Users page was throwing a 500 (broken Prisma relation reference in the Version column code)',
+    changes: [
+      { type: 'fixed', text: 'Hotfix: Admin > Users page returned HTTP 500 with a Prisma validation error because the Version column code (added in v0.10.111-112) referenced the wrong Prisma relation field name (userDevices instead of devices). All admins saw "Admin access required" even with valid admin privileges. Fixed the field name; the page works correctly now and shows each user\'s dialer version as designed.' },
+    ],
+  },
+  {
     version: '0.10.113',
     date: 'June 9, 2026',
     highlight: 'CRITICAL: fixes Telnyx \'not_found\' inbound routing bug where calls went directly to voicemail despite the dialer being registered',
