@@ -6893,6 +6893,330 @@ export async function adminRoutes(app: FastifyInstance) {
       };
     },
   );
+
+  // ===========================================================================
+  // v0.10.119 - TeXML voicemail migration (Phase 2 trial).
+  //
+  // Mechanically similar to /voicemail-migrate (Call Control) but:
+  //   1. Reads TeXML App ID from SystemConfig key 'telnyx.texml_vm.app_id'
+  //      (populated at webhooks-service boot by ensureTeXMLApp).
+  //   2. Stamps UserDid.texmlMigratedAt instead of callControlMigratedAt.
+  //   3. INTENTIONALLY leaves Hosted Voicemail enabled on the DID as a
+  //      safety net - if our TeXML endpoint 5xx's or times out, Telnyx
+  //      falls back to Hosted VM with default greeting. Better than a
+  //      hangup beep.
+  //   4. Gated by TEXML_TRIAL_DIDS env (comma-separated E.164 allowlist).
+  //      Refuses to migrate a DID that isn't in the allowlist. Empty/unset
+  //      allowlist refuses all migrations (fail-safe).
+  // ===========================================================================
+  app.post<{ Params: { id: string }; Body: { tag?: string } }>(
+    '/admin/users/:id/voicemail-texml-migrate',
+    { onRequest: [app.authenticate, requireAdmin] },
+    async (request, reply) => {
+      const actor = request.user as JwtPayload;
+      const userId = Number(request.params.id);
+      if (!Number.isFinite(userId) || userId <= 0) {
+        return reply.code(400).send({ error: 'Invalid user id' });
+      }
+      if (!config.telnyxApiKey) {
+        return reply.code(500).send({ error: 'TELNYX_API_KEY not configured' });
+      }
+      // Read the TeXML App ID from SystemConfig. This is set at webhooks-
+      // service boot by ensureTeXMLApp() (v0.10.119 Day 1). If empty, the
+      // bootstrap failed - we can't safely migrate without an App ID.
+      const sysConfig = await prisma.systemConfig.findUnique({
+        where: { key: 'telnyx.texml_vm.app_id' },
+      });
+      const texmlAppId = sysConfig?.value?.trim() ?? '';
+      if (!texmlAppId) {
+        return reply.code(500).send({
+          error: 'TeXML voicemail App ID not configured (SystemConfig.telnyx.texml_vm.app_id is empty). Check webhooks-service boot logs for [texml-vm] bootstrap errors.',
+        });
+      }
+      // Trial allowlist - refuse to migrate any DID not on it.
+      const allowlistRaw = (process.env.TEXML_TRIAL_DIDS ?? '').trim();
+      const allowlist = new Set(
+        allowlistRaw.split(',').map((s) => s.trim()).filter((s) => s.length > 0),
+      );
+      if (allowlist.size === 0) {
+        return reply.code(403).send({
+          error: 'TEXML_TRIAL_DIDS env var is empty. Set it to a comma-separated allowlist (e.g. "+16467379912") on the API service before migrating.',
+        });
+      }
+
+      const rawTag = (request.body?.tag ?? '').toString().trim();
+      const cleanTag = rawTag.replace(/[^a-zA-Z0-9 _.\-@]/g, '').slice(0, 80);
+
+      const user = await prisma.user.findUnique({
+        where: { id: userId },
+        select: { id: true, email: true, firstName: true, lastName: true, sipUsername: true },
+      });
+      if (!user) return reply.code(404).send({ error: 'User not found' });
+      if (!user.sipUsername) {
+        return reply.code(400).send({
+          error: 'User has no SIP username - cannot migrate. Provision a SIP credential first.',
+        });
+      }
+      const dids = await prisma.userDid.findMany({
+        where: { userId },
+        select: {
+          id: true,
+          didNumber: true,
+          telnyxNumberId: true,
+          connectionId: true,
+          texmlMigratedAt: true,
+          callControlMigratedAt: true,
+        },
+      });
+      if (dids.length === 0) {
+        return reply.code(400).send({ error: 'User has no DIDs to migrate' });
+      }
+      const results: Array<{
+        didId: number;
+        didNumber: string;
+        status: 'migrated' | 'already_migrated' | 'skipped_not_allowlisted' | 'skipped_call_control_active' | 'failed';
+        previousConnectionId?: string | null;
+        error?: string;
+      }> = [];
+      for (const d of dids) {
+        if (!allowlist.has(d.didNumber)) {
+          results.push({ didId: d.id, didNumber: d.didNumber, status: 'skipped_not_allowlisted' });
+          continue;
+        }
+        if (d.callControlMigratedAt) {
+          results.push({
+            didId: d.id,
+            didNumber: d.didNumber,
+            status: 'skipped_call_control_active',
+            error: 'DID is currently on Call Control voicemail; roll back that migration first before migrating to TeXML.',
+          });
+          continue;
+        }
+        if (d.texmlMigratedAt) {
+          results.push({ didId: d.id, didNumber: d.didNumber, status: 'already_migrated' });
+          continue;
+        }
+        if (!d.telnyxNumberId) {
+          results.push({
+            didId: d.id,
+            didNumber: d.didNumber,
+            status: 'failed',
+            error: 'telnyxNumberId not cached on UserDid',
+          });
+          continue;
+        }
+        try {
+          // Snapshot current connection_id BEFORE we patch (for rollback).
+          const currentPhoneRes = await fetch(
+            `https://api.telnyx.com/v2/phone_numbers/${encodeURIComponent(d.telnyxNumberId)}`,
+            { headers: { Authorization: `Bearer ${config.telnyxApiKey}` } },
+          );
+          const currentPhoneJson = (await currentPhoneRes.json().catch(() => ({}))) as {
+            data?: { connection_id?: string };
+          };
+          const currentConnectionId = currentPhoneJson?.data?.connection_id ?? d.connectionId ?? null;
+
+          // PATCH connection_id to point at our TeXML App. We do NOT
+          // touch Hosted VM enabled flag - it stays as a safety net.
+          const patchBody: Record<string, unknown> = { connection_id: texmlAppId };
+          if (cleanTag) patchBody.tags = [cleanTag];
+          const bindRes = await fetch(
+            `https://api.telnyx.com/v2/phone_numbers/${encodeURIComponent(d.telnyxNumberId)}`,
+            {
+              method: 'PATCH',
+              headers: {
+                'Content-Type': 'application/json',
+                Authorization: `Bearer ${config.telnyxApiKey}`,
+              },
+              body: JSON.stringify(patchBody),
+            },
+          );
+          if (!bindRes.ok) {
+            const errBody = await bindRes.text().catch(() => '');
+            results.push({
+              didId: d.id,
+              didNumber: d.didNumber,
+              status: 'failed',
+              error: `Telnyx PATCH connection_id failed: ${bindRes.status} ${errBody.slice(0, 200)}`,
+            });
+            continue;
+          }
+          await prisma.userDid.update({
+            where: { id: d.id },
+            data: {
+              preMigrationConnectionId: currentConnectionId,
+              texmlMigratedAt: new Date(),
+              connectionId: texmlAppId,
+            },
+          });
+          results.push({
+            didId: d.id,
+            didNumber: d.didNumber,
+            status: 'migrated',
+            previousConnectionId: currentConnectionId,
+          });
+        } catch (e) {
+          results.push({
+            didId: d.id,
+            didNumber: d.didNumber,
+            status: 'failed',
+            error: e instanceof Error ? e.message : String(e),
+          });
+        }
+      }
+      const successCount = results.filter((r) => r.status === 'migrated').length;
+      const alreadyCount = results.filter((r) => r.status === 'already_migrated').length;
+      const failCount = results.filter((r) => r.status === 'failed').length;
+      const skippedCount = results.filter(
+        (r) => r.status === 'skipped_not_allowlisted' || r.status === 'skipped_call_control_active',
+      ).length;
+      await recordAudit(actor.sub, 'user.voicemail_texml_migrate', userId, {
+        targetEmail: user.email,
+        texmlAppId,
+        successCount,
+        alreadyCount,
+        failCount,
+        skippedCount,
+        results,
+      });
+      return {
+        ok: failCount === 0,
+        user: {
+          id: user.id,
+          email: user.email,
+          name: [user.firstName, user.lastName].filter(Boolean).join(' '),
+        },
+        summary: { successCount, alreadyCount, skippedCount, failCount, total: results.length },
+        results,
+      };
+    },
+  );
+
+  // v0.10.119 - TeXML voicemail rollback. Reverses voicemail-texml-migrate:
+  // restores DID.connection_id from preMigrationConnectionId, clears
+  // texmlMigratedAt. Doesn't touch Hosted VM (we never disabled it).
+  app.post<{ Params: { id: string } }>(
+    '/admin/users/:id/voicemail-texml-rollback',
+    { onRequest: [app.authenticate, requireAdmin] },
+    async (request, reply) => {
+      const actor = request.user as JwtPayload;
+      const userId = Number(request.params.id);
+      if (!Number.isFinite(userId) || userId <= 0) {
+        return reply.code(400).send({ error: 'Invalid user id' });
+      }
+      if (!config.telnyxApiKey) {
+        return reply.code(500).send({ error: 'TELNYX_API_KEY not configured' });
+      }
+      const user = await prisma.user.findUnique({
+        where: { id: userId },
+        select: { id: true, email: true, firstName: true, lastName: true },
+      });
+      if (!user) return reply.code(404).send({ error: 'User not found' });
+      const dids = await prisma.userDid.findMany({
+        where: { userId, texmlMigratedAt: { not: null } },
+        select: {
+          id: true,
+          didNumber: true,
+          telnyxNumberId: true,
+          preMigrationConnectionId: true,
+          texmlMigratedAt: true,
+        },
+      });
+      if (dids.length === 0) {
+        return { ok: true, message: 'No TeXML-migrated DIDs to roll back.', results: [] };
+      }
+      const results: Array<{
+        didId: number;
+        didNumber: string;
+        status: 'rolled_back' | 'failed';
+        restoredConnectionId?: string | null;
+        error?: string;
+      }> = [];
+      for (const d of dids) {
+        if (!d.telnyxNumberId) {
+          results.push({
+            didId: d.id,
+            didNumber: d.didNumber,
+            status: 'failed',
+            error: 'telnyxNumberId missing',
+          });
+          continue;
+        }
+        if (!d.preMigrationConnectionId) {
+          results.push({
+            didId: d.id,
+            didNumber: d.didNumber,
+            status: 'failed',
+            error: 'preMigrationConnectionId is null - cannot restore. Use Telnyx Portal to re-bind manually.',
+          });
+          continue;
+        }
+        try {
+          const bindRes = await fetch(
+            `https://api.telnyx.com/v2/phone_numbers/${encodeURIComponent(d.telnyxNumberId)}`,
+            {
+              method: 'PATCH',
+              headers: {
+                'Content-Type': 'application/json',
+                Authorization: `Bearer ${config.telnyxApiKey}`,
+              },
+              body: JSON.stringify({ connection_id: d.preMigrationConnectionId }),
+            },
+          );
+          if (!bindRes.ok) {
+            const errBody = await bindRes.text().catch(() => '');
+            results.push({
+              didId: d.id,
+              didNumber: d.didNumber,
+              status: 'failed',
+              error: `Telnyx rebind failed: ${bindRes.status} ${errBody.slice(0, 200)}`,
+            });
+            continue;
+          }
+          await prisma.userDid.update({
+            where: { id: d.id },
+            data: {
+              preMigrationConnectionId: null,
+              texmlMigratedAt: null,
+              connectionId: d.preMigrationConnectionId,
+            },
+          });
+          results.push({
+            didId: d.id,
+            didNumber: d.didNumber,
+            status: 'rolled_back',
+            restoredConnectionId: d.preMigrationConnectionId,
+          });
+        } catch (e) {
+          results.push({
+            didId: d.id,
+            didNumber: d.didNumber,
+            status: 'failed',
+            error: e instanceof Error ? e.message : String(e),
+          });
+        }
+      }
+      const successCount = results.filter((r) => r.status === 'rolled_back').length;
+      const failCount = results.filter((r) => r.status === 'failed').length;
+      await recordAudit(actor.sub, 'user.voicemail_texml_rollback', userId, {
+        targetEmail: user.email,
+        successCount,
+        failCount,
+        results,
+      });
+      return {
+        ok: failCount === 0,
+        user: {
+          id: user.id,
+          email: user.email,
+          name: [user.firstName, user.lastName].filter(Boolean).join(' '),
+        },
+        summary: { successCount, failCount, total: results.length },
+        results,
+      };
+    },
+  );
+
   app.get<{ Params: { id: string } }>(
     '/admin/users/:id/devices',
     { onRequest: [app.authenticate, requireAdmin] },
