@@ -28,6 +28,7 @@ import {
   ensureTeXMLApp,
   buildDialTeXML,
   buildVoicemailTeXML,
+  buildDialStatusTeXML,
   lookupDidOwner,
 } from './texmlVoicemail.js';
 
@@ -1487,6 +1488,186 @@ app.post('/texml/voicemail/app-status', async (request, reply) => {
   reply.code(200).send('');
 });
 
+// v0.10.119 - Dial-status callback. Telnyx POSTs urlencoded form body here
+// when the <Dial> in /texml/voicemail finishes. Form fields include:
+//   DialCallStatus  (completed | busy | no-answer | failed | canceled)
+//   CallSid         (Telnyx call SID)
+//   From / To       (caller / callee, echoed back from the original call)
+// We re-look-up the DID owner by To, then return the right TeXML:
+//   completed/answered -> empty Response
+//   anything else      -> Play greeting + Record (voicemail)
+async function voicemailDialStatusHandler(
+  request: { headers?: Record<string, unknown>; body?: unknown; query?: unknown },
+): Promise<string> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const body = (request.body ?? {}) as any;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const query = (request.query ?? {}) as any;
+  const status: string =
+    (typeof body.DialCallStatus === 'string' && body.DialCallStatus) ||
+    (typeof query.DialCallStatus === 'string' && query.DialCallStatus) ||
+    '';
+  const to = extractToNumber(request);
+  const baseUrl = texmlPublicBaseUrl(request);
+  app.log.info({ to, dialCallStatus: status }, '[texml-vm] dial-status received');
+  // Default greeting (used if owner lookup fails)
+  const defaultGreeting = { mode: null, url: null, text: null } as const;
+  let ownerFirstName: string | null = null;
+  let greeting: { mode: 'audio' | 'tts' | 'default' | null; url: string | null; text: string | null } =
+    { ...defaultGreeting };
+  if (to) {
+    const owner = await lookupDidOwner(to);
+    if (owner) {
+      ownerFirstName = owner.firstName;
+      greeting = owner.greeting;
+    }
+  }
+  return buildDialStatusTeXML({
+    dialCallStatus: status,
+    greeting,
+    ownerFirstName,
+    publicBaseUrl: baseUrl,
+  });
+}
+
+app.post('/texml/voicemail/dial-status', async (request, reply) => {
+  const xml = await voicemailDialStatusHandler(request);
+  app.log.info({ length: xml.length }, '[texml-vm] dial-status served (POST)');
+  reply.type('application/xml; charset=utf-8').send(xml);
+});
+app.get('/texml/voicemail/dial-status', async (request, reply) => {
+  const xml = await voicemailDialStatusHandler(request);
+  app.log.info({ length: xml.length }, '[texml-vm] dial-status served (GET)');
+  reply.type('application/xml; charset=utf-8').send(xml);
+});
+
+// v0.10.119 - Recording-complete callback. Telnyx POSTs urlencoded form body
+// here when the <Record> finalizes. Form fields:
+//   RecordingUrl        public mp3 URL
+//   RecordingDuration   integer seconds
+//   RecordingSid        Telnyx Recording SID
+//   CallSid             Telnyx Call SID (matches dial-status / app-status)
+//   From / To           caller / callee
+// We reshape into our NormalizedVmPayload and feed processVoicemail() so
+// the row lands in the same place as Hosted-VM voicemails and shows up in
+// Voicemail tab + Recents.
+app.post('/texml/voicemail/recording-complete', async (request, reply) => {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const body = (request.body ?? {}) as any;
+    const fromNumber: string | undefined =
+      (typeof body.From === 'string' && body.From) || (typeof body.from === 'string' && body.from) || undefined;
+    const toNumber: string | undefined =
+      (typeof body.To === 'string' && body.To) || (typeof body.to === 'string' && body.to) || undefined;
+    const recordingUrl: string | undefined =
+      (typeof body.RecordingUrl === 'string' && body.RecordingUrl) ||
+      (typeof body.recording_url === 'string' && body.recording_url) ||
+      undefined;
+    const durationSeconds = Number(body.RecordingDuration ?? body.recording_duration ?? 0) || 0;
+    const telnyxCallId: string | undefined =
+      (typeof body.CallSid === 'string' && body.CallSid) || undefined;
+    if (!fromNumber || !recordingUrl) {
+      app.log.warn({ body }, '[texml-vm] recording-complete missing From or RecordingUrl');
+      reply.type('application/xml; charset=utf-8').send('<?xml version="1.0" encoding="UTF-8"?>\n<Response/>');
+      return;
+    }
+    await processVoicemail(
+      {
+        fromNumber,
+        toNumber,
+        recordingUrl,
+        durationSeconds,
+        telnyxCallId,
+        receivedAt: new Date(),
+      },
+      'texml-vm',
+    );
+  } catch (e) {
+    app.log.error({ err: e }, '[texml-vm] recording-complete handler error');
+  }
+  // Always return empty Response so Telnyx hangs up cleanly.
+  reply.type('application/xml; charset=utf-8').send('<?xml version="1.0" encoding="UTF-8"?>\n<Response/>');
+});
+
+// v0.10.119 - Shared voicemail-row creation helper. Three callers:
+//   1. Legacy Hosted-VM handler (/webhooks/telnyx/voicemail) - Variant A native
+//      Telnyx event envelope or Variant B custom shape.
+//   2. Call Control voicemail (voicemailCallControl.ts) - already inlines its
+//      own logic; not refactored to use this yet (separate effort).
+//   3. NEW TeXML voicemail (/texml/voicemail/recording-complete) - parses
+//      Telnyx TeXML form body (RecordingUrl, From, To, RecordingDuration,
+//      CallSid) and feeds the normalized payload here.
+//
+// Returns { stored, reason, voicemailId? }. stored=false means we
+// intentionally skipped (unattributable / blocked / duplicate). Caller
+// always returns 200 to Telnyx so they don't retry.
+interface NormalizedVmPayload {
+  fromNumber: string;
+  toNumber?: string;
+  recordingUrl: string;
+  durationSeconds: number;
+  telnyxCallId?: string;
+  receivedAt: Date;
+  transcription?: string;
+  connectionId?: string;
+}
+async function processVoicemail(
+  payload: NormalizedVmPayload,
+  source: string,
+): Promise<{ stored: boolean; reason?: string; voicemailId?: number }> {
+  const { userId: ownerUserId, userDidId } = await resolveUserAndDid({
+    toNumber: payload.toNumber,
+    fromNumber: payload.fromNumber,
+    direction: 'inbound',
+    connectionId: payload.connectionId ?? null,
+  });
+  if (ownerUserId === null) {
+    app.log.warn(
+      { source, toNumber: payload.toNumber, fromNumber: payload.fromNumber, telnyxCallId: payload.telnyxCallId },
+      '[vm] could not attribute voicemail - skipping',
+    );
+    return { stored: false, reason: 'unattributable' };
+  }
+  if (await isFromNumberBlockedForUser(ownerUserId, payload.fromNumber)) {
+    app.log.info(
+      { source, ownerUserId, fromNumber: payload.fromNumber, telnyxCallId: payload.telnyxCallId },
+      '[vm] voicemail from blocked number - dropping',
+    );
+    return { stored: false, reason: 'blocked' };
+  }
+  if (payload.telnyxCallId) {
+    const dupCheck = await prisma.voicemail.findFirst({
+      where: { telnyxCallId: payload.telnyxCallId },
+      select: { id: true },
+    });
+    if (dupCheck) {
+      app.log.info(
+        { source, telnyxCallId: payload.telnyxCallId, existingVoicemailId: dupCheck.id },
+        '[vm] dedup: row with this telnyxCallId already exists, skipping',
+      );
+      return { stored: false, reason: 'duplicate', voicemailId: dupCheck.id };
+    }
+  }
+  const created = await prisma.voicemail.create({
+    data: {
+      userId: ownerUserId,
+      telnyxCallId: payload.telnyxCallId ?? null,
+      fromNumber: payload.fromNumber,
+      toNumber: payload.toNumber ?? PILOT_NUMBER,
+      recordingUrl: payload.recordingUrl,
+      durationSeconds: payload.durationSeconds,
+      transcription: payload.transcription ?? null,
+      receivedAt: payload.receivedAt,
+      userDidId,
+    },
+  });
+  app.log.info(
+    { source, voicemailId: created.id, fromNumber: payload.fromNumber, durationSeconds: payload.durationSeconds },
+    '[vm] voicemail recorded',
+  );
+  return { stored: true, voicemailId: created.id };
+}
+
 // Phase 5.6 — Voicemail recording webhook.
 // Telnyx Call Control flow: on no-answer, transfer the call to a recording
 // action that records the caller's message and fires a webhook to this URL
@@ -1494,6 +1675,8 @@ app.post('/texml/voicemail/app-status', async (request, reply) => {
 // Accepts both shapes:
 //   - data.event_type === 'call.recording.saved' WITH client_state === 'voicemail'
 //   - top-level { from, to, recording_url, duration_seconds, transcription, telnyx_call_id }
+// v0.10.119 - body parsing remains inline (two variants), then we hand
+// the normalized payload to processVoicemail() above for the shared work.
 app.post('/webhooks/telnyx/voicemail', async (request) => {
   try {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -1540,67 +1723,21 @@ app.post('/webhooks/telnyx/voicemail', async (request) => {
       return { received: true };
     }
 
-    // Phase 5.7 — route the voicemail to the user that owns the called DID.
-    // v0.10.0 Task 5 — also resolve userDidId for line-badge tagging.
-    const { userId: ownerUserId, userDidId } = await resolveUserAndDid({
-      toNumber, fromNumber,
-      direction: 'inbound',
-      connectionId: connectionId ?? null,  // v0.10.115
-    });
-    // v0.10.108 - skip storing voicemail we can't attribute.
-    if (ownerUserId === null) {
-      app.log.warn(
-        { toNumber, fromNumber, telnyxCallId },
-        '[telnyx-vm] could not attribute voicemail - skipping',
-      );
-      return { received: true };
-    }
-
-    // Phase 6.12 - drop blocked voicemails. Telnyx Hosted Voicemail still
-    // triggers on USER_BUSY (Telnyx Support confirmed they can't disable
-    // that trigger), so a blocked caller's recording arrives here. Drop
-    // it silently — the user never sees it.
-    if (await isFromNumberBlockedForUser(ownerUserId, fromNumber)) {
-      app.log.info(
-        { ownerUserId, fromNumber, telnyxCallId },
-        '[blocked] voicemail from blocked number - dropping',
-      );
-      return { received: true };
-    }
-
-    // v0.10.0 — Dedup by telnyx_call_id. The Telnyx Hosted Voicemail
-    // handler above ALSO writes to this table; if Telnyx fires both
-    // event types for the same call, we'd produce two rows. Skip
-    // creation if a row with this telnyxCallId already exists.
-    if (telnyxCallId) {
-      const dupCheck = await prisma.voicemail.findFirst({
-        where: { telnyxCallId },
-        select: { id: true },
-      });
-      if (dupCheck) {
-        app.log.info(
-          { telnyxCallId, existingVoicemailId: dupCheck.id },
-          '[telnyx] legacy voicemail dedup: row with this telnyxCallId already exists, skipping',
-        );
-        return { received: true };
-      }
-    }
-
-    await prisma.voicemail.create({
-      data: {
-        userId: ownerUserId,
-        telnyxCallId: telnyxCallId ?? null,
+    // v0.10.119 - hand off to shared processVoicemail() helper. It does
+    // resolve-user, blocked-check, dedup, and the prisma.voicemail.create.
+    await processVoicemail(
+      {
         fromNumber,
-        toNumber: toNumber ?? PILOT_NUMBER,
+        toNumber,
         recordingUrl,
         durationSeconds,
-        transcription: transcription ?? null,
+        telnyxCallId,
         receivedAt,
-        userDidId,
+        transcription,
+        connectionId,
       },
-    });
-
-    app.log.info({ fromNumber, recordingUrl, durationSeconds }, '[telnyx] voicemail recorded');
+      'hosted-vm',
+    );
     return { received: true };
   } catch (e) {
     app.log.error({ err: e }, '[telnyx] voicemail handler error');

@@ -244,3 +244,44 @@ export async function lookupDidOwner(
     },
   };
 }
+
+
+// ---------------------------------------------------------------------------
+// buildDialStatusTeXML - called when Telnyx POSTs DialCallStatus to our
+// /texml/voicemail/dial-status endpoint. We branch on the status:
+//   completed / answered -> empty <Response/> (call already done)
+//   busy                 -> Play greeting + Record (treat busy as
+//                           "go to voicemail"; matches the v0.10.100
+//                           busy-greeting behavior even though for the
+//                           trial we use a single greeting for both cases)
+//   no-answer / failed / canceled / anything else -> Play greeting + Record
+//
+// We need the same greeting + ownerFirstName context that buildVoicemailTeXML
+// uses. The caller (route handler in main.ts) re-looks-up the DID owner via
+// lookupDidOwner using the To number that Telnyx echoes back in this
+// callback's body, so we get the right user even though this is a separate
+// HTTP request from the initial /texml/voicemail dial.
+// ---------------------------------------------------------------------------
+export function buildDialStatusTeXML(opts: {
+  dialCallStatus: string;
+  greeting: GreetingConfig;
+  ownerFirstName: string | null;
+  publicBaseUrl: string;
+}): string {
+  const status = (opts.dialCallStatus ?? '').toLowerCase();
+
+  // Call already completed — nothing more to do. Empty Response tells
+  // Telnyx to just terminate the call cleanly.
+  if (status === 'completed' || status === 'answered') {
+    return '<?xml version="1.0" encoding="UTF-8"?>\n<Response/>';
+  }
+
+  // Everything else (busy, no-answer, failed, canceled, ...) falls
+  // through to voicemail. buildVoicemailTeXML handles the greeting
+  // selection (audio / tts / default).
+  return buildVoicemailTeXML({
+    greeting: opts.greeting,
+    ownerFirstName: opts.ownerFirstName,
+    publicBaseUrl: opts.publicBaseUrl,
+  });
+}
