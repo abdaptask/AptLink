@@ -1,4 +1,6 @@
 import { createContext, useContext, useEffect, useRef, useState } from 'react';
+import { useMachine } from '@xstate/react';
+import { callMachine } from './callMachine';
 import { sipService, type SipState, type CallEvent, type CallQuality } from '../services/sip';
 import {
   createCall,
@@ -82,17 +84,22 @@ interface CallLogState {
 
 export function SipProvider({ children }: { children: React.ReactNode }) {
   const [sipState, setSipState] = useState<SipState>('disconnected');
-  const [callState, setCallState] = useState<CallEvent>({ state: 'idle' });
-  const [incoming, setIncoming] = useState<CallEvent | null>(null);
-  const [hasSecondCall, setHasSecondCall] = useState(false);
-  const [secondCallNumber, setSecondCallNumber] = useState<string | null>(null);
-  const [secondCallId, setSecondCallId] = useState<string | null>(null);
-  const [conferenceActive, setConferenceActive] = useState(false);
-  const [conferenceOtherNumber, setConferenceOtherNumber] = useState<string | null>(null);
-  const [conferenceOtherId, setConferenceOtherId] = useState<string | null>(null);
-  const [activeCallControlId, setActiveCallControlId] = useState<string | null>(null);
-  const [secondCallControlId, setSecondCallControlId] = useState<string | null>(null);
   const [callQuality, setCallQuality] = useState<CallQuality>({ level: 'unknown', jitter: 0, loss: 0, rtt: null });
+  const [state, send] = useMachine(callMachine);
+
+  const {
+    callState,
+    incoming,
+    hasSecondCall,
+    secondCallNumber,
+    secondCallId,
+    conferenceActive,
+    conferenceOtherNumber,
+    conferenceOtherId,
+    activeCallControlId,
+    secondCallControlId,
+  } = state.context;
+
   const logRef = useRef<Map<string, CallLogState>>(new Map());
   const rejectedRef = useRef<Set<string>>(new Set());
   const currentIncomingRef = useRef<string | null>(null);
@@ -256,7 +263,7 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
         rejectedRef.current.add(currentIncomingRef.current);
       }
       sipService.declineCall();
-      setIncoming(null);
+      send({ type: 'CLEAR_INCOMING' });
     });
 
     // SIP-failed watchdog: if the SIP UA stays in 'failed' for 30s the
@@ -270,8 +277,9 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
     });
     const offQuality = sipService.on<CallQuality>('quality', (q) => setCallQuality(q));
     const offCall = sipService.on<CallEvent>('call', (e) => {
+      send({ type: 'CALL_EVENT', payload: e });
+
       if (e.state === 'incoming') {
-        setIncoming(e);
         currentIncomingRef.current = e.callId ?? null;
         if (window.ace?.onIncomingCall) {
           try {
@@ -280,57 +288,15 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
             console.warn('[sip] electron bridge failed', err);
           }
         }
-      } else {
-        // Only update the main callState when this event is for the active
-        // call (or there's no active call at all). Events on a held call —
-        // e.g., the user tapping the held-strip's hangup button — must not
-        // clobber the active call's display.
-        const activeId = sipService.getActiveCallId();
-        const isActiveEvent = !activeId || !e.callId || e.callId === activeId;
-        if (isActiveEvent) {
-          setCallState(e);
-        } else {
-          console.log('[sip-ctx] ignoring event for non-active call', e.callId, 'state:', e.state);
+      } else if (e.state === 'ended') {
+        if (currentIncomingRef.current === e.callId) {
+          currentIncomingRef.current = null;
+          if (window.ace?.notifyCallEnded) {
+            try { window.ace.notifyCallEnded(); } catch { /* noop */ }
+          }
         }
-        setIncoming((prev) => {
-          if (!prev) return prev;
-          if (prev.callId === e.callId) {
-            currentIncomingRef.current = null;
-            if (window.ace?.notifyCallEnded) {
-              try { window.ace.notifyCallEnded(); } catch { /* noop */ }
-            }
-            return null;
-          }
-          if (e.state === 'ended') {
-            currentIncomingRef.current = null;
-            if (window.ace?.notifyCallEnded) {
-              try { window.ace.notifyCallEnded(); } catch { /* noop */ }
-            }
-            return null;
-          }
-          return prev;
-        });
       }
       void logCallEvent(e, logRef.current, rejectedRef.current);
-
-      // When ANY call ends, recompute the held-call state from sipService.
-      // After cleanupCall promotes a survivor to active, getHeldCallId()
-      // returns null in the 2-call → 1-call collapse case.
-      if (e.state === 'ended') {
-        const heldId = sipService.getHeldCallId();
-        if (!heldId) {
-          setHasSecondCall(false);
-          setSecondCallNumber(null);
-          setSecondCallId(null);
-          // If we were in conference and a participant dropped, we're now
-          // a normal single call — clear the conference state too.
-          setConferenceActive(false);
-          setConferenceOtherNumber(null);
-          setConferenceOtherId(null);
-        } else {
-          setSecondCallId(heldId);
-        }
-      }
     });
 
     return () => {
@@ -356,7 +322,7 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
       window.clearInterval(ccPollRef.current);
       ccPollRef.current = null;
     }
-    setActiveCallControlId(null);
+    send({ type: 'UPDATE_ACTIVE_CC', id: null });
 
     if (callState.state !== 'connected') return;
     const telnyxCallId = callState.callId;
@@ -383,7 +349,7 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
       attempts += 1;
       const row = await lookupCall(token, telnyxCallId, hints);
       if (row?.callControlId) {
-        setActiveCallControlId(row.callControlId);
+        send({ type: 'UPDATE_ACTIVE_CC', id: row.callControlId });
         if (ccPollRef.current) {
           window.clearInterval(ccPollRef.current);
           ccPollRef.current = null;
@@ -430,14 +396,17 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
       // If holdActiveAndAccept returned an id, the prior active is now held —
       // populate the second-call state so InCall's held-strip renders.
       if (heldId) {
-        setSecondCallNumber(priorOther ?? null);
-        setSecondCallId(heldId);
-        setHasSecondCall(true);
+        send({
+          type: 'SET_HELD_CALL',
+          number: priorOther ?? null,
+          id: heldId,
+        });
+      } else {
+        send({ type: 'CLEAR_INCOMING' });
       }
       // Clear the incoming banner so the IncomingCall component unmounts;
       // SipContext's onCall handler also does this on the 'accepted' event,
       // but doing it eagerly avoids a flash of the third button after tap.
-      setIncoming(null);
       currentIncomingRef.current = null;
       if (window.ace?.notifyCallEnded) {
         try { window.ace.notifyCallEnded(); } catch { /* noop */ }
@@ -446,7 +415,7 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
     declineCall: () => {
       if (incoming?.callId) rejectedRef.current.add(incoming.callId);
       sipService.declineCall();
-      setIncoming(null);
+      send({ type: 'CLEAR_INCOMING' });
     },
     toggleMute: () => sipService.toggleMute(),
     toggleHold: () => sipService.toggleHold(),
@@ -493,15 +462,14 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
           current.direction === 'inbound'
             ? current.fromNumber ?? current.number
             : current.toNumber ?? current.number;
-        setSecondCallNumber(priorOther ?? null);
-        setSecondCallId(current.callId ?? null);
-        setHasSecondCall(true);
         sipService.addCall(number);
+        send({
+          type: 'SET_HELD_CALL',
+          number: priorOther ?? null,
+          id: current.callId ?? null,
+        });
         return { ok: true };
       } catch (e) {
-        setHasSecondCall(false);
-        setSecondCallNumber(null);
-        setSecondCallId(null);
         return {
           ok: false,
           error: 'add_call_failed',
@@ -510,17 +478,8 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
       }
     },
     swapCalls: () => {
-      const priorActive = callStateRef.current;
-      const priorOther =
-        priorActive.direction === 'inbound'
-          ? priorActive.fromNumber ?? priorActive.number
-          : priorActive.toNumber ?? priorActive.number;
-      const priorActiveId = priorActive.callId ?? null;
       sipService.swapCalls();
-      // After swap, prior active becomes the held one; show its info on
-      // the held strip and remember its session id for hangup.
-      setSecondCallNumber(priorOther ?? null);
-      setSecondCallId(priorActiveId);
+      send({ type: 'SWAP_CALLS' });
     },
     listAudioOutputs: () => sipService.listAudioOutputs(),
     setAudioOutput: (deviceId) => sipService.setAudioOutput(deviceId),
@@ -529,23 +488,9 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
       // sipService.startConference() (added below) wires mic + both calls'
       // remote streams together so all three parties hear each other.
       try {
-        // Capture both numbers + ids BEFORE merge so we can render two
-        // matching conference pills with per-call hangup. The "active"
-        // call drives `callState`; the "second" call's info we already
-        // tracked via hasSecondCall.
-        const otherNumber = secondCallNumber;
-        const otherId = secondCallId;
         const ok = sipService.startConference();
         if (ok) {
-          // Switch from "active + held" to "two-party conference". Both
-          // calls remain alive, but neither is on hold and both should be
-          // displayed identically.
-          setHasSecondCall(false);
-          setSecondCallNumber(null);
-          setSecondCallControlId(null);
-          setConferenceActive(true);
-          setConferenceOtherNumber(otherNumber);
-          setConferenceOtherId(otherId);
+          send({ type: 'MERGE_CALLS' });
         }
         return ok;
       } catch (e) {

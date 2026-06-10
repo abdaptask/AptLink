@@ -15,6 +15,7 @@
 
 import JsSIP from 'jssip';
 import { getHoldMusicEnabled, getHoldMusicDataUrl } from '../lib/userPrefs';
+import { audioGraphService } from './audioGraph.js';
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type RTCSession = any; // jssip's RTCSession type is JSDoc-only
 
@@ -1645,7 +1646,7 @@ export class SipService {
       this.stopQualityPolling();
       this.stopConference();
     }
-    if (this.calls.size < 2 && this.conferenceCtx) {
+    if (this.calls.size < 2 && audioGraphService.isConferenceActive()) {
       this.stopConference();
     }
   }
@@ -2213,31 +2214,6 @@ export class SipService {
   }
 
   // ---------- 3-way conference (client-side Web Audio mixing) ----------
-  // PJSIP-style audio mixing in the browser. For each call we build a tiny
-  // routing graph:
-  //   - User's mic → all calls' outgoing tracks (parties hear the user)
-  //   - Each call's incoming → user's speaker AND every OTHER call's outgoing
-  //   - All calls have their SIP direction set back to sendrecv (unhold)
-  // Result: all three parties hear each other, hangups are independent.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  private conferenceCtx: AudioContext | null = null;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  private conferenceMic: MediaStream | null = null;
-  /** Per-participant audio graph state — used by mute/unmute. We keep
-   *  references so we can disconnect/reconnect a participant's source from
-   *  the speaker and from every other call's outgoing destination, hiding
-   *  their voice from everyone in the conference. */
-  private conferenceParticipants: Map<
-    string,
-    {
-      sourceNode: MediaStreamAudioSourceNode;
-      // Outgoing destinations of all OTHER participants — disconnect these
-      // to silence this participant for everyone else.
-      otherDests: MediaStreamAudioDestinationNode[];
-      muted: boolean;
-    }
-  > = new Map();
-
   startConference(): boolean {
     if (this.calls.size < 2) {
       console.warn('[sip] conference needs at least 2 calls');
@@ -2257,165 +2233,44 @@ export class SipService {
         }
       }
 
-      // Build the audio context if not yet running.
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const Ctor = (window.AudioContext || (window as any).webkitAudioContext) as typeof AudioContext;
-      const ctx = (this.conferenceCtx ??= new Ctor());
-      void ctx.resume();
+      const participantList = entries
+        .map((e) => {
+          const pc = (e.session as any).connection as RTCPeerConnection | undefined;
+          return pc ? { id: e.id, pc } : null;
+        })
+        .filter((p): p is { id: string; pc: RTCPeerConnection } => p !== null);
 
-      // For each call, capture its remote track as an AudioNode so we can mix.
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const remoteSources: { entry: CallEntry; pc: RTCPeerConnection; node: MediaStreamAudioSourceNode }[] = [];
-      for (const e of entries) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const pc: RTCPeerConnection | null = (e.session as any).connection ?? null;
-        if (!pc) continue;
-        const remoteStream = new MediaStream();
-        for (const receiver of pc.getReceivers()) {
-          if (receiver.track?.kind === 'audio') remoteStream.addTrack(receiver.track);
-        }
-        if (remoteStream.getAudioTracks().length === 0) continue;
-        const node = ctx.createMediaStreamSource(remoteStream);
-        remoteSources.push({ entry: e, pc, node });
-      }
-
-      if (remoteSources.length < 2) {
-        console.warn('[sip] conference: not enough remote streams ready');
+      if (participantList.length < 2) {
+        console.warn('[sip] conference: not enough peer connections ready');
         return false;
       }
 
-      // Per-call outgoing destination: mic + all other calls' incoming.
-      // After we build it, swap the call's outgoing track with this stream's
-      // track via sender.replaceTrack().
-      const outgoingDests = new Map<string, MediaStreamAudioDestinationNode>();
-      for (const rs of remoteSources) {
-        const dest = ctx.createMediaStreamDestination();
-        outgoingDests.set(rs.entry.id, dest);
-      }
-
-      // Mic source — one shared node for all outgoing destinations.
-      // Use a fresh getUserMedia so we don't reuse a stream that's still
-      // wired to a closed AudioContext from a prior conference.
-      return ((): boolean => {
-        void navigator.mediaDevices.getUserMedia({ audio: buildAudioConstraints() }).then(async (micStream) => {
-          this.conferenceMic = micStream;
-          const micNode = ctx.createMediaStreamSource(micStream);
-
-          // Route mic into every outgoing destination.
-          for (const [, dest] of outgoingDests) {
-            micNode.connect(dest);
-          }
-
-          // Route each remote stream into:
-          //   (a) the user's speaker (the primary audio element)
-          //   (b) every OTHER call's outgoing destination
-          // Speakers: we use a single AudioDestinationNode (ctx.destination)
-          // so all remotes mix into the user's audio output.
-          this.conferenceParticipants.clear();
-          for (const rs of remoteSources) {
-            rs.node.connect(ctx.destination); // user hears this call
-            const otherDests: MediaStreamAudioDestinationNode[] = [];
-            for (const [otherId, dest] of outgoingDests) {
-              if (otherId !== rs.entry.id) {
-                rs.node.connect(dest); // other party hears this call
-                otherDests.push(dest);
-              }
-            }
-            // Track so mute/unmute can disconnect/reconnect this participant
-            // from every "outbound to others" path plus the speaker.
-            this.conferenceParticipants.set(rs.entry.id, {
-              sourceNode: rs.node,
-              otherDests,
-              muted: false,
-            });
-          }
-
-          // Replace each call's outgoing audio track with its mixed
-          // destination's track.
-          for (const rs of remoteSources) {
-            const dest = outgoingDests.get(rs.entry.id);
-            if (!dest) continue;
-            const mixedTrack = dest.stream.getAudioTracks()[0];
-            if (!mixedTrack) continue;
-            const sender = rs.pc.getSenders().find((s) => s.track?.kind === 'audio');
-            if (sender) {
-              await sender.replaceTrack(mixedTrack);
-              console.log('[sip] conference: replaced outgoing track on', rs.entry.id);
-            }
-          }
-          console.log('[sip] conference active across', remoteSources.length, 'calls');
-        }).catch((e) => {
-          console.error('[sip] conference: failed to acquire mic', e);
-        });
-        return true;
-      })();
+      void audioGraphService.startConference(participantList, buildAudioConstraints());
+      console.log('[sip] conference active across', participantList.length, 'calls');
+      return true;
     } catch (e) {
       console.error('[sip] startConference threw', e);
       return false;
     }
   }
 
-  /**
-   * Mute a participant in an active conference. After muting, neither the
-   * user nor any other party can hear this person, but they still hear
-   * everyone (their inbound track is untouched). Returns true if state
-   * changed, false otherwise (e.g., not in conference or unknown id).
-   */
   muteConferenceParticipant(callId: string): boolean {
-    const p = this.conferenceParticipants.get(callId);
-    if (!p || p.muted) return false;
-    const ctx = this.conferenceCtx;
-    if (!ctx) return false;
-    try {
-      // Disconnect from speaker so we don't hear them.
-      p.sourceNode.disconnect(ctx.destination);
-    } catch { /* node may not be connected on some browsers — ignore */ }
-    for (const dest of p.otherDests) {
-      try {
-        p.sourceNode.disconnect(dest);
-      } catch { /* same */ }
-    }
-    p.muted = true;
-    console.log('[sip] muted conference participant', callId);
-    return true;
+    return audioGraphService.muteParticipant(callId);
   }
 
-  /** Reverse muteConferenceParticipant. */
   unmuteConferenceParticipant(callId: string): boolean {
-    const p = this.conferenceParticipants.get(callId);
-    if (!p || !p.muted) return false;
-    const ctx = this.conferenceCtx;
-    if (!ctx) return false;
-    p.sourceNode.connect(ctx.destination);
-    for (const dest of p.otherDests) {
-      p.sourceNode.connect(dest);
-    }
-    p.muted = false;
-    console.log('[sip] unmuted conference participant', callId);
-    return true;
+    return audioGraphService.unmuteParticipant(callId);
   }
 
   isConferenceParticipantMuted(callId: string): boolean {
-    return !!this.conferenceParticipants.get(callId)?.muted;
+    return audioGraphService.isParticipantMuted(callId);
   }
 
-  /** Tear down the conference audio graph (called on hangup of any leg).
-   *  Any remaining call has its outgoing sender pointed at the (now dead)
-   *  MediaStreamDestination — we must replace that with a fresh mic track
-   *  so the surviving call still hears the user. */
   private stopConference(): void {
-    const hadConference = !!this.conferenceCtx;
-    this.conferenceParticipants.clear();
-    if (this.conferenceMic) {
-      try { this.conferenceMic.getTracks().forEach((t) => t.stop()); } catch { /* noop */ }
-      this.conferenceMic = null;
-    }
-    if (this.conferenceCtx) {
-      try { void this.conferenceCtx.close(); } catch { /* noop */ }
-      this.conferenceCtx = null;
-    }
+    const hadConference = !!(audioGraphService as any).ctx;
+    audioGraphService.stopConference();
+
     if (hadConference && this.calls.size > 0) {
-      // Fire-and-forget: restore mic on every remaining call's sender.
       void (async () => {
         try {
           const stream = await navigator.mediaDevices.getUserMedia({
@@ -2424,21 +2279,19 @@ export class SipService {
           const micTrack = stream.getAudioTracks()[0];
           if (!micTrack) return;
           for (const entry of this.calls.values()) {
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
             const pc: RTCPeerConnection | null = (entry.session as any).connection ?? null;
-            if (!pc) continue;
-            const sender = pc.getSenders().find((s) => s.track?.kind === 'audio');
-            if (sender) {
-              try {
-                // Clone for each sender so each has its own track instance.
-                await sender.replaceTrack(micTrack.clone());
-                console.log('[sip] post-conference mic restored for', entry.id);
-              } catch (e) {
-                console.warn('[sip] post-conference replaceTrack failed', entry.id, e);
+            if (pc) {
+              const sender = pc.getSenders().find((s) => s.track?.kind === 'audio');
+              if (sender) {
+                try {
+                  await sender.replaceTrack(micTrack.clone());
+                  console.log('[sip] post-conference mic restored for', entry.id);
+                } catch (e) {
+                  console.warn('[sip] post-conference replaceTrack failed', entry.id, e);
+                }
               }
             }
           }
-          // We've cloned the track for each sender; stop the original.
           micTrack.stop();
         } catch (e) {
           console.error('[sip] post-conference mic restore failed', e);
@@ -2448,78 +2301,24 @@ export class SipService {
   }
 
   // ---------- Hold music (Web Audio API + replaceTrack) ----------
-  // Each call entry gets a tiny audio routing graph when hold music is
-  // requested: <audio> element -> MediaElementSource -> MediaStreamDestination.
-  // The resulting MediaStreamTrack replaces the outgoing mic track via
-  // sender.replaceTrack(). When unhold fires, we swap back to a fresh mic.
   private async startHoldMusic(entry: CallEntry): Promise<void> {
     const dataUrl = getHoldMusicDataUrl();
     if (!dataUrl) return;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const pc: RTCPeerConnection | null = (entry.session as any).connection ?? null;
     if (!pc) {
       console.warn('[sip] hold music: no peer connection');
       return;
     }
-    try {
-      const audioEl = new Audio(dataUrl);
-      audioEl.loop = true;
-      audioEl.autoplay = true;
-      // crossOrigin only matters for remote URLs; for data: URLs it's a no-op.
-      audioEl.crossOrigin = 'anonymous';
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const ctor = (window.AudioContext || (window as any).webkitAudioContext) as typeof AudioContext;
-      const ctx = new ctor();
-      if (ctx.state === 'suspended') await ctx.resume();
-      const source = ctx.createMediaElementSource(audioEl);
-      const dest = ctx.createMediaStreamDestination();
-      source.connect(dest);
-      const musicTrack = dest.stream.getAudioTracks()[0];
-      if (!musicTrack) {
-        console.warn('[sip] hold music: dest stream has no audio track');
-        return;
-      }
-      const sender = pc.getSenders().find((s) => s.track?.kind === 'audio');
-      if (!sender) {
-        console.warn('[sip] hold music: no audio sender on peer connection');
-        return;
-      }
-      await sender.replaceTrack(musicTrack);
-      await audioEl.play();
-      // Stash refs on the entry so we can clean up on unhold.
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (entry as any).__holdMusic = { audioEl, ctx };
-      console.log('[sip] hold music started for', entry.id);
-    } catch (e) {
-      console.warn('[sip] startHoldMusic failed', e);
-    }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (entry as any).__holdMusic = true;
+    await audioGraphService.startHoldMusic(entry.id, pc, dataUrl);
   }
 
   private async stopHoldMusic(entry: CallEntry): Promise<void> {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const stash = (entry as any).__holdMusic as { audioEl: HTMLAudioElement; ctx: AudioContext } | undefined;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const pc: RTCPeerConnection | null = (entry.session as any).connection ?? null;
-    try {
-      if (stash) {
-        try { stash.audioEl.pause(); } catch { /* noop */ }
-        try { await stash.ctx.close(); } catch { /* noop */ }
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        delete (entry as any).__holdMusic;
-      }
-      if (pc) {
-        // Get a fresh mic and swap it back in.
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: buildAudioConstraints() });
-        const micTrack = stream.getAudioTracks()[0];
-        const sender = pc.getSenders().find((s) => s.track?.kind === 'audio');
-        if (sender && micTrack) {
-          await sender.replaceTrack(micTrack);
-          console.log('[sip] hold music stopped, mic restored for', entry.id);
-        }
-      }
-    } catch (e) {
-      console.warn('[sip] stopHoldMusic failed', e);
-    }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    delete (entry as any).__holdMusic;
+    await audioGraphService.stopHoldMusic(entry.id, pc || undefined, buildAudioConstraints());
   }
 
   isOnHold(): boolean {
@@ -2697,6 +2496,7 @@ export class SipService {
     this.incomingCallId = null;
     this.stopQualityPolling();
     this.stopConference();
+    audioGraphService.clearAllHoldMusic();
     // Tear down registration heartbeat — otherwise it can fire one last
     // time after disconnect() and trigger a stray reconnect().
     if (this.heartbeatTimer) {
