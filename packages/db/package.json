@@ -13,7 +13,8 @@
     "db:studio": "dotenv -e ../../.env -- prisma studio",
     "seed": "tsx --env-file=../../.env prisma/seed.ts",
     "create-user": "tsx --env-file=../../.env prisma/create-user.ts",
-    "apply-sql": "tsx --env-file=../../.env scripts/apply-sql-migration.ts"
+    "apply-sql": "tsx --env-file=../../.env scripts/apply-sql-migration.ts",
+    "lookup-did": "tsx --env-file=../../.env scripts/lookup-did.ts"
   },
   "dependencies": {
     "@prisma/client": "^5.18.0",
