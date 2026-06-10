@@ -281,6 +281,25 @@ model UserDid {
   preMigrationHostedVmEnabled Boolean?  @map("pre_migration_hosted_vm_enabled")
   callControlMigratedAt       DateTime? @map("call_control_migrated_at")
 
+  /// v0.10.119 — TeXML voicemail migration tracking. When an admin
+  /// migrates this DID from the legacy SIP-credential routing (Telnyx
+  /// Hosted VM) to the new TeXML voicemail flow, we PATCH the DID's
+  /// connection_id at Telnyx to point at our TeXML Application (whose
+  /// Voice URL points at apps/webhooks GET /texml/voicemail). Hosted VM
+  /// stays enabled as a safety-net fallback if our TeXML endpoint is
+  /// unreachable (so callers always reach SOME voicemail). Mutually
+  /// exclusive with callControlMigratedAt — a DID is either on legacy
+  /// SIP-credential routing, Call Control, or TeXML.
+  texmlMigratedAt             DateTime? @map("texml_migrated_at")
+
+  /// v0.10.119 — Per-DID voicemail greeting recorded by the user via
+  /// the dialer mic and stored in Supabase Storage. NULL means TeXML
+  /// uses a Polly TTS default greeting. URL must be publicly reachable
+  /// by Telnyx's media servers (no signed/expiring URLs — Telnyx fetches
+  /// without our session).
+  greetingUrl         String?   @map("greeting_url")
+  greetingUpdatedAt   DateTime? @map("greeting_updated_at")
+
   createdAt       DateTime @default(now()) @map("created_at")
   updatedAt       DateTime @updatedAt      @map("updated_at")
 
@@ -882,6 +901,28 @@ model ScheduledMessage {
   /// Per-user list (Messages compose UI shows pending count on a thread).
   @@index([userId, status, scheduledFor])
   @@map("scheduled_messages")
+}
+
+/// v0.10.119 — small key/value config table for runtime-derived settings
+/// that aren't part of env vars. First user: the Telnyx TeXML Application
+/// ID for our voicemail flow. The webhooks service ensures the App exists
+/// at boot (creates it via Telnyx API if missing), then caches the ID here
+/// so we don't recreate on subsequent boots. The webhooks Voice URL on the
+/// TeXML App points at https://<webhooks-host>/texml/voicemail.
+///
+/// Use small text keys (lowercase, dot-separated namespaces). Values are
+/// stored as text — JSON-encode if you need structure. Read-mostly; write
+/// only happens at admin actions or first-boot bootstrap. Not synced across
+/// services (each consuming service queries directly).
+model SystemConfig {
+  key       String   @id
+  value     String
+  /// Optional human-readable description for admins poking at the table.
+  note      String?
+  updatedAt DateTime @updatedAt @map("updated_at")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("system_config")
 }
 
 /// v0.10.48 — Tenant-wide key/value settings table.

@@ -19,6 +19,17 @@ import {
   scheduleMissedCallEmail,
   scheduleVoicemailEmailTimeoutFallback,
 } from './emailNotifier.js';
+// v0.10.119 - TeXML voicemail trial (Phase 2). See texmlVoicemail.ts for
+// the full flow comment. Routes are GET /texml/voicemail, POST /texml/
+// voicemail/dial-status, POST /texml/voicemail/recording-complete. The
+// boot-time ensureTeXMLApp() call below makes sure a Telnyx TeXML
+// Application exists with our voice_url; cached in SystemConfig.
+import {
+  ensureTeXMLApp,
+  buildDialTeXML,
+  buildVoicemailTeXML,
+  lookupDidOwner,
+} from './texmlVoicemail.js';
 
 const SERVICE_NAME = 'ace-dialer-webhooks';
 const START_TIME = new Date().toISOString();
@@ -1353,6 +1364,127 @@ app.post('/texml/dial-status', async (request, reply) => {
   reply.type('application/xml; charset=utf-8').send(xml);
 });
 
+// ===========================================================================
+// v0.10.119 - TeXML voicemail trial routes. Separate from /texml/inbound
+// (legacy/pilot generic flow) because this set is for the dedicated
+// per-user-greeting trial. Telnyx TeXML App's voice_url points at
+// /texml/voicemail; that route generates a Dial TeXML that rings the
+// user's SIP credential, then falls through (via /dial-status) to a
+// per-user-greeting Record TeXML.
+//
+// Day 1 scope: /texml/voicemail returning Dial TeXML. Day 2 adds the
+// follow-up dial-status and recording-complete routes. App-status is a
+// passive status_callback we just acknowledge.
+// ===========================================================================
+
+function texmlPublicBaseUrl(request: { headers?: Record<string, unknown> }): string {
+  // WEBHOOKS_PUBLIC_URL is the canonical override (Render env). Falls back
+  // to x-forwarded-proto + host header for dev tunnels.
+  const envBase = (process.env.WEBHOOKS_PUBLIC_URL ?? '').trim();
+  if (envBase) return envBase.replace(/\/+$/, '');
+  const headers = request.headers ?? {};
+  const proto = (headers['x-forwarded-proto'] as string) ?? 'https';
+  const host = (headers['host'] as string) ?? 'ace-dialer-webhooks.onrender.com';
+  return `${proto}://${host}`.replace(/\/+$/, '');
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function extractToNumber(request: any): string {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const body = (request?.body ?? {}) as any;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const query = (request?.query ?? {}) as any;
+  return (
+    (typeof body.To === 'string' && body.To) ||
+    (typeof query.To === 'string' && query.To) ||
+    (typeof body.to === 'string' && body.to) ||
+    (typeof query.to === 'string' && query.to) ||
+    ''
+  );
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function extractFromNumber(request: any): string | null {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const body = (request?.body ?? {}) as any;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const query = (request?.query ?? {}) as any;
+  const v =
+    (typeof body.From === 'string' && body.From) ||
+    (typeof query.From === 'string' && query.From) ||
+    (typeof body.from === 'string' && body.from) ||
+    (typeof query.from === 'string' && query.from) ||
+    '';
+  return v || null;
+}
+
+async function voicemailEntryHandler(
+  request: { headers?: Record<string, unknown>; body?: unknown; query?: unknown },
+): Promise<string> {
+  const to = extractToNumber(request);
+  const baseUrl = texmlPublicBaseUrl(request);
+  if (!to) {
+    app.log.warn({ headers: request.headers }, '[texml-vm] entry: no To number in request');
+    return [
+      '<?xml version="1.0" encoding="UTF-8"?>',
+      '<Response>',
+      '  <Say voice="Polly.Joanna">We could not route your call. Please try again later.</Say>',
+      '  <Hangup/>',
+      '</Response>',
+    ].join('\n');
+  }
+  const owner = await lookupDidOwner(to);
+  if (!owner) {
+    app.log.warn({ to }, '[texml-vm] entry: unknown DID, falling through to default greeting');
+    return buildVoicemailTeXML({
+      greetingUrl: null,
+      ownerFirstName: null,
+      publicBaseUrl: baseUrl,
+    });
+  }
+  app.log.info(
+    {
+      to,
+      userDidId: owner.userDidId,
+      userId: owner.userId,
+      sipUsername: owner.sipUsername,
+      hasGreeting: !!owner.greetingUrl,
+    },
+    '[texml-vm] entry: building Dial TeXML',
+  );
+  return buildDialTeXML({
+    sipUsername: owner.sipUsername,
+    publicBaseUrl: baseUrl,
+    callerId: extractFromNumber(request),
+  });
+}
+
+app.get('/texml/voicemail', async (request, reply) => {
+  const xml = await voicemailEntryHandler(request);
+  app.log.info({ length: xml.length }, '[texml-vm] entry served (GET)');
+  reply.type('application/xml; charset=utf-8').send(xml);
+});
+app.post('/texml/voicemail', async (request, reply) => {
+  const xml = await voicemailEntryHandler(request);
+  app.log.info({ length: xml.length }, '[texml-vm] entry served (POST)');
+  reply.type('application/xml; charset=utf-8').send(xml);
+});
+
+app.post('/texml/voicemail/app-status', async (request, reply) => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const body = (request.body ?? {}) as any;
+  app.log.info(
+    {
+      callStatus: body.CallStatus,
+      callSid: body.CallSid,
+      from: body.From,
+      to: body.To,
+    },
+    '[texml-vm] app-status received',
+  );
+  reply.code(200).send('');
+});
+
 // Phase 5.6 — Voicemail recording webhook.
 // Telnyx Call Control flow: on no-answer, transfer the call to a recording
 // action that records the caller's message and fires a webhook to this URL
@@ -1503,6 +1635,36 @@ app.get('/telnyx-status', async () => {
 // v0.10.102 - Kick off the Telnyx status poller. Runs once at startup
 // (cached in memory), then every 60s. Fires Teams card on transitions.
 startTelnyxStatusPoller((obj, msg) => app.log.info(obj, msg));
+
+// v0.10.119 - Make sure the Telnyx TeXML Application exists with our
+// voice_url set. Cached App ID is in SystemConfig under
+// 'telnyx.texml_vm.app_id'. Best-effort - if it throws, log and keep
+// going. Legacy /texml/inbound and Hosted VM flows are unaffected.
+(async () => {
+  try {
+    if (!TELNYX_API_KEY) {
+      app.log.warn({}, '[texml-vm] TELNYX_API_KEY not set - skipping TeXML App bootstrap');
+      return;
+    }
+    const publicBase = (process.env.WEBHOOKS_PUBLIC_URL ?? '').trim();
+    if (!publicBase) {
+      app.log.warn({}, '[texml-vm] WEBHOOKS_PUBLIC_URL not set - skipping TeXML App bootstrap');
+      return;
+    }
+    const appId = await ensureTeXMLApp({
+      telnyxApiKey: TELNYX_API_KEY,
+      publicBaseUrl: publicBase,
+      log: (o, m) => app.log.info(o, m),
+    });
+    app.log.info({ appId }, '[texml-vm] TeXML App ready');
+  } catch (err) {
+    app.log.error(
+      { err: err instanceof Error ? err.message : String(err) },
+      '[texml-vm] TeXML App bootstrap failed - voicemail trial migration will not work until resolved',
+    );
+  }
+})();
+
   await app.listen({ port, host });
   app.log.info({ port, host }, `[${SERVICE_NAME}] listening`);
 } catch (err) {
