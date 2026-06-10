@@ -149,10 +149,16 @@ export function buildDialTeXML(opts: {
   sipUsername: string | null;
   publicBaseUrl: string;
   callerId?: string | null;
+  // v0.10.119 hotfix - original DID (the callee). Telnyx's <Dial> action
+  // callback mutates `To` to the dial target (SIP URI of the credential),
+  // so we can't re-look-up the owner there. Pass the original DID via
+  // query string instead.
+  didNumber?: string | null;
 }): string {
   const baseUrl = opts.publicBaseUrl.replace(/\/+$/, '');
-  const dialActionUrl = `${baseUrl}/texml/voicemail/dial-status`;
-  const recordingActionUrl = `${baseUrl}/texml/voicemail/recording-complete`;
+  const didQs = opts.didNumber ? `?did=${encodeURIComponent(opts.didNumber)}` : '';
+  const dialActionUrl = `${baseUrl}/texml/voicemail/dial-status${didQs}`;
+  const recordingActionUrl = `${baseUrl}/texml/voicemail/recording-complete${didQs}`;
 
   if (!opts.sipUsername) {
     return [

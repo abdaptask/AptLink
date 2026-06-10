@@ -1459,6 +1459,7 @@ async function voicemailEntryHandler(
     sipUsername: owner.sipUsername,
     publicBaseUrl: baseUrl,
     callerId: extractFromNumber(request),
+    didNumber: to, // v0.10.119 hotfix - propagate the original DID via action URL query
   });
 }
 
@@ -1507,9 +1508,19 @@ async function voicemailDialStatusHandler(
     (typeof body.DialCallStatus === 'string' && body.DialCallStatus) ||
     (typeof query.DialCallStatus === 'string' && query.DialCallStatus) ||
     '';
-  const to = extractToNumber(request);
+  // v0.10.119 hotfix - prefer the `did` query param we set in buildDialTeXML
+  // over Telnyx's mutated `To` field (which on this callback is the dial target
+  // SIP URI, not the original DID).
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const queryAny = (request.query ?? {}) as any;
+  const didFromQuery: string =
+    (typeof queryAny.did === 'string' && queryAny.did) || '';
+  const to = didFromQuery || extractToNumber(request);
   const baseUrl = texmlPublicBaseUrl(request);
-  app.log.info({ to, dialCallStatus: status }, '[texml-vm] dial-status received');
+  app.log.info(
+    { to, didFromQuery, dialCallStatus: status },
+    '[texml-vm] dial-status received',
+  );
   // Default greeting (used if owner lookup fails)
   const defaultGreeting = { mode: null, url: null, text: null } as const;
   let ownerFirstName: string | null = null;
@@ -1555,9 +1566,17 @@ app.post('/texml/voicemail/recording-complete', async (request, reply) => {
   try {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const body = (request.body ?? {}) as any;
+    // v0.10.119 hotfix - prefer ?did=<E164> from query (set by buildDialTeXML's
+    // recordingActionUrl) over body.To, since Telnyx mutates body.To to the
+    // dial target (SIP URI) when the recording came from a Dial-then-Record flow.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const queryAny = (request.query ?? {}) as any;
+    const didFromQuery: string | undefined =
+      (typeof queryAny.did === 'string' && queryAny.did) || undefined;
     const fromNumber: string | undefined =
       (typeof body.From === 'string' && body.From) || (typeof body.from === 'string' && body.from) || undefined;
     const toNumber: string | undefined =
+      didFromQuery ||
       (typeof body.To === 'string' && body.To) || (typeof body.to === 'string' && body.to) || undefined;
     const recordingUrl: string | undefined =
       (typeof body.RecordingUrl === 'string' && body.RecordingUrl) ||
