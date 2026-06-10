@@ -290,15 +290,12 @@ model UserDid {
   /// unreachable (so callers always reach SOME voicemail). Mutually
   /// exclusive with callControlMigratedAt — a DID is either on legacy
   /// SIP-credential routing, Call Control, or TeXML.
+  ///
+  /// Greetings are NOT per-DID — they live at the User level (see
+  /// User.voicemailGreetingUrl/Text/Mode + voicemailBusyGreeting*).
+  /// That stack was built in v0.10.100 for Call Control and is reused
+  /// as-is by the TeXML trial.
   texmlMigratedAt             DateTime? @map("texml_migrated_at")
-
-  /// v0.10.119 — Per-DID voicemail greeting recorded by the user via
-  /// the dialer mic and stored in Supabase Storage. NULL means TeXML
-  /// uses a Polly TTS default greeting. URL must be publicly reachable
-  /// by Telnyx's media servers (no signed/expiring URLs — Telnyx fetches
-  /// without our session).
-  greetingUrl         String?   @map("greeting_url")
-  greetingUpdatedAt   DateTime? @map("greeting_updated_at")
 
   createdAt       DateTime @default(now()) @map("created_at")
   updatedAt       DateTime @updatedAt      @map("updated_at")

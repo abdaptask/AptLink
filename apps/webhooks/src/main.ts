@@ -1437,7 +1437,7 @@ async function voicemailEntryHandler(
   if (!owner) {
     app.log.warn({ to }, '[texml-vm] entry: unknown DID, falling through to default greeting');
     return buildVoicemailTeXML({
-      greetingUrl: null,
+      greeting: { mode: null, url: null, text: null },
       ownerFirstName: null,
       publicBaseUrl: baseUrl,
     });
@@ -1448,7 +1448,9 @@ async function voicemailEntryHandler(
       userDidId: owner.userDidId,
       userId: owner.userId,
       sipUsername: owner.sipUsername,
-      hasGreeting: !!owner.greetingUrl,
+      greetingMode: owner.greeting.mode,
+      hasGreetingUrl: !!owner.greeting.url,
+      hasGreetingText: !!owner.greeting.text,
     },
     '[texml-vm] entry: building Dial TeXML',
   );
