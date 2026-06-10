@@ -12,7 +12,20 @@
 // root-relative, and absolute), since npm workspaces sets cwd to the
 // workspace dir which makes "packages/db/migrations/..." double-path.
 //
-// We do NOT use Prisma migrate engine because this repo's history uses raw
+// IMPORTANT: Prisma\'s $executeRawUnsafe goes through a prepared statement
+// which PostgreSQL does NOT allow multiple commands in. So we split the
+// SQL file into individual statements (terminated by ";") and run each
+// one separately. To keep this simple and predictable for our migration
+// style, we:
+//   1. Strip "--" line comments out of the file first
+//   2. Then split on ";" (any whitespace after)
+//   3. Trim + skip empties
+//   4. Execute each non-empty statement
+// This works for our hand-written idempotent migrations. It would break
+// if a migration ever embedded a semicolon inside a string literal, but
+// our files don\'t do that.
+//
+// We do NOT use Prisma migrate engine because this repo\'s history uses raw
 // SQL files under packages/db/migrations/. Each migration should be
 // idempotent (CREATE TABLE IF NOT EXISTS, ADD COLUMN IF NOT EXISTS) so
 // re-running is safe.
@@ -23,11 +36,6 @@ import { resolve, isAbsolute } from 'node:path';
 import { PrismaClient } from '@prisma/client';
 
 function findSqlFile(arg: string): string | null {
-  // Try (in order):
-  //  1. absolute path verbatim
-  //  2. relative to cwd
-  //  3. relative to cwd with leading "packages/db/" stripped (npm workspace cwd quirk)
-  //  4. relative to "<cwd>/../.." (repo root) if cwd is packages/db
   const candidates: string[] = [];
   if (isAbsolute(arg)) {
     candidates.push(arg);
@@ -44,6 +52,25 @@ function findSqlFile(arg: string): string | null {
   return null;
 }
 
+// Strip "-- comment" lines from a SQL file, then split on ";".
+// Returns an array of non-empty trimmed statements (without trailing ";").
+function splitStatements(sql: string): string[] {
+  const noComments = sql
+    .split('\n')
+    .map((line) => {
+      // Find the first "--" that isn\'t inside a string literal. For our
+      // hand-written migrations we don\'t use "--" inside strings, so a
+      // simple find-and-truncate is safe.
+      const idx = line.indexOf('--');
+      return idx >= 0 ? line.slice(0, idx) : line;
+    })
+    .join('\n');
+  return noComments
+    .split(';')
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+}
+
 async function main() {
   const arg = process.argv[2];
   if (!arg) {
@@ -52,7 +79,7 @@ async function main() {
   }
   const sqlPath = findSqlFile(arg);
   if (!sqlPath) {
-    console.error(`Failed to locate \"${arg}\" - tried cwd-relative + repo-root-relative + absolute.`);
+    console.error(`Failed to locate "${arg}" - tried cwd-relative + repo-root-relative + absolute.`);
     console.error(`cwd: ${process.cwd()}`);
     process.exit(2);
   }
@@ -64,12 +91,17 @@ async function main() {
     process.exit(2);
   }
 
+  const statements = splitStatements(sql);
+  console.log(`[migration] ${statements.length} statement(s) to execute`);
+
   const prisma = new PrismaClient();
   try {
-    // Prisma's $executeRawUnsafe runs arbitrary SQL via the engine. Multi-
-    // statement files work because the engine forwards the full string to
-    // PostgreSQL's protocol.
-    await prisma.$executeRawUnsafe(sql);
+    for (let i = 0; i < statements.length; i++) {
+      const stmt = statements[i]!;
+      const firstLine = stmt.split('\n')[0]!.slice(0, 80);
+      console.log(`[migration] [${i + 1}/${statements.length}] ${firstLine}${firstLine.length >= 80 ? '...' : ''}`);
+      await prisma.$executeRawUnsafe(stmt);
+    }
     console.log('[migration] applied successfully');
   } catch (e) {
     console.error('[migration] failed:', e instanceof Error ? e.message : String(e));
