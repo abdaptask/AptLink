@@ -18,6 +18,33 @@ type LogFn = (obj: Record<string, unknown>, msg: string) => void;
 
 const RING_TIMEOUT_SECS = 25;
 
+/**
+ * v0.10.117 - Classify Telnyx hangup_cause into our Call.status enum.
+ * Mirrors the logic in main.ts so Recents shows the right label for
+ * voicemail-cc-routed calls too.
+ */
+function classifyHangup(
+  direction: string,
+  hangupCause: string,
+  wasAnswered: boolean,
+): string {
+  const lc = (hangupCause || '').toLowerCase();
+  if (direction === 'inbound' && !wasAnswered) {
+    if (lc === 'call_rejected' || lc === 'rejected') return 'rejected';
+    if (lc === 'user_busy' || lc === 'busy') return 'busy';
+    if (lc === 'originator_cancel') return 'caller_canceled';
+    if (lc.includes('forward') || lc.includes('transfer') || lc.includes('redirect')) return 'forwarded';
+    if (lc === 'no_answer' || lc === 'no_user_response') return 'no_answer';
+    return 'missed';
+  }
+  if (lc === 'no_answer' || lc === 'no_user_response') return 'no_answer';
+  if (lc === 'call_rejected' || lc === 'rejected') return 'rejected';
+  if (lc === 'user_busy' || lc === 'busy') return 'busy';
+  if (lc.includes('forward') || lc.includes('transfer') || lc.includes('redirect')) return 'forwarded';
+  if (lc === 'normal_clearing' || lc === 'normal_termination' || lc === 'originator_cancel') return 'completed';
+  return 'completed';
+}
+
 function defaultGreetingFor(firstName: string | null): string {
   const name = (firstName ?? '').trim() || 'this user';
   return `You've reached ${name}'s voicemail. Please leave a message after the tone, and they'll get back to you as soon as possible.`;
@@ -277,6 +304,39 @@ export async function handleVoicemailCallControlEvent(event: TelnyxEventLike, lo
       logger({ callControlId, toNumber, fromNumber, sessionId }, '[vm-cc] call.initiated (caller leg)');
       if (!callControlId) return;
       const found = await findUserByDid(toNumber, logger);
+
+      // v0.10.117 - Create a Call row so this call appears in Recents
+      // alongside the eventual Voicemail row. Without this, migrated users
+      // see voicemails in the Voicemail tab but no missed-call entry in
+      // Recents. Use upsert so duplicate webhook events don't error.
+      if (found?.user?.id) {
+        try {
+          await prisma.call.upsert({
+            where: { telnyxCallId: callControlId },
+            update: {
+              callControlId,
+              ...(sessionId ? { sessionId } : {}),
+              ...(found.userDid.id ? { userDidId: found.userDid.id } : {}),
+            },
+            create: {
+              userId: found.user.id,
+              telnyxCallId: callControlId,
+              sessionId: sessionId || null,
+              callControlId,
+              direction: 'inbound',
+              fromNumber,
+              toNumber,
+              status: 'initiated',
+              startedAt: payload.start_time ? new Date(payload.start_time as string) : new Date(),
+              userDidId: found.userDid.id ?? null,
+            },
+          });
+          logger({ telnyxCallId: callControlId, userId: found.user.id }, '[vm-cc] Call row upserted (initiated)');
+        } catch (e) {
+          logger({ err: e instanceof Error ? e.message : String(e) }, '[vm-cc] Call row upsert failed - non-fatal');
+        }
+      }
+
       if (!found || !found.user.sipUsername) {
         logger({ toNumber, hasUser: !!found, hasSip: !!found?.user.sipUsername }, '[vm-cc] cannot bridge - answering for voicemail directly');
         const voicemailState: ClientState = {
@@ -429,6 +489,41 @@ export async function handleVoicemailCallControlEvent(event: TelnyxEventLike, lo
       const cause = (payload.hangup_cause ?? '').toString();
       const source = (payload.hangup_source ?? '').toString();
       logger({ callControlId, stage: state?.stage, cause, source, sessionId }, '[vm-cc] call.hangup');
+
+      // v0.10.117 - Update the Call row's final status. The matching row
+      // was created on call.initiated above. Only update the caller-leg's
+      // Call row (skip dial-leg hangups which have a different
+      // call_control_id). We identify the caller leg by checking if the
+      // sessionMap entry's callerCallId matches this callControlId.
+      const isCallerLeg =
+        (state && callControlId === state.callerCallId) ||
+        (!state && callControlId);
+      if (isCallerLeg && callControlId) {
+        try {
+          const endedAt = payload.end_time ? new Date(payload.end_time as string) : new Date();
+          const startedAt = payload.start_time ? new Date(payload.start_time as string) : null;
+          const duration = startedAt ? Math.max(0, Math.floor((endedAt.getTime() - startedAt.getTime()) / 1000)) : 0;
+          const existing = await prisma.call.findUnique({
+            where: { telnyxCallId: callControlId },
+            select: { status: true, answeredAt: true },
+          });
+          const wasAnswered = existing?.answeredAt != null;
+          const finalStatus = classifyHangup('inbound', cause, wasAnswered);
+          await prisma.call.updateMany({
+            where: { telnyxCallId: callControlId },
+            data: {
+              status: finalStatus,
+              hangupCause: cause || null,
+              hangupSource: source || null,
+              endedAt,
+              durationSeconds: duration,
+            },
+          });
+          logger({ telnyxCallId: callControlId, finalStatus, cause }, '[vm-cc] Call row updated (hangup)');
+        } catch (e) {
+          logger({ err: e instanceof Error ? e.message : String(e) }, '[vm-cc] Call row hangup-update failed - non-fatal');
+        }
+      }
 
       // Case A - Dial leg hung up. Telnyx fires this on the dial-leg
       // call_control_id (different from the caller leg's). Doesn't matter

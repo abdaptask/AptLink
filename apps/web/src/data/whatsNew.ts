@@ -24,6 +24,15 @@ export interface ReleaseEntry {
 
 export const WHATS_NEW: ReleaseEntry[] = [
   {
+    version: '0.10.117',
+    date: 'June 10, 2026',
+    highlight: 'Voicemail-routed calls now show in Recents (alongside Voicemail tab) + Telnyx status banner is admin-only',
+    changes: [
+      { type: 'fixed', text: 'When someone leaves you a voicemail, the call now appears in Recents as Missed - alongside the recording in the Voicemail tab. Previously, voicemails for users migrated to the Call Control voicemail flow only showed in Voicemail tab; Recents had no entry for those missed calls. Both flows now create Call rows with the proper status (missed / caller_canceled / busy / no_answer) so Recents stays the single source of truth for incoming-call history.' },
+      { type: 'improved', text: 'Telnyx outage banner is now shown only to admin users. Regular users no longer see the operational status alerts - those are noise for them and only matter to whoever is on call for incidents.' },
+    ],
+  },
+  {
     version: '0.10.116',
     date: 'June 10, 2026',
     highlight: 'CRITICAL audio fix: one-way audio resolved — wait for TURN relay candidates before shipping SIP offer/answer',

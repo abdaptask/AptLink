@@ -1,5 +1,18 @@
 ﻿import { useEffect, useState } from 'react';
 
+// v0.10.117 - read isAdmin from the JWT in sessionStorage. Avoids prop
+// drilling or a context dependency; the token already carries this claim.
+function isCurrentUserAdmin(): boolean {
+  try {
+    const t = sessionStorage.getItem('ace_token');
+    if (!t) return false;
+    const payload = JSON.parse(atob(t.split('.')[1] ?? ''));
+    return payload?.isAdmin === true;
+  } catch {
+    return false;
+  }
+}
+
 const WEBHOOKS_URL =
   (import.meta as unknown as { env?: Record<string, string> }).env?.VITE_WEBHOOKS_URL
   || 'https://ace-dialer-webhooks.onrender.com';
@@ -35,6 +48,12 @@ function colorFor(indicator: string): { bg: string; fg: string } | null {
 }
 
 export default function TelnyxStatusBanner() {
+  // v0.10.117 - only show this banner to admins. Regular users don't
+  // need (or want) to see Telnyx outage info; it's noise for them.
+  // Returns null BEFORE any state/effect hooks so the component is a
+  // complete no-op for non-admin users (no fetches, no timers).
+  if (!isCurrentUserAdmin()) return null;
+
   const [status, setStatus] = useState<TelnyxStatus | null>(null);
   const [dismissed, setDismissed] = useState(false);
 
