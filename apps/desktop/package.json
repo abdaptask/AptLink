@@ -1,5 +1,5 @@
 {
-  "name": "@ace/desktop",
+  "name": "ace-desktop",
   "version": "0.10.118",
   "private": true,
   "description": "ACE Dialer desktop app (Electron)",
