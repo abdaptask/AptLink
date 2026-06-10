@@ -108,7 +108,7 @@ export interface WelcomeEmailInput {
  */
 // v0.9.7 — release page hosts both the Windows .exe and the Mac .dmg
 // installers. Always points at "latest" so the link doesn't go stale.
-const DOWNLOAD_URL = 'https://github.com/abdaptask/acedialerv4/releases/latest';
+const DOWNLOAD_URL = 'https://github.com/abdaptask/AptLink/releases/latest';
 
 export function sendWelcomeEmail(input: WelcomeEmailInput): Promise<SendGridResult> {
   const firstName = (input.firstName?.trim() || '').split(/\s+/)[0] || 'there';

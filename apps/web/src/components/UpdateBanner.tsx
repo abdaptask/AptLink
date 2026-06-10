@@ -26,7 +26,7 @@ import { useEffect, useState } from 'react';
 import { Download, X, RefreshCcw, AlertTriangle } from 'lucide-react';
 import { getApiVersion } from '../api';
 
-const RELEASES_URL = 'https://github.com/abdaptask/acedialerv4/releases/latest';
+const RELEASES_URL = 'https://github.com/abdaptask/AptLink/releases/latest';
 const DISMISS_KEY_PREFIX = 'ace_update_dismissed_';
 const POLL_INTERVAL_MS = 15 * 60 * 1000; // every 15 minutes (web/fallback path)
 
@@ -196,7 +196,7 @@ export default function UpdateBanner() {
     let directUrl: string | null = null;
     if (wantExt) {
       try {
-        const apiUrl = 'https://api.github.com/repos/abdaptask/acedialerv4/releases/latest';
+        const apiUrl = 'https://api.github.com/repos/abdaptask/AptLink/releases/latest';
         const res = await fetch(apiUrl, { headers: { Accept: 'application/vnd.github+json' } });
         if (res.ok) {
           const data: { assets?: Array<{ name?: string; browser_download_url?: string }> } = await res.json();
