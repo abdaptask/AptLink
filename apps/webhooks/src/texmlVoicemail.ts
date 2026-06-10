@@ -185,9 +185,13 @@ export function buildVoicemailTeXML(opts: {
   greeting: GreetingConfig;
   ownerFirstName: string | null;
   publicBaseUrl: string;
+  // v0.10.119 hotfix - propagate original DID via ?did= so the recording-
+  // complete handler can attribute the Voicemail row to the right user.
+  didNumber?: string | null;
 }): string {
   const baseUrl = opts.publicBaseUrl.replace(/\/+$/, '');
-  const recordingActionUrl = `${baseUrl}/texml/voicemail/recording-complete`;
+  const didQs = opts.didNumber ? `?did=${encodeURIComponent(opts.didNumber)}` : '';
+  const recordingActionUrl = `${baseUrl}/texml/voicemail/recording-complete${didQs}`;
 
   let greetingLine: string;
   if (opts.greeting.mode === 'audio' && opts.greeting.url) {
@@ -273,6 +277,8 @@ export function buildDialStatusTeXML(opts: {
   greeting: GreetingConfig;
   ownerFirstName: string | null;
   publicBaseUrl: string;
+  // v0.10.119 hotfix - propagate to buildVoicemailTeXML's recording URL
+  didNumber?: string | null;
 }): string {
   const status = (opts.dialCallStatus ?? '').toLowerCase();
 
@@ -289,5 +295,6 @@ export function buildDialStatusTeXML(opts: {
     greeting: opts.greeting,
     ownerFirstName: opts.ownerFirstName,
     publicBaseUrl: opts.publicBaseUrl,
+    didNumber: opts.didNumber,
   });
 }

@@ -1441,6 +1441,7 @@ async function voicemailEntryHandler(
       greeting: { mode: null, url: null, text: null },
       ownerFirstName: null,
       publicBaseUrl: baseUrl,
+      didNumber: to,
     });
   }
   app.log.info(
@@ -1538,6 +1539,7 @@ async function voicemailDialStatusHandler(
     greeting,
     ownerFirstName,
     publicBaseUrl: baseUrl,
+    didNumber: to, // v0.10.119 hotfix - propagate DID to recording-complete URL
   });
 }
 
