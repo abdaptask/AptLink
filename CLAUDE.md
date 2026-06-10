@@ -1,4 +1,4 @@
-# ACE Dialer v4 — Living System Blueprint
+# AptLink Dialer — Living System Blueprint
 
 > **Source of truth for every module in this monorepo.** Read the single section that maps to the area you're touching; the 4-tier structure is designed so one block alone is enough context to write production code without re-reading the rest.
 >
@@ -72,21 +72,24 @@ These are non-negotiable across modules. Repeat them in module-specific guardrai
 ## 1. Repository Topology
 
 ### 1.1 Capabilities & Scope
-- Monorepo orchestrated by npm workspaces. Four runtime apps + one shared package.
-- Each app deploys independently (Render web services for `api`, `webhooks`, `socket`; Electron installer for `desktop`; Vercel/static host for `web`).
+- Monorepo orchestrated by npm workspaces. Four runtime apps + three shared packages.
+- Each app deploys independently on Fly.io (with multi-region Anycast routing for `api`, `webhooks`, and `socket`; Electron installer for `desktop`; static host for `web`).
 
 ### 1.2 Current State & Truth
-**Status:** Shipped.
+**Status:** In-Progress (Re-architecting to AptLink).
 
 ```
 apps/
   api/        Fastify HTTP API     — auth, calls, messages, voicemail, favorites, blocking, forwarding, internal chat, JobDiva
-  webhooks/   Fastify webhook sink — Telnyx call + SMS + voicemail events, multi-user routing
-  socket/     Fastify + Socket.IO  — placeholder (ping/pong); see [[29-realtime-socket]]
-  web/        Vite + React + TS    — client softphone UI
+  webhooks/   Fastify webhook sink — Telnyx event ingest (routes directly to BullMQ queue)
+  socket/     Fastify + Socket.IO  — stateful Socket.IO connections
+  web/        Vite + React + TS    — client softphone UI (refactored with XState)
   desktop/    Electron 31 shell    — tray, ringer popup, deep-link SSO, auto-update
+  workers/    BullMQ Worker Pool   — [NEW] asynchronous processing of webhooks, emails, and notifications
 packages/
-  db/         Prisma client + schema, shared across api + webhooks
+  db/         Prisma client + schema, shared across api + webhooks + workers
+  types/      [NEW] Shared domain types & payload interfaces
+  telephony/  [NEW] Shared SIP & Web Audio mix graph service
 scripts/      One-off ops helpers (dedupe call legs, fix favorite names, etc.)
 ```
 
