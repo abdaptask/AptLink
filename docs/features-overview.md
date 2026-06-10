@@ -139,3 +139,28 @@ users in one shot, with per-row success/failure feedback.
 **Built by:** ApTask | **Current version:** v0.10.8 (May 2026) |
 **Powered by:** Telnyx · Microsoft Entra ID · Power Automate · Supabase ·
 Deepgram · Cloudflare · Render · Vercel
+
+
+## Voicemail v2
+
+**Two voicemail greetings — busy and not-available.** Set a different message for when you don't pick up versus when you're already on another call. Each can be the stock default, text we read aloud, or a recording in your own voice. If you only set one, we use it for both.
+
+**Record straight from your microphone, in-app.** Click the red "Record from microphone" button on the Audio tab — 30-second cap, preview before saving. Or upload an existing audio file. Or skip both and just type text — we read it aloud in a natural voice via Telnyx TTS.
+
+**Voicemails play back forever.** The recording URL doesn't expire after 10 minutes anymore. Open a voicemail from last month and it still plays.
+
+**Missed calls show as missed.** An incoming call that wasn't picked up — for any reason, including the caller giving up before voicemail kicked in — now shows the red missed-call icon in Recents, matching what your Teams card said.
+
+## Device tracking + force-update (admin)
+
+**Admin sees what version every user is on.** Settings → Admin → Users → kebab → "Devices" shows each device (Electron Windows / Mac, web, future iOS / Android) with its app version, last-seen time, and a force-update button. Pushing the button triggers the dialer to immediately check for updates and prompt the user to install.
+
+## Telnyx outage detection
+
+**Banner at the top of the dialer when Telnyx is having problems.** A colored strip appears across the top — amber for minor issues or maintenance windows, red for major outages. Click Details to open status.telnyx.com. Auto-hides when service is back to normal.
+
+**Teams notification when service flips.** The moment Telnyx publishes a degraded status, the admin Teams channel gets an adaptive card. Another card fires on recovery. No more wondering "is it me or them?"
+
+## What's new section moved
+
+**All release notes in one obvious place.** Settings → About → What's new now lives at the bottom of the sidebar for both admins and users. Always one click away regardless of which page you're on.

@@ -266,3 +266,61 @@ UPDATE users SET is_admin = true WHERE email = 'someone-else@aptask.com';
 - Microsoft 365 admin: (ApTask IT)
 - Render: support@render.com
 - Supabase: support@supabase.io
+
+
+## Voicemail v2 migration (per user)
+
+The new Call Control voicemail flow (custom greeting + dual busy/no-answer + persistent recording URLs) is opt-in **per user**. Until you migrate a user, their inbound calls still use the legacy SIP → Hosted Voicemail path.
+
+### One-time prerequisite (already done if v0.10.100 is live)
+
+1. Telnyx Mission Control → **Voice → Voice API Applications → + Create Application**
+   - **App name:** `ACE Voicemail`
+   - **Webhook URL:** `https://ace-dialer-webhooks.onrender.com/webhooks/telnyx/voicemail-cc`
+   - **Method:** POST, API v2
+   - Save. Copy the **Application ID** (looks like `2963522202491684629`).
+2. Render → **ace-dialer-api** service → Environment tab → add `TELNYX_VOICEMAIL_CC_APP_ID = <the App ID>` → redeploy.
+
+### Per-user migration
+
+1. Settings → Admin → Users → find the user → kebab → **Voicemail migration**.
+2. The modal shows their DIDs and current state (Legacy SIP vs Call Control).
+3. Click **Migrate to Call Control**. For each DID, the server:
+   - Reads current `connection_id` and Hosted VM enabled flag from Telnyx (these get snapshotted onto `UserDid.preMigrationConnectionId` + `preMigrationHostedVmEnabled` so rollback is exact).
+   - PATCHes `connection_id` to `TELNYX_VOICEMAIL_CC_APP_ID`.
+   - Disables Hosted VM on the DID.
+   - Stamps `UserDid.callControlMigratedAt = now()`.
+4. The modal shows per-DID outcome (✓ migrated / ⚠ already migrated / ✗ failed).
+5. Verify by calling the user's DID from another phone. Their softphone should ring; let it ring out; their custom greeting plays.
+
+### Rollback
+
+In the same modal, click **Roll back**. For each migrated DID, the server PATCHes `connection_id` back to `preMigrationConnectionId`, re-enables Hosted VM if it was on before, and clears the three migration tracking columns.
+
+## Force-updating a specific device
+
+When you ship a critical fix and want a specific user updated immediately rather than waiting for the auto-update poll cycle (1-2 hours by default).
+
+1. Settings → Admin → Users → find the user → kebab → **Devices**.
+2. The modal shows every device that user has signed in from (electron-win, electron-mac, web, future iOS / Android). Each row has platform, app version, first-seen / last-seen times.
+3. Click **Force update** on the specific device row. Server sets `UserDevice.forceUpdateRequestedAt = now()`.
+4. Within ~60 seconds, that device's next heartbeat sees the flag, triggers `window.ace.checkForUpdates()` (Electron), and prompts the user to install the latest release. Web clients reload instead.
+5. The row shows "Update pending" until the client acks via `POST /me/heartbeat/ack-update` (called automatically after the autoUpdater check runs).
+
+## Telnyx outage notifications
+
+No action required — the webhooks service polls `https://status.telnyx.com/api/v2/status.json` every 60 seconds. When the indicator flips from `none` to anything degraded:
+
+- A colored banner appears at the top of every user's dialer.
+- An adaptive card posts to `TEAMS_TENANT_WEBHOOK_URL` (your admin Teams channel) describing the incident.
+- A recovery card posts when status returns to `none`.
+
+If you're seeing the banner and want to drill in: click the **Details** link to open status.telnyx.com directly. The Teams card has the same link.
+
+## Voicemail recordings are now permanent
+
+Voicemails captured via the Call Control flow (v0.10.100+) are stored in our Supabase `ace-media` bucket at `voicemails/u{userId}/{voicemailId}.mp3`. The Telnyx-signed S3 URL expires after 10 minutes; our re-upload makes the recording available indefinitely.
+
+**Implication for storage cost:** Supabase Pro tier handles current scale (~36 users × ~3 voicemails/day × 250 KB × 30-day rolling retention ≈ 810 MB rolling). Free tier is 1 GB — upgrade to Pro ($25/mo) when growth pushes past that.
+
+**Existing pre-fix voicemails** (recorded before v0.10.101) still reference the original Telnyx S3 URL and won't play back because those signatures expired. Either delete them manually or wait for the 30-day auto-delete.

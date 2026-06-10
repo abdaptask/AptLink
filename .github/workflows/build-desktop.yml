@@ -35,6 +35,12 @@ jobs:
   mac:
     name: Build macOS .dmg
     runs-on: macos-latest
+    # v0.10.109 - hard cap on the whole Mac job. Apple notarytool occasionally
+    # hangs (TCP connection alive, no response). Without a job-level timeout,
+    # GitHub waits the default 6 hours before killing the runner, blocking
+    # subsequent builds. 35 minutes covers the 3-attempt retry loop with the
+    # per-attempt timeout below.
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -69,15 +75,18 @@ jobs:
       - name: Package macOS .dmg (signed + notarized) with retry
         id: package_mac_signed
         working-directory: apps/desktop
+        # v0.10.109 - per-step timeout. 10 min/attempt * 3 attempts + sleeps
+        # fits inside the 35-min job cap and the fallback step.
+        timeout-minutes: 30
         # electron-builder reads these env vars automatically:
         #   CSC_LINK / CSC_KEY_PASSWORD  → signing identity (.p12)
         #   APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD / APPLE_TEAM_ID → notarize
         env:
-          CSC_LINK: ${{ secrets.APPLE_CSC_LINK != '' && secrets.APPLE_CSC_LINK || null }}
-          CSC_KEY_PASSWORD: ${{ secrets.APPLE_CSC_KEY_PASSWORD != '' && secrets.APPLE_CSC_KEY_PASSWORD || null }}
-          APPLE_ID: ${{ secrets.APPLE_ID != '' && secrets.APPLE_ID || null }}
-          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD != '' && secrets.APPLE_APP_SPECIFIC_PASSWORD || null }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID != '' && secrets.APPLE_TEAM_ID || null }}
+          CSC_LINK: ${{ secrets.APPLE_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.APPLE_CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           CSC_IDENTITY_AUTO_DISCOVERY: ${{ secrets.APPLE_CSC_LINK == '' && 'false' || 'true' }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         continue-on-error: true
@@ -109,8 +118,8 @@ jobs:
         # checks pass; only the strictest Gatekeeper rule (notarization
         # ticket) is missing. Users right-click → Open the first time.
         env:
-          CSC_LINK: ${{ secrets.APPLE_CSC_LINK != '' && secrets.APPLE_CSC_LINK || null }}
-          CSC_KEY_PASSWORD: ${{ secrets.APPLE_CSC_KEY_PASSWORD != '' && secrets.APPLE_CSC_KEY_PASSWORD || null }}
+          CSC_LINK: ${{ secrets.APPLE_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.APPLE_CSC_KEY_PASSWORD }}
           CSC_IDENTITY_AUTO_DISCOVERY: ${{ secrets.APPLE_CSC_LINK == '' && 'false' || 'true' }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |

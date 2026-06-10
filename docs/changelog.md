@@ -1,5 +1,92 @@
 # ACE Dialer Changelog
 
+## v0.10.105 — June 8, 2026
+
+**Theme:** Mark-as-listened actually works now.
+
+### Fixed
+- `markVoicemailListened` (web `api.ts`) was sending `{ listenedAt: <iso> }` but the API endpoint `PATCH /voicemails/:id` reads `body.listened` (boolean). The shape mismatch meant the server silently dropped the update and `listenedAt` never got written. Every voicemail was effectively unread forever once received. Client now sends `{ listened: boolean }` matching the server contract.
+
+## v0.10.104 — June 8, 2026
+
+**Theme:** Missed-call classification + voicemail-on-play mark-as-listened.
+
+### Fixed
+- **Inbound calls that ended without being answered now classify as `missed`** in the Call record (and render with the red PhoneMissed icon in Recents). Previously `originator_cancel` (caller gave up before pickup) was mapped to `completed`, which made Recents show the row as a normal incoming call with no missed indicator — even though the Teams notifier had it right and the user had clearly missed the call. The classifier now checks `priorCall.answeredAt` before applying the hangup-cause mapping: if direction=inbound and the call was never answered, force status=`missed` regardless of cause.
+- **Voicemail audio playback now marks the row as listened.** The audio `<audio>` element gained an `onPlay` handler that calls `markVoicemailListened` the moment audio starts. The pre-existing `handleExpand` path still fires too, but if the optimistic UI update lost a race or the user clicked play before the row fully expanded, the failsafe catches it.
+
+## v0.10.103 — June 8, 2026
+
+**Theme:** Telnyx outage detector — server-side poller + dialer banner + Teams alerts.
+
+### Added
+- **`POST /telnyx-status` endpoint on the webhooks service.** Backed by a 60-second poller that fetches `https://status.telnyx.com/api/v2/status.json` and `/incidents.json`. Caches the latest indicator (`none` / `minor` / `major` / `critical` / `maintenance`), description, and active incidents in memory. Public endpoint, no auth — the dialer banner polls it on focus and every 60s.
+- **`TelnyxStatusBanner` mounted in the dialer Layout.** Renders a colored strip across the top of the dialer when Telnyx isn't fully operational. Amber for `minor`/`maintenance`, red for `major`/`critical`. Clickable "Details" link opens status.telnyx.com. Dismissible per session; auto-resurfaces when the indicator changes.
+- **Teams notification card on status transitions.** When Telnyx flips from `none` → degraded, the webhooks service posts an adaptive card to `TEAMS_TENANT_WEBHOOK_URL` (the same webhook URL used for tenant-wide notifications). Lists the indicator, description, and active incident names. Sends a recovery card when status flips back to `none`.
+
+### Fixed
+- Tip banner (`Did you know?` floating panel) was overlapping the Voicemail tab pill at the bottom of the dialer. Moved from `bottom: 20` to `bottom: 90` so both are clickable.
+
+### Operational note
+- `v0.10.102` was published as a Windows + Mac installer with the new custom app icon, but the Telnyx detector code landed in a commit AFTER the v0.10.102 release tag — so the v0.10.102 installer doesn't actually include the banner. `v0.10.103` is a version bump on top of the same code to re-ship a build that includes the detector.
+
+## v0.10.102 — June 6, 2026
+
+**Theme:** Custom app icon (Dialer brand) replacing the default Electron logo.
+
+### Changed
+- **Custom app icon ships in the installer.** A modern dialer-themed icon (dark slate gradient background, 3×3 keypad grid, green phone button accent) replaces the default Electron logo on Windows taskbar, Mac dock, Linux app menu, and the installer / DMG / Start Menu shortcut artwork. Source SVG at `apps/desktop/assets/icon.svg`; multi-resolution `.ico`, `.icns`, and `.png` regenerated from it.
+
+## v0.10.101 — June 5, 2026
+
+**Theme:** Per-device version visibility for admins + force-update mechanism. Future-proofed for iOS / Android.
+
+### Added
+- **`UserDevice` table** — one row per device (electron-win / electron-mac / web / future android / ios) per user. Tracks `deviceId` (client-generated UUID), `platform`, `appVersion`, `osLabel`, `firstSeenAt`, `lastSeenAt`, `forceUpdateRequestedAt`, `forceUpdateAckedAt`.
+- **`POST /me/heartbeat` endpoint.** Dialer posts on login + window focus + every 60s with the current device id, platform, app version. Server upserts the UserDevice row and returns `{ forceUpdate, forceUpdateRequestedAt }` so the client can react.
+- **`POST /me/heartbeat/ack-update`** — client acknowledges the force-update signal after triggering `autoUpdater.checkForUpdatesAndNotify()`.
+- **`HeartbeatReporter` React component** mounted in the dialer Layout. Generates a stable `deviceId` (localStorage `ace_device_id`) on first load. Detects platform via `window.ace?.isElectron` + `window.aceDesktop?.platform`. Sends heartbeats and handles force-update reactions.
+- **Admin Settings → Admin → Users → kebab → "Devices"** opens a modal showing every device that user has signed in from, with platform, app version, last-seen / first-seen times, and a per-device "Force update" button. Pending update requests show "Update pending" until the client acks.
+- **`GET /admin/users/:id/devices`** + **`POST /admin/users/:id/devices/:deviceId/force-update`** admin endpoints (audit-logged).
+- **Voicemail recordings persisted to Supabase Storage.** When a Call Control voicemail is captured, the webhook handler downloads the Telnyx-signed S3 URL (which expires in 10 minutes) and uploads to the existing `ace-media` Supabase bucket at `voicemails/u{userId}/{voicemailId}.mp3`. The Voicemail row's `recordingUrl` is updated to the permanent public Supabase URL. Voicemails play back forever, not just within the 10-minute Telnyx URL window.
+
+## v0.10.100 — June 5, 2026
+
+**Theme:** Voicemail v2 — softphone-bridge-then-greeting flow over Telnyx Call Control, replacing Hosted Voicemail. Includes dual greetings (busy + no-answer), in-app microphone recording, admin migration UI.
+
+### Added
+- **`UserDid` migration tracking columns** — `preMigrationConnectionId`, `preMigrationHostedVmEnabled`, `callControlMigratedAt`. Lets admin migrate per-user from legacy SIP routing to the new Call Control flow with one-click rollback.
+- **`voicemailCallControl.ts` webhook handler.** New webhook endpoint `POST /webhooks/telnyx/voicemail-cc` on the webhooks service. Handles the full inbound call lifecycle for migrated DIDs:
+  1. `call.initiated` → look up user by DID → issue `transfer` to `sip:<sipUsername>@sip.telnyx.com` with 25-second timeout (preserves caller ID via `from`).
+  2. Softphone picks up → `call.bridged` → audio flows → normal call.
+  3. Softphone doesn't pick up (timeout / busy / rejected) → dial leg's `call.hangup` fires → we answer the caller leg and play the user's greeting (busy vs no-answer picked by hangup cause) → record → save Voicemail row → fire Deepgram transcription + Teams notification + email notification.
+- **Stateless via `client_state`** — every Call Control action sets a base64-encoded JSON state blob so the handler is restart-safe. An in-memory `call_session_id → state` map correlates dial-leg events back to the caller leg (Telnyx's `transfer` action doesn't propagate `client_state` to the new dial leg).
+- **Dual greetings** — `User.voicemailBusyGreeting{Url,Filename,Text,Mode}` columns alongside the existing no-answer trio. Webhook handler branches on Telnyx's `hangup_cause`: `user_busy` / `call_rejected` → busy greeting; `originator_cancel` / `no_answer` → no-answer greeting. Falls back to the no-answer greeting if busy isn't configured.
+- **In-app microphone recording.** `MicrophoneRecorder` React component uses the browser's `MediaRecorder` API. 30-second cap with live countdown, preview + discard before save, uploads as `audio/webm` to `POST /voicemail-greeting/:type`. Bypasses the file-picker entirely for the most common case.
+- **Settings → Voicemail greeting redesigned.** Two sections stacked vertically ("When you don't pick up" + "When you're on another call"), each with the same 3-tab control (Default / Text-to-speech / Audio). Mic recording lives on the Audio tab alongside file upload.
+- **Admin migration UI.** Settings → Admin → Users → kebab → "Voicemail migration" opens a modal showing per-DID migration state with one-click migrate + rollback. Migrate flips `connection_id` on Telnyx and disables Hosted VM; rollback restores both.
+- **`telnyxVoicemailCcAppId` env var on the API service** — Telnyx Voice API Application ID for the ACE Voicemail app. Used by the migration endpoint.
+- **`What's new` moved to its own About section at the bottom of the Settings sidebar**, so it's always one click away regardless of which page you're on (for both admins and regular users).
+
+### Operational
+- Each user's DID must be migrated separately via the admin UI. Migration is one-click per user with a rollback button. Until a user is migrated, their inbound calls still flow through the legacy Hosted Voicemail path.
+- Admin must first create the "ACE Voicemail" Voice API app in Telnyx Mission Control (one-time) and set the App ID in `TELNYX_VOICEMAIL_CC_APP_ID` on Render. See `telnyx-call-control-setup.md` for the steps.
+
+### Bug fixes shipped within the v0.10.100 rollout
+- Telnyx `transfer` action doesn't set `client_state` on the dial leg (only on the caller leg). Worked around with an in-memory `call_session_id → state` map keyed off the shared session id.
+- Dial-leg `call.hangup` source is `caller` (not `callee` as initially assumed) — Telnyx considers the Call Control app as the "caller" of the dial leg. Detection switched to `callControlId !== tracked.callerCallId` instead of source.
+- Telnyx v2 `recording_urls.mp3` is a single string, not an array. Parser updated to handle both shapes, falls back to `public_recording_urls` too.
+- Telnyx error code 90018 ("Call has already ended") on hangup-after-recording.saved is benign — caller dropped before our hangup action raced through. Now silently swallowed.
+
+## v0.10.99 — June 5, 2026
+
+**Theme:** Custom voicemail greeting upload UI (single-greeting model — superseded by v0.10.100's dual-greeting design but still backward-compatible).
+
+### Added
+- **`User.voicemailGreeting{Url,Filename,Text,Mode}` columns.** Three modes: `audio` (play uploaded file), `tts` (Telnyx TTS reads saved text), `default` (stock greeting). Audio + text persist independently so users can switch modes without losing what they previously configured.
+- **`POST /voicemail-greeting/:type` endpoints** for upload + TTS save + mode switch + delete. Audio files stored in Supabase Storage (`ace-media` bucket).
+- **Settings → Voicemail greeting UI** with 3-tab picker. Original release used a single-greeting model; v0.10.100 extended this to two greetings (busy + no-answer) keeping these endpoints as the "noanswer" alias.
+
 ## v0.10.23 — May 30, 2026
 
 **Theme:** Desktop installer pipeline hardening after recurring Apple

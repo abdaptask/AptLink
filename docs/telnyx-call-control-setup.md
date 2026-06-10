@@ -120,3 +120,55 @@ user's `call.hangup` should fire shortly after.
 **Recording returns 409 "No callControlId"**
 → Same as the first one. Webhook hasn't populated the field; the SIP
 Connection isn't CC-linked.
+
+
+---
+
+## Adding the ACE Voicemail Voice API App (v0.10.100+)
+
+In addition to the main `ACE Dialer` Call Control app (used for outbound + standard inbound bridging), the v0.10.100 voicemail rewrite requires a SECOND Voice API app dedicated to per-DID voicemail routing. Calls migrated to this app go through our custom greeting + recording flow instead of Telnyx Hosted Voicemail.
+
+### 1. Create the Voice API app
+
+Telnyx Portal → **Voice → Voice API Applications → + Create Application**
+
+| Field | Value |
+|-------|-------|
+| **App name** | `ACE Voicemail` |
+| **Webhook URL** | `https://ace-dialer-webhooks.onrender.com/webhooks/telnyx/voicemail-cc` |
+| **Webhook method** | POST |
+| **Webhook API version** | API v2 |
+| **Status** | **Active** (toggle on Details tab — important, otherwise no events are delivered) |
+| **Outbound Voice Profile** | Pick any existing OVP (the app never originates outbound; this field is required by Telnyx but unused) |
+
+Save. Copy the **Application ID** from the Details tab — looks like `2963522202491684629`.
+
+### 2. Set the env var on Render
+
+`Render → ace-dialer-api service → Environment`:
+
+```
+TELNYX_VOICEMAIL_CC_APP_ID = <the Application ID from step 1>
+```
+
+Save and redeploy. The admin migration endpoint reads this env var to know what app to re-bind DIDs to.
+
+### 3. Migrate users via the admin UI
+
+The Voice API app is created and the env var is set, but **no DIDs are bound to it yet**. To actually move a user's inbound calls through the new flow:
+
+1. Open the dialer as admin
+2. Settings → Admin → Users → find the user → kebab → **Voicemail migration**
+3. Click **Migrate to Call Control**
+
+The admin endpoint flips each of the user's DIDs at Telnyx (`PATCH /v2/phone_numbers/{id}` with `connection_id = TELNYX_VOICEMAIL_CC_APP_ID`) and disables Hosted Voicemail (`PATCH /v2/phone_numbers/{id}/voicemail` with `enabled: false`). Pre-migration values are snapshotted on the `UserDid` row for one-click rollback.
+
+### 4. Verify
+
+From another phone, call the migrated DID. Don't pick up. Within ~25 seconds you should hear the user's custom greeting (default / TTS / audio depending on what they configured in Settings → Voicemail greeting). Leave a test message — it appears in their Voicemail tab within ~10 seconds with a Deepgram transcript within ~30 seconds.
+
+If you hear Telnyx's default robotic greeting instead, the DID didn't actually move — check Render webhooks logs for `[vm-cc]` lines to confirm events are reaching the new endpoint.
+
+### Rollback (per user)
+
+Same modal → **Roll back**. Restores the previous `connection_id` + Hosted VM state on each of the user's DIDs from the snapshot columns.

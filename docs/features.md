@@ -1,6 +1,6 @@
 # ACE Dialer — Features
 
-What ACE Dialer can do as of v0.10.23 (May 30, 2026).
+What ACE Dialer can do as of v0.10.105 (June 8, 2026).
 
 ## Calling
 
@@ -347,3 +347,58 @@ Documented in `CLAUDE.md` at repo root. Summary:
   generic recordings do not)
 - **Staging environment** — main is production for web/API/webhooks
 - **Feature flags** — every change ships to all users
+
+
+## Voicemail v2 (Call Control flow — v0.10.100+)
+
+### Inbound call routing (per migrated DID)
+- DID is bound to the Telnyx **ACE Voicemail Voice API App**, not directly to the SIP credential. The webhooks service is the first thing Telnyx talks to on every inbound call.
+- On `call.initiated`, the handler looks up the owning user, issues `transfer` to `sip:<sipUsername>@sip.telnyx.com` with a 25-second timeout, and preserves the caller's E.164 as `from` so caller ID is intact.
+- Softphone answers → `call.bridged` → audio flows. No voicemail row written.
+- Softphone doesn't answer (timeout / 486 busy / 603 decline) → dial leg's `call.hangup` fires → handler answers the caller leg → plays greeting → records → saves Voicemail row.
+
+### Greetings (per user, two variants)
+- **No-answer greeting** — plays when the softphone rings out without being picked up.
+- **Busy greeting** — plays when the softphone returns SIP 486 (already on another call) or 603 (Decline). Falls back to the no-answer greeting if not configured, so callers never hit silence.
+- Each variant supports three modes:
+  - **Default** — stock TTS: "You've reached <firstName>'s voicemail. Please leave a message after the tone."
+  - **Text-to-speech** — user-typed up to 500 characters, read aloud by Telnyx TTS in a natural voice.
+  - **Audio** — user-uploaded MP3 / WAV / M4A / AAC / OGG / WebM (≤ 2 MB) **or** recorded directly in-app via the `MicrophoneRecorder` component (30-second cap, MediaRecorder API).
+- Mode + content per variant persists independently — switching tabs doesn't erase the other config.
+
+### Recording capture
+- `record_start` action with `format: 'mp3'`, `channels: 'single'`, `play_beep: true`, `max_length: 90` (seconds), `timeout_secs: 4` (silence-detection auto-stop).
+- Telnyx returns a 10-minute-signed S3 URL on `call.recording.saved`. The webhook handler downloads the audio and re-uploads to the existing Supabase `ace-media` bucket at `voicemails/u{userId}/{voicemailId}.mp3`. The Voicemail row's `recordingUrl` is updated to the permanent Supabase public URL, so playback never expires.
+
+### Voicemail downstream side-effects (fired after Voicemail row written)
+- **Deepgram transcription** (existing `transcribeAndUpdateVoicemail`) — transcript populated within ~30 seconds, marked-as-listened state honored.
+- **Teams notification** (via `scheduleVoicemailTimeoutFallback`) — adaptive card to the user's Teams channel with transcript + listen link.
+- **Email notification** (via `scheduleVoicemailEmailTimeoutFallback`) — SendGrid email with audio link + transcript, dedup-protected so the user gets at most one email per voicemail.
+
+### Missed-call classification (v0.10.104+)
+- Any inbound call that **ended without being answered** is classified as `missed`, regardless of Telnyx's `hangup_cause` string. The legacy classifier mapped `originator_cancel` (caller gave up before pickup) to `completed`, which made Recents show the row as a plain incoming call with no red flag. Now we check `priorCall.answeredAt is null` first and force `missed` if so, only deferring to the cause-specific labels (`rejected` for busy/declined, `forwarded` for transfers, etc.) when the call WAS answered.
+
+## Device tracking + force-update (v0.10.101+)
+
+- **Per-device heartbeat.** The dialer client (Electron or web) generates a stable `deviceId` UUID (stored in `localStorage`) on first launch. Every login + window focus + 60-second interval, it POSTs to `/me/heartbeat` with `{ deviceId, platform, appVersion, osLabel }`. Server upserts the `UserDevice` row and returns `{ forceUpdate, forceUpdateRequestedAt }`.
+- **Admin Devices modal.** Settings → Admin → Users → kebab → "Devices" shows every device per user with platform, app version, last-seen / first-seen, and a per-device "Force update" button.
+- **Force-update mechanism.** Admin clicks Force update → server sets `forceUpdateRequestedAt = now()` → next client heartbeat sees the flag → triggers `window.ace.checkForUpdates()` (Electron) which kicks off `autoUpdater.checkForUpdatesAndNotify()` → user gets the standard update prompt within ~60 seconds. Web clients reload instead.
+- **Future-proof for iOS / Android.** The `UserDevice.platform` column accepts any string; a future iOS / Android native client just needs to POST to `/me/heartbeat` with its own `deviceId` + `appVersion` to start appearing in the admin Devices list.
+
+## Telnyx outage detection (v0.10.103+)
+
+- **Server-side poller** on the webhooks service polls `https://status.telnyx.com/api/v2/status.json` and `/api/v2/incidents.json` every 60 seconds. Caches the latest indicator (`none` | `minor` | `major` | `critical` | `maintenance`), description, and unresolved incidents in memory.
+- **`GET /telnyx-status`** public endpoint (no auth) returns the cached state. Read by the dialer's `TelnyxStatusBanner` component.
+- **Dialer banner.** A colored strip at the top of the dialer renders whenever the indicator isn't `none`. Amber for `minor` / `maintenance`, red for `major` / `critical`. Click "Details" to open status.telnyx.com.
+- **Teams notification on transitions.** When the indicator flips from `none` → degraded, an adaptive card posts to `TEAMS_TENANT_WEBHOOK_URL` listing the indicator + active incidents. Sends a recovery card when status returns to `none`.
+
+## Admin operational features (v0.10.99 – v0.10.105)
+
+### Per-user voicemail migration (v0.10.100)
+- `GET /admin/users/:id/voicemail-migration` — current state per DID (which are migrated, which are still on legacy Hosted VM).
+- `POST /admin/users/:id/voicemail-migrate` — flip every one of the user's DIDs at Telnyx from their legacy `connection_id` to the ACE Voicemail Voice API app, disable Hosted VM, snapshot the previous state into `UserDid.preMigrationConnectionId` + `preMigrationHostedVmEnabled`.
+- `POST /admin/users/:id/voicemail-rollback` — restore previous routing exactly. Re-enables Hosted VM if it was on before.
+- All operations audit-logged via `recordAudit`.
+
+### Custom app icon (v0.10.102+)
+- Replaces the default Electron logo on Windows taskbar / Mac dock / Linux app menu / installer artwork. Source SVG at `apps/desktop/assets/icon.svg`; multi-resolution `.ico`, `.icns`, `.png` regenerated as needed via ImageMagick + a small Python script that builds the proper ICNS container.
