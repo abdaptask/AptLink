@@ -87,12 +87,9 @@ async function loadEmailConfig(userId: number): Promise<EmailConfig | null> {
     return null;
   }
   const events = new Set<EventType>(
-    (user.emailNotifyOn ?? '')
-      .split(',')
-      .map((s) => s.trim())
-      .filter((s): s is EventType =>
-        s === 'missed_call' || s === 'sms' || s === 'voicemail',
-      ),
+    (user.emailNotifyOn ?? []).filter((s): s is EventType =>
+      s === 'missed_call' || s === 'sms' || s === 'voicemail',
+    ),
   );
   if (events.size === 0) return null;
 

@@ -166,12 +166,9 @@ async function loadTeamsConfig(userId: number): Promise<TeamsConfig | null> {
   // schema level (DB default = "missed_call,sms,voicemail") so every
   // new user starts opted-in to all three.
   const events = new Set<EventType>(
-    (user.teamsNotifyOn ?? '')
-      .split(',')
-      .map((s) => s.trim())
-      .filter((s): s is EventType =>
-        s === 'missed_call' || s === 'sms' || s === 'voicemail',
-      ),
+    (user.teamsNotifyOn ?? []).filter((s): s is EventType =>
+      s === 'missed_call' || s === 'sms' || s === 'voicemail',
+    ),
   );
   if (events.size === 0) return null;
   return { tenantUrl, email: user.email, events };

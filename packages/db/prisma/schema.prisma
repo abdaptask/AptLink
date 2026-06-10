@@ -30,17 +30,9 @@ model User {
   /// events back to the right user (matching on the SIP user that initiated
   /// or received the leg).
   sipUsername     String?   @unique @map("sip_username")
-  /// Phase 5.7 (multi-user): the DID (E.164 phone number) assigned to this
-  /// user. Used by the webhook handler to route inbound SMS/calls to the
-  /// right user (matching on the called number).
-  ///
-  /// v0.10.0 (feature/multi-num-teams-routing): DEPRECATED in favor of the
-  /// UserDid relation below. Kept here for backwards compatibility — it
-  /// shadows the user's default UserDid.didNumber. Any new code should
-  /// look up via UserDid; reads of this column will be removed in v1.0.
   didNumber       String?   @unique @map("did_number")
-  /// DEPRECATED — see UserDid.telnyxNumberId. Same v0.10.0 plan as didNumber.
   telnyxNumberId  String?   @map("telnyx_number_id")
+
   /// v0.10.0 — Pointer to the currently-selected outbound UserDid. When a
   /// user has multiple DIDs and toggles between them via the dialer header
   /// dropdown, this column tracks their choice server-side so it persists
@@ -105,20 +97,12 @@ model User {
   /// so users don't have to do any per-user setup. Column kept nullable
   /// for now — notifier no longer reads it.
   teamsWebhookUrl String?   @map("teams_webhook_url")
-  /// v0.10.1 Pillar 2 — Comma-separated opt-in list for which events
-  /// trigger a Teams card. Values: 'missed_call', 'sms', 'voicemail'.
-  /// DB default = all three so every new user starts opted-in. User
-  /// edits via Settings → Personal → Teams notifications. Empty string
-  /// = explicit opt-out of all events (we never auto-fill back).
-  teamsNotifyOn   String?   @default("missed_call,sms,voicemail") @map("teams_notify_on")
-  /// v0.10.79 — Comma-separated opt-in list for which events trigger an
-  /// EMAIL notification (separate from teamsNotifyOn). Values: 'missed_call',
-  /// 'sms', 'voicemail'. Default NULL = OFF for everyone (both existing AND
-  /// newly invited users) — admins were burned-out by surprise notification
-  /// floods on the Teams launch, so for the email channel we opt every user
-  /// in opt-out-by-default. Users self-enable via Settings → Email
-  /// notifications. Empty string also = opted out of all events.
-  emailNotifyOn   String?   @map("email_notify_on")
+  /// v0.10.1 Pillar 2 — List of events that trigger a Teams card.
+  /// Values: 'missed_call', 'sms', 'voicemail'.
+  teamsNotifyOn   String[]  @default(["missed_call", "sms", "voicemail"]) @map("teams_notify_on")
+  /// v0.10.79 — List of events that trigger an EMAIL notification.
+  /// Default empty (opt-out-by-default).
+  emailNotifyOn   String[]  @default([]) @map("email_notify_on")
   /// v0.10.60 — Per-user beta flag for the Connection Health overhaul.
   /// When true, this user gets: (a) UI smoothing of disconnect/reconnect
   /// status (transient blips hidden, amber "Reconnecting..." instead of

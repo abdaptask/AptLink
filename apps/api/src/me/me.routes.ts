@@ -263,13 +263,9 @@ export async function meRoutes(app: FastifyInstance) {
         where: { id: me },
         select: { teamsNotifyOn: true },
       });
-      const eventsCsv = user?.teamsNotifyOn ?? '';
-      const events = eventsCsv
-        .split(',')
-        .map((s) => s.trim())
-        .filter((s): s is TeamsEventType =>
-          (TEAMS_EVENT_TYPES as readonly string[]).includes(s),
-        );
+      const events = (user?.teamsNotifyOn ?? []).filter((s): s is TeamsEventType =>
+        (TEAMS_EVENT_TYPES as readonly string[]).includes(s),
+      );
       // v0.10.1 — tenantConfigured tells the UI whether to show the
       // event toggles at all. When the env var isn't set, Teams notifs
       // are effectively disabled tenant-wide and the UI shows an
@@ -295,15 +291,15 @@ export async function meRoutes(app: FastifyInstance) {
         });
       }
       const { events } = parsed.data;
-      const data: { teamsNotifyOn?: string | null } = {};
+      const data: { teamsNotifyOn?: string[] } = {};
       if (events !== undefined) {
         // Dedup + sort for stable storage.
         const deduped = Array.from(new Set(events)).sort();
-        data.teamsNotifyOn = deduped.length > 0 ? deduped.join(',') : null;
+        data.teamsNotifyOn = deduped;
       }
       await prisma.user.update({ where: { id: me }, data });
       await recordAudit(me, 'user.teams_config_updated', me, {
-        events: data.teamsNotifyOn ?? null,
+        events: data.teamsNotifyOn ?? [],
       });
       return { ok: true };
     },
@@ -431,13 +427,9 @@ export async function meRoutes(app: FastifyInstance) {
         where: { id: me },
         select: { emailNotifyOn: true, email: true },
       });
-      const eventsCsv = user?.emailNotifyOn ?? '';
-      const events = eventsCsv
-        .split(',')
-        .map((s) => s.trim())
-        .filter((s): s is EmailEventType =>
-          (EMAIL_EVENT_TYPES as readonly string[]).includes(s),
-        );
+      const events = (user?.emailNotifyOn ?? []).filter((s): s is EmailEventType =>
+        (EMAIL_EVENT_TYPES as readonly string[]).includes(s),
+      );
       // emailConfigured reports whether SendGrid is wired up at the
       // service level. If false, the UI shows an "ask your admin" empty
       // state (mirrors Teams pattern).
@@ -463,14 +455,14 @@ export async function meRoutes(app: FastifyInstance) {
         });
       }
       const { events } = parsed.data;
-      const data: { emailNotifyOn?: string | null } = {};
+      const data: { emailNotifyOn?: string[] } = {};
       if (events !== undefined) {
         const deduped = Array.from(new Set(events)).sort();
-        data.emailNotifyOn = deduped.length > 0 ? deduped.join(',') : null;
+        data.emailNotifyOn = deduped;
       }
       await prisma.user.update({ where: { id: me }, data });
       await recordAudit(me, 'user.email_config_updated', me, {
-        events: data.emailNotifyOn ?? null,
+        events: data.emailNotifyOn ?? [],
       });
       return { ok: true };
     },

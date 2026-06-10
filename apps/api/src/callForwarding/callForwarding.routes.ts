@@ -43,14 +43,16 @@ function e164(raw: string | null | undefined): string {
 }
 
 // Find the Telnyx-side phone_number_id for a DID we own. Cached on the
-// User row after the first lookup. If not yet stored, query Telnyx, find
+// UserDid row after the first lookup. If not yet stored, query Telnyx, find
 // the matching number, persist the id.
 async function resolveTelnyxNumberId(
   userId: number,
   didNumber: string,
 ): Promise<string | null> {
-  const user = await prisma.user.findUnique({ where: { id: userId } });
-  if (user?.telnyxNumberId) return user.telnyxNumberId;
+  const didRow = await prisma.userDid.findFirst({
+    where: { userId, didNumber },
+  });
+  if (didRow?.telnyxNumberId) return didRow.telnyxNumberId;
   if (!config.telnyxApiKey) return null;
   // Telnyx supports a filter[phone_number] query param.
   const url = `https://api.telnyx.com/v2/phone_numbers?filter[phone_number]=${encodeURIComponent(didNumber)}&page[size]=10`;
@@ -63,10 +65,12 @@ async function resolveTelnyxNumberId(
   };
   const match = body.data?.find((d) => d.phone_number === didNumber);
   if (!match?.id) return null;
-  await prisma.user.update({
-    where: { id: userId },
-    data: { telnyxNumberId: match.id },
-  });
+  if (didRow) {
+    await prisma.userDid.update({
+      where: { id: didRow.id },
+      data: { telnyxNumberId: match.id },
+    });
+  }
   return match.id;
 }
 
@@ -140,15 +144,17 @@ export async function callForwardingRoutes(app: FastifyInstance) {
           .send({ error: 'Forwarding number required when enabling.' });
       }
 
-      // Need the user's DID to find the Telnyx number id.
-      const user = await prisma.user.findUnique({ where: { id: u.sub } });
-      if (!user?.didNumber) {
+      // Need the user's default DID to find the Telnyx number id.
+      const defaultDid = await prisma.userDid.findFirst({
+        where: { userId: u.sub, isDefault: true },
+      });
+      if (!defaultDid?.didNumber) {
         return reply
           .code(400)
-          .send({ error: 'Your account has no DID assigned yet. Add a phone number first.' });
+          .send({ error: 'Your account has no default DID assigned yet. Add a phone number first.' });
       }
 
-      const telnyxNumberId = await resolveTelnyxNumberId(u.sub, user.didNumber);
+      const telnyxNumberId = await resolveTelnyxNumberId(u.sub, defaultDid.didNumber);
       if (!telnyxNumberId) {
         return reply.code(502).send({
           error: 'Could not look up Telnyx phone number id. Check TELNYX_API_KEY + that the DID is on this account.',
